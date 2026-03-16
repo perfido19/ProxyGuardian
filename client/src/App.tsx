@@ -5,15 +5,68 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
+import { ProtectedRoute } from "@/components/protected-route";
+import { useAuth } from "@/hooks/use-auth";
 import Dashboard from "@/pages/dashboard";
 import Services from "@/pages/services";
 import Firewall from "@/pages/firewall";
 import Fail2banManagement from "@/pages/fail2ban-management";
 import Logs from "@/pages/logs";
 import Configurations from "@/pages/configurations";
+import UserManagement from "@/pages/user-management";
 import NotFound from "@/pages/not-found";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { LogOut, User } from "lucide-react";
+
+const roleLabels = {
+  admin: "Admin",
+  operator: "Operator",
+  viewer: "Viewer",
+} as const;
+
+function Header() {
+  const { user, logout } = useAuth();
+
+  return (
+    <header className="flex items-center justify-between px-4 py-3 border-b bg-background">
+      <SidebarTrigger data-testid="button-sidebar-toggle" />
+      <div className="flex items-center gap-3">
+        <span className="text-sm text-muted-foreground font-mono hidden sm:block">
+          {new Date().toLocaleString("it-IT", {
+            hour: "2-digit", minute: "2-digit",
+            day: "2-digit", month: "2-digit", year: "numeric",
+          })}
+        </span>
+        {user && (
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 text-sm">
+              <User className="w-4 h-4 text-muted-foreground" />
+              <span className="font-medium hidden sm:block">{user.username}</span>
+              <Badge variant={user.role === "admin" ? "default" : user.role === "operator" ? "secondary" : "outline"} className="text-xs">
+                {roleLabels[user.role]}
+              </Badge>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => logout()}
+              data-testid="button-logout"
+              className="gap-1.5"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:block">Esci</span>
+            </Button>
+          </div>
+        )}
+      </div>
+    </header>
+  );
+}
 
 function Router() {
+  const { user } = useAuth();
+
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
@@ -22,46 +75,44 @@ function Router() {
       <Route path="/fail2ban" component={Fail2banManagement} />
       <Route path="/log" component={Logs} />
       <Route path="/configurazioni" component={Configurations} />
+      {user?.role === "admin" && (
+        <Route path="/utenti" component={UserManagement} />
+      )}
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-export default function App() {
+function AppLayout() {
   const style = {
     "--sidebar-width": "16rem",
     "--sidebar-width-icon": "3rem",
   };
 
   return (
+    <SidebarProvider style={style as React.CSSProperties}>
+      <div className="flex h-screen w-full">
+        <AppSidebar />
+        <div className="flex flex-col flex-1 overflow-hidden">
+          <Header />
+          <main className="flex-1 overflow-auto p-8 bg-background">
+            <div className="mx-auto max-w-7xl">
+              <Router />
+            </div>
+          </main>
+        </div>
+      </div>
+    </SidebarProvider>
+  );
+}
+
+export default function App() {
+  return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <SidebarProvider style={style as React.CSSProperties}>
-          <div className="flex h-screen w-full">
-            <AppSidebar />
-            <div className="flex flex-col flex-1 overflow-hidden">
-              <header className="flex items-center justify-between p-4 border-b bg-background">
-                <SidebarTrigger data-testid="button-sidebar-toggle" />
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground font-mono">
-                    {new Date().toLocaleString('it-IT', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      day: '2-digit',
-                      month: '2-digit',
-                      year: 'numeric',
-                    })}
-                  </span>
-                </div>
-              </header>
-              <main className="flex-1 overflow-auto p-8 bg-background">
-                <div className="mx-auto max-w-7xl">
-                  <Router />
-                </div>
-              </main>
-            </div>
-          </div>
-        </SidebarProvider>
+        <ProtectedRoute>
+          <AppLayout />
+        </ProtectedRoute>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
