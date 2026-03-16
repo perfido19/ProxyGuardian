@@ -1,0 +1,196 @@
+===============================================================================
+PROXY DASHBOARD - ISTRUZIONI INSTALLAZIONE RAPIDA
+===============================================================================
+
+VERSIONE: Aggiornata con tutte le ultime modifiche
+DATA: 25 Ottobre 2025
+
+NOVITÀ DI QUESTA VERSIONE:
+✅ Pulsante "Sblocca Tutti" con conferma di sicurezza
+✅ Tutti i tab Firewall funzionanti (Paesi, ASN, ISP, User-Agent, IP Whitelist)
+✅ Creazione automatica file configurazione mancanti
+✅ Connessioni attive sulla porta 8880 (con fallback automatico)
+✅ IP bannati live ogni 5 secondi (tutte le jail rilevate automaticamente)
+✅ Rilevamento dinamico jail fail2ban attive
+
+===============================================================================
+INSTALLAZIONE SUL VPS
+===============================================================================
+
+1. TRASFERISCI L'ARCHIVIO SUL VPS
+   ---------------------------------
+   Dal tuo computer:
+   
+   scp proxy-dashboard-complete.tar.gz root@IP_VPS:~/
+
+2. ESTRAI L'ARCHIVIO
+   ------------------
+   Sul VPS (via SSH):
+   
+   ssh root@IP_VPS
+   
+   # Fai backup del vecchio (se esiste)
+   mv ~/proxy-dashboard ~/proxy-dashboard-backup-$(date +%Y%m%d)
+   
+   # Crea directory e estrai
+   mkdir -p ~/proxy-dashboard
+   tar -xzf proxy-dashboard-complete.tar.gz -C ~/proxy-dashboard
+   cd ~/proxy-dashboard
+
+3. INSTALLA DIPENDENZE
+   --------------------
+   npm install
+
+4. AVVIA LA DASHBOARD
+   -------------------
+   # Modalità sviluppo (per test):
+   npm run dev
+   
+   # Modalità produzione con PM2:
+   pm2 start npm --name "proxy-dashboard" -- run dev
+   pm2 save
+
+5. ACCEDI ALLA DASHBOARD
+   ----------------------
+   Apri browser: http://IP_VPS:5000
+
+===============================================================================
+CONFIGURAZIONE CONNESSIONI ATTIVE (OPZIONALE)
+===============================================================================
+
+Per vedere le connessioni attive in tempo reale, configura nginx_status:
+
+sudo nano /etc/nginx/conf.d/status.conf
+
+Aggiungi:
+
+server {
+    listen 127.0.0.1:80;
+    server_name localhost;
+
+    location /nginx_status {
+        stub_status on;
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+    }
+}
+
+Poi:
+sudo nginx -t
+sudo systemctl reload nginx
+
+NOTA: Se non configuri nginx_status, la dashboard userà automaticamente 
+      'ss' per contare le connessioni sulla porta 8880.
+
+===============================================================================
+PERMESSI (SE NON SEI ROOT)
+===============================================================================
+
+Se esegui come utente non-root, configura sudoers:
+
+sudo visudo
+
+Aggiungi (sostituisci 'dashboard' con il tuo utente):
+
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl status nginx
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl status fail2ban
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl status mariadb
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl start nginx
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl start fail2ban
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl stop fail2ban
+dashboard ALL=(ALL) NOPASSWD: /bin/systemctl restart fail2ban
+dashboard ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *
+
+Permetti lettura file:
+sudo chmod 644 /etc/nginx/*.conf
+sudo chmod 644 /etc/fail2ban/jail.local
+sudo chmod 644 /etc/fail2ban/filter.d/*.conf
+
+===============================================================================
+VERIFICA FUNZIONAMENTO
+===============================================================================
+
+1. Vai su http://IP_VPS:5000
+2. Controlla Dashboard → Dovresti vedere:
+   - Stato servizi (nginx, fail2ban, mariadb)
+   - Connessioni attive sulla porta 8880
+   - IP bannati (live ogni 5 secondi)
+   - Pulsante "Sblocca Tutti" (se ci sono IP bannati)
+
+3. Vai su Firewall → Dovresti vedere 5 tab:
+   - Paesi, ASN, ISP, User-Agent, IP Whitelist
+   - I file vengono creati automaticamente se mancano
+
+4. Vai su Fail2ban → Dovresti vedere:
+   - Tutte le jail attive rilevate automaticamente
+   - Possibilità di modificare filtri e configurazioni
+
+===============================================================================
+TEST RAPIDO
+===============================================================================
+
+# Banna un IP di test
+sudo fail2ban-client set nginx-req-limit banip 1.2.3.4
+
+# Controlla dashboard → Entro 5 secondi apparirà!
+
+# Sblocca dalla dashboard o da terminale
+sudo fail2ban-client set nginx-req-limit unbanip 1.2.3.4
+
+# Controlla dashboard → Entro 5 secondi sparirà!
+
+===============================================================================
+TROUBLESHOOTING
+===============================================================================
+
+PROBLEMA: Non vedo gli IP bannati
+SOLUZIONE: Verifica che fail2ban sia installato e attivo
+          sudo systemctl status fail2ban
+
+PROBLEMA: Connessioni attive sempre a 0
+SOLUZIONE: Verifica che nginx ascolti sulla porta 8880
+          ss -tnlp | grep 8880
+          
+          La dashboard usa automaticamente fallback:
+          ss -tn state established "( sport = :8880 )"
+
+PROBLEMA: Tab Firewall non mostrano contenuto
+SOLUZIONE: I file vengono creati automaticamente al primo accesso.
+          Se persistono problemi, verifica permessi:
+          sudo chmod 644 /etc/nginx/*.conf
+
+PROBLEMA: Errore permessi
+SOLUZIONE: Esegui come root oppure configura sudoers (vedi sopra)
+
+===============================================================================
+AGGIORNAMENTI FUTURI
+===============================================================================
+
+Per aggiornare in futuro:
+
+cd ~/proxy-dashboard
+# Fai backup
+tar -czf ~/backup-dashboard-$(date +%Y%m%d).tar.gz .
+
+# Ricevi nuovo archivio e sovrascrivi
+tar -xzf proxy-dashboard-complete-NEW.tar.gz -C ~/proxy-dashboard
+
+npm install
+pm2 restart proxy-dashboard
+
+===============================================================================
+SUPPORTO
+===============================================================================
+
+Per documentazione completa, vedi INSTALL.md nella cartella del progetto.
+
+File importanti:
+- INSTALL.md           → Guida installazione completa
+- replit.md           → Documentazione architettura
+- design_guidelines.md → Linee guida design frontend
+
+===============================================================================

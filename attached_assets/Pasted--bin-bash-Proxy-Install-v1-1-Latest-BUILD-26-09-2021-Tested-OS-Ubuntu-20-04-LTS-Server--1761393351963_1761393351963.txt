@@ -1,0 +1,426 @@
+##!/bin/bash
+# Proxy Install v1.1
+# Latest BUILD 26.09.2021
+# Tested OS Ubuntu 20.04 LTS Server
+#
+# Register for free to get accountID and licenseKEY  fro geoip2 lite at : https://dev.maxmind.com/geoip/geolite2-free-geolocation-data?lang=en
+#
+# Reverse proxy for streamcreed / Xtream UI
+# - Nginx , Mod Security , Fail2ban , Mariadb for store ip banned ( next version whit webadmin ).
+# - Block User Agent -> /etc/nginx/useragent.rules
+# - Block ISP -> /etc/nginx/block_isp.conf
+# - Block ASN Number -> /etc/nginx/block_asn.conf
+# - Country Whitelist -> /etc/nginx/country_whitelist.conf ( Default block all country ) ( possibility to block for example US country but exclude some ip/range from US ( https://it.wikipedia.org/wiki/ISO_3166-1_alpha-2 )
+# - IP Whitelist for exclusion to req_limit zone -> /etc/nginx/ip_whitelist.conf
+# - Ip Whitelist for exclusion to fail2ban -> /etc/fail2ban/jail.local find line :
+#
+#   [DEFAULT]
+#   ignoreip = 127.0.0.1/8 10.0.0.0/8 192.168.0.0/16 172.16.0.0/16 add_ip_or_range_to_exclude_here
+#
+# - Save and reload/restart fail2ban -> systemctl stop|start|reload|restart fail2ban
+#
+# - Restart / Reload / Stop / Start Nginx -> systemctl stop|start|reload|restart nginx
+# - Restart / Reload / Stop / Start file2ban -> systemctl stop|start|reload|restart fail2ban
+# - Log Files :
+#
+# - /var/log/nginx/error.log
+# - /var/log/nginx/access.log
+# - /var/log/fail2ban.log
+# - /opt/log/modsec_audit.log
+#
+# - unban ip from nginx-req-limit -> fail2ban-client set nginx-req-limit unbanip IP_ADDRESS_HERE
+# - unban ip from nginx-4xx -> fail2ban-client set nginx-4xx unbanip IP_ADDRESS_HERE
+#
+# - Disable ban for nginx-4xx -> /etc/fail2ban/jail.local and remove/comment line from :
+#	[nginx-4xx]
+#	enabled = true
+#	....
+#	bantime = 7200
+#
+# To add or remove mod security rules go to /etc/nginx/rules/ and move from this directory to another then reload nginx. systemctl reload nginx
+# To disable mod securtiy go to /etc/nginx/nginx.conf and find :  ModSecurityEnabled on; to  ModSecurityEnabled off;
+#
+# Creator Sbarboff
+# contact sbarboff@gmail.com
+#
+
+nginx_conf="bG9hZF9tb2R1bGUgbW9kdWxlcy9uZ3hfaHR0cF9nZW9pcDJfbW9kdWxlLnNvOwp1c2VyIHd3dy1kYXRhOwp3b3JrZXJfcHJvY2Vzc2VzIGF1dG87Cgp3b3JrZXJfcmxpbWl0X25vZmlsZSAzMDAwMDA7CmV2ZW50cyB7CiAgICAgICAgd29ya2VyX2Nvbm5lY3Rpb25zIDUwMDAwOwogICAgICAgIHVzZSBlcG9sbDsKICAgICAgICBhY2NlcHRfbXV0ZXggb247CiAgICAgICAgbXVsdGlfYWNjZXB0IG9uOwp9CgoKaHR0cCAKewogICAgICAgIGdlb2lwMiAvdXNyL3NoYXJlL0dlb0lQL0dlb0xpdGUyLUNvdW50cnkubW1kYgogICAgICAgIHsKICAgICAgICAgICAgICAgIGF1dG9fcmVsb2FkIDVtOwogICAgICAgICAgICAgICAgJGdlb2lwMl9tZXRhZGF0YV9jb3VudHJ5X2J1aWxkIG1ldGFkYXRhIGJ1aWxkX2Vwb2NoOwogICAgICAgICAgICAgICAgJGdlb2lwMl9kYXRhX2NvdW50cnlfY29kZSBjb3VudHJ5IGlzb19jb2RlOwogICAgICAgICAgICAgICAgJGdlb2lwMl9kYXRhX2NvdW50cnlfbmFtZSBjb3VudHJ5IG5hbWVzIGVuOwogICAgICAgIH0KCiAgICAgICAgZ2VvaXAyIC91c3Ivc2hhcmUvR2VvSVAvR2VvTGl0ZTItQ2l0eS5tbWRiCiAgICAgICAgewogICAgICAgICAgICAgICAgYXV0b19yZWxvYWQgNW07CiAgICAgICAgICAgICAgICAkZ2VvaXAyX21ldGFkYXRhX2NpdHlfYnVpbGQgbWV0YWRhdGEgYnVpbGRfZXBvY2g7CiAgICAgICAgICAgICAgICAkZ2VvaXAyX2RhdGFfY2l0eV9uYW1lIGNpdHkgbmFtZXMgZW47CiAgICAgICAgfQoKCWdlb2lwMiAvdXNyL3NoYXJlL0dlb0lQL0dlb0xpdGUyLUFTTi5tbWRiIAoJewoJCWF1dG9fcmVsb2FkIDVtOwoJCSRnZW9pcDJfZGF0YV9hdXRvbm9tb3VzX3N5c3RlbV9udW1iZXIgYXV0b25vbW91c19zeXN0ZW1fbnVtYmVyOwoJCSRnZW9pcDJfZGF0YV9hdXRvbm9tb3VzX3N5c3RlbV9vcmdhbml6YXRpb24gYXV0b25vbW91c19zeXN0ZW1fb3JnYW5pemF0aW9uOwoJfSAKCiAgICAgICAgICAgICAgICBmYXN0Y2dpX3BhcmFtIENPVU5UUllfQ09ERSAkZ2VvaXAyX2RhdGFfY291bnRyeV9jb2RlOwogICAgICAgICAgICAgICAgZmFzdGNnaV9wYXJhbSBDT1VOVFJZX05BTUUgJGdlb2lwMl9kYXRhX2NvdW50cnlfbmFtZTsKICAgICAgICAgICAgICAgIGZhc3RjZ2lfcGFyYW0gQ0lUWV9OQU1FICAgICRnZW9pcDJfZGF0YV9jaXR5X25hbWU7CgoJIyBBU04gQmxhY2tsaXN0IGRlZmF1bHQgYWxsb3cuCgltYXAgJGdlb2lwMl9kYXRhX2F1dG9ub21vdXNfc3lzdGVtX251bWJlciAkQVNOIAoJewoJCWRlZmF1bHQgICAwOwoJCWluY2x1ZGUgL2V0Yy9uZ2lueC9ibG9ja19hc24uY29uZjsKCX0KCgkjIElTUCBCbGFja2xpc3QgZGVmYXVsdCBhbGxvdy4KICAgICAgICBtYXAgJGdlb2lwMl9kYXRhX2F1dG9ub21vdXNfc3lzdGVtX29yZ2FuaXphdGlvbiAkSVNQCiAgICAgICAgewogICAgICAgICAgICAgICAgZGVmYXVsdCAgIDA7CiAgICAgICAgICAgICAgICBpbmNsdWRlIC9ldGMvbmdpbngvYmxvY2tfaXNwLmNvbmY7CiAgICAgICAgfQoKICAgICAgICAjIEFkZCBJUHMgdG8gd2hpdGVsaXN0IHRvIGJ5cGFzcyBsaW1pdF9yZXFfem9uZSB6b25lPXJlcV96b25lCiAgICAgICAgZ2VvICRsaW1pdCAKCXsKICAgICAgICAgICAgICAgIGRlZmF1bHQgMTsKCQlpbmNsdWRlIC9ldGMvbmdpbngvaXBfd2hpdGVsaXN0LmNvbmY7CiAgICAgICAgfQogICAgICAgIG1hcCAkbGltaXQgJGxpbWl0X2tleSAKCXsKICAgICAgICAgICAgICAgIDAgIiI7CiAgICAgICAgICAgICAgICAxICRiaW5hcnlfcmVtb3RlX2FkZHI7CiAgICAgICAgfQoKCSMgQWRkIGNvdW50cnkgd2hpdGVsaXN0IGRlZmF1bHQgYmxvY2sgYWxsIAogICAgICAgIG1hcCAkZ2VvaXAyX2RhdGFfY291bnRyeV9jb2RlICRhbGxvd2VkX2NvdW50cnkgCgl7CgkJZGVmYXVsdCBubzsKCQlpbmNsdWRlIC9ldGMvbmdpbngvY291bnRyeV93aGl0ZWxpc3QuY29uZjsKICAgICAgICB9CiAgICAgICAgZ2VvICRleGNsdXNpb25zCiAgICAgICAgewogICAgICAgICAgICAgICAgZGVmYXVsdCAwOwoJCWluY2x1ZGUgL2V0Yy9uZ2lueC9leGNsdXNpb25faXAuY29uZjsKICAgICAgICB9CgkKCSMgVXNlciBBZ2VudCBCbGFja2xpc3QgZGVmYXVsdCBhbGxvdyBhbGwKCW1hcCAkaHR0cF91c2VyX2FnZW50ICRhZ2VudDJibG9jayAKCXsKICAgICAgICBkZWZhdWx0ICAgICAgICAgMDsKCWluY2x1ZGUgL2V0Yy9uZ2lueC91c2VyYWdlbnQucnVsZXM7CQoJfQoKCiAgICAgICAgc2VuZGZpbGUJCQlvbjsKICAgICAgICB0Y3Bfbm9wdXNoCQkJb247CiAgICAgICAgdGNwX25vZGVsYXkJCQlvbjsKICAgICAgICByZXNldF90aW1lZG91dF9jb25uZWN0aW9uCW9uOwogICAgICAgIGtlZXBhbGl2ZV90aW1lb3V0CQkxMDsKICAgICAgICBnemlwCQkJCW9mZjsKICAgICAgICB0eXBlc19oYXNoX21heF9zaXplCQkyMDQ4OwogICAgICAgIHNlbmRmaWxlX21heF9jaHVuawkJNTEyazsKCWNsaWVudF9ib2R5X3RpbWVvdXQJCTVzOwoJY2xpZW50X21heF9ib2R5X3NpemUJCTEwbTsKICAgICAgICBjbGllbnRfYm9keV9idWZmZXJfc2l6ZQkJMTI4azsKICAgICAgICBjbGllbnRfaGVhZGVyX3RpbWVvdXQJCTVzOwogICAgICAgIGNsaWVudF9oZWFkZXJfYnVmZmVyX3NpemUJMms7CiAgICAgICAgbGFyZ2VfY2xpZW50X2hlYWRlcl9idWZmZXJzCTQgOGs7CiAgICAgICAgc2VydmVyX3Rva2VucwkJCW9mZjsKICAgICAgICBjaHVua2VkX3RyYW5zZmVyX2VuY29kaW5nCW9mZjsKICAgICAgICBpbmNsdWRlCQkJCW1pbWUudHlwZXM7CiAgICAgICAgZGVmYXVsdF90eXBlCQkJYXBwbGljYXRpb24vb2N0ZXQtc3RyZWFtOwoKCiAgICAgICAgbG9nX2Zvcm1hdCAgbWFpbl9nZW8gICckcmVtb3RlX2FkZHIgLSAkcmVtb3RlX3VzZXIgWyR0aW1lX2xvY2FsXSAiJHJlcXVlc3QiICcKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgJyRzdGF0dXMgJGJvZHlfYnl0ZXNfc2VudCAiJGh0dHBfcmVmZXJlciIgJwogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAnIiRodHRwX3VzZXJfYWdlbnQiICIkaHR0cF94X2ZvcndhcmRlZF9mb3IiICcKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgJyIkZ2VvaXAyX2RhdGFfY291bnRyeV9jb2RlICRnZW9pcDJfZGF0YV9jb3VudHJ5X25hbWUgJGdlb2lwMl9kYXRhX2NpdHlfbmFtZSIgIkFTJGdlb2lwMl9kYXRhX2F1dG9ub21vdXNfc3lzdGVtX251bWJlciIgIiRnZW9pcDJfZGF0YV9hdXRvbm9tb3VzX3N5c3RlbV9vcmdhbml6YXRpb24iJzsKCiAgICAgICAgYWNjZXNzX2xvZyAvdmFyL2xvZy9uZ2lueC9hY2Nlc3MubG9nIG1haW5fZ2VvOwoJZXJyb3JfbG9nIC92YXIvbG9nL25naW54L2Vycm9yLmxvZzsKCgkjIERlZmF1bHQgbG9jYXRpb24KICAgICAgICBsaW1pdF9jb25uX3pvbmUgJGJpbmFyeV9yZW1vdGVfYWRkciB6b25lPWNvbm5fbGltaXQ6MW07CiAgICAgICAgbGltaXRfcmVxX3pvbmUgICRsaW1pdF9rZXkgem9uZT1yZXFfem9uZTozMG0gcmF0ZT0yMHIvczsKCgkjIE1BRyBwb3J0YWwucGhwCglsaW1pdF9yZXFfem9uZSAgJGxpbWl0X2tleSB6b25lPXJlcV96b25lX21hZzoxMG0gcmF0ZT02ci9zOwoJbGltaXRfY29ubl96b25lICRiaW5hcnlfcmVtb3RlX2FkZHIgem9uZT1jb25uX2xpbWl0X21hZzoxbTsKCglzZXJ2ZXIKCXsKCgkJbGlzdGVuIDI1NTAwOwoJCWFkZF9oZWFkZXIgWC1GcmFtZS1PcHRpb25zICJTQU1FT1JJR0lOIjsKCQlhZGRfaGVhZGVyIFgtWFNTLVByb3RlY3Rpb24gIjE7IG1vZGU9YmxvY2siOwoJCWFkZF9oZWFkZXIgWC1Db250ZW50LVR5cGUtT3B0aW9ucyAibm9zbmlmZiI7CgkJaW5jbHVkZSAvZXRjL25naW54L3Byb3RlY3QucnVsZXM7CgoJCQkjIEJsb2NrIFVzZXJhZ2VudAoJCQlpZiAoICRhZ2VudDJibG9jayA9IDEgKSAKCQkJewoJCQkJcmV0dXJuIDQwMzsKCQkJfQoJCQkKCQkJIyBDb3VudHJ5IEJsYWNrbGlzdCBDaGVjawoJCQlpZiAoICRhbGxvd2VkX2NvdW50cnkgPSB5ZXMgKQoJCQl7CgkJCQlzZXQgJGV4Y2x1c2lvbnMgMTsKCQkJfQogICAgICAgICAgICAgICAgICAgICAgICBpZiAoICRleGNsdXNpb25zID0gIjAiICkgewogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHJldHVybiA0NDQ7CiAgICAgICAgICAgICAgICAgICAgICAgIH0KCQkJCgkJCSMgQVNOIEJsYWNrbGlzdCBDaGVjawoJCQlpZiAoICRBU04gPSAxICkgCgkJCXsKCQkJCXJldHVybiA0MDM7CgkJCX0KCiAgICAgICAgICAgICAgICAgICAgICAgICMgSVNQIEJsYWNrbGlzdCBDaGVjawogICAgICAgICAgICAgICAgICAgICAgICBpZiAoICRJU1AgPSAxICkKICAgICAgICAgICAgICAgICAgICAgICAgewogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHJldHVybiA0MDM7CiAgICAgICAgICAgICAgICAgICAgICAgIH0KCgkJCWlmICggJHJlcXVlc3RfbWV0aG9kICF+IF4oR0VUfFBPU1QpJCApCgkJCXsKCQkJCXJldHVybiAyMDA7CgkJCX0KCQkJCgkJCQogICAgICAgICAgICAgICAgICAgICAgICBsb2NhdGlvbiAvcG9ydGFsLnBocAogICAgICAgICAgICAgICAgICAgICAgICB7CgogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIE1vZFNlY3VyaXR5RW5hYmxlZCBvbjsKCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgTW9kU2VjdXJpdHlDb25maWcgL2V0Yy9uZ2lueC9tb2RzZWNfaW5jbHVkZXMuY29uZjsKCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIyMgQ29ubiBsaW1pdCBwb3J0YWwucGhwIE1BRyBEZXZpY2UKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBsaW1pdF9jb25uIGNvbm5fbGltaXRfbWFnIDU7CgogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICMjIFJlcXVlc3QgTGltaXQKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBsaW1pdF9yZXEgem9uZT1yZXFfem9uZV9tYWcgYnVyc3Q9NTsKCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgcHJveHlfc2V0X2hlYWRlciBSYW5nZSAiIjsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcm94eV9yZWRpcmVjdCBvZmY7CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgcHJveHlfaHR0cF92ZXJzaW9uIDEuMTsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcm94eV9zZXRfaGVhZGVyIENvbm5lY3Rpb24gIiI7CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgcHJveHlfc2V0X2hlYWRlciBIb3N0ICRodHRwX2hvc3Q7CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLVJlYWwtSVAgJHJlbW90ZV9hZGRyOwogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1PcmlnaW5hbC1TY2hlbWUgJHNjaGVtZTsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcm94eV9zZXRfaGVhZGVyIFgtRm9yd2FyZGVkLUZvciAkcHJveHlfYWRkX3hfZm9yd2FyZGVkX2ZvcjsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcm94eV9wYXNzX3JlcXVlc3RfaGVhZGVycyBvbjsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcm94eV9tYXhfdGVtcF9maWxlX3NpemUgMDsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcm94eV9jb25uZWN0X3RpbWVvdXQgOTA7CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgcHJveHlfc2VuZF90aW1lb3V0IDkwOwogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHByb3h5X3JlYWRfdGltZW91dCA5MDsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcm94eV9idWZmZXJfc2l6ZSA0azsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcm94eV9idWZmZXJzIDQgMzJrOwogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHByb3h5X2J1c3lfYnVmZmVyc19zaXplIDY0azsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcm94eV90ZW1wX2ZpbGVfd3JpdGVfc2l6ZSA2NGs7CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgcHJveHlfcGFzcyBodHRwOi8vMTkyLjE2OC4wLjE6MjU1MDA7CgoKICAgICAgICAgICAgICAgICAgICAgICAgfSAjIENsb3NlIExvY2F0aW9uCgoKCiAgICAgICAgICAgICAgICAgICAgICAgIGxvY2F0aW9uIC8KICAgICAgICAgICAgICAgICAgICAgICAgewoJCQkJCgkJCQlNb2RTZWN1cml0eUVuYWJsZWQgb247CgoJCQkJTW9kU2VjdXJpdHlDb25maWcgL2V0Yy9uZ2lueC9tb2RzZWNfaW5jbHVkZXMuY29uZjsKCgkJCQkjIyBDb25uIExpbWl0IAoJCQkJbGltaXRfY29ubiBjb25uX2xpbWl0IDEwOwoJCQkJCgkJCQkjIyBSZXF1ZXN0IExpbWl0CgkJCQlsaW1pdF9yZXEgem9uZT1yZXFfem9uZSBidXJzdD0xMDsKCQkJCQoJCQkJcHJveHlfc2V0X2hlYWRlciBSYW5nZSAiIjsKCQkJCXByb3h5X3JlZGlyZWN0IG9mZjsKCQkJCXByb3h5X2h0dHBfdmVyc2lvbiAxLjE7CgkJCQlwcm94eV9zZXRfaGVhZGVyIENvbm5lY3Rpb24gIiI7CgkJCQlwcm94eV9zZXRfaGVhZGVyIEhvc3QgJGh0dHBfaG9zdDsKCQkJCXByb3h5X3NldF9oZWFkZXIgWC1SZWFsLUlQICRyZW1vdGVfYWRkcjsKCQkJCXByb3h5X3NldF9oZWFkZXIgWC1PcmlnaW5hbC1TY2hlbWUgJHNjaGVtZTsKCQkJCXByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtRm9yICRwcm94eV9hZGRfeF9mb3J3YXJkZWRfZm9yOwoJCQkJcHJveHlfcGFzc19yZXF1ZXN0X2hlYWRlcnMgb247CgkJCQlwcm94eV9tYXhfdGVtcF9maWxlX3NpemUgMDsKCQkJCXByb3h5X2Nvbm5lY3RfdGltZW91dCA5MDsKCQkJCXByb3h5X3NlbmRfdGltZW91dCA5MDsKCQkJCXByb3h5X3JlYWRfdGltZW91dCA5MDsKCQkJCXByb3h5X2J1ZmZlcl9zaXplIDRrOwoJCQkJcHJveHlfYnVmZmVycyA0IDMyazsKCQkJCXByb3h5X2J1c3lfYnVmZmVyc19zaXplIDY0azsKCQkJCXByb3h5X3RlbXBfZmlsZV93cml0ZV9zaXplIDY0azsKCQkJCXByb3h5X3Bhc3MgaHR0cDovLzE5Mi4xNjguMC4xOjI1NTAwOwoKCiAgICAgICAgICAgICAgICAgICAgICAgIH0gIyBDbG9zZSBMb2NhdGlvbgoKCX0gIyBDbG9zZSBTZXJ2ZXIKCn0gIyBDbG9zZSBodHRwCg=="
+jail_local="W25naW54LXJlcS1saW1pdF0KCmVuYWJsZWQgPSB0cnVlCmZpbHRlciA9IG5naW54LXJlcS1saW1pdAphY3Rpb24gPSBpcHRhYmxlcy1tdWx0aXBvcnRbbmFtZT1SZXFMaW1pdCwgcG9ydD0iMjU1MDAiLCBwcm90b2NvbD10Y3BdCgkgYmFubmVkX2RiW25hbWU9UmVxTGltaXQsIHBvcnQ9IjI1NTAwIiwgcHJvdG9jb2w9dGNwXQpsb2dwYXRoID0gL3Zhci9sb2cvbmdpbngvKmVycm9yLmxvZwpmaW5kdGltZSA9IDYwMApiYW50aW1lID0gNzIwMAptYXhyZXRyeSA9IDEwCgpbbmdpbngtNHh4XQplbmFibGVkID0gdHJ1ZQpwb3J0ID0gaHR0cCxodHRwcwphY3Rpb24gPSBpcHRhYmxlcy1tdWx0aXBvcnRbbmFtZT1uZ2lueC00eHgsIHBvcnQ9IjI1NTAwIiwgcHJvdG9jb2w9dGNwXSAKCSBiYW5uZWRfZGJbbmFtZT1SZXFMaW1pdCwgcG9ydD0iMjU1MDAiLCBwcm90b2NvbD10Y3BdCmxvZ3BhdGggPSAvdmFyL2xvZy9uZ2lueC9hY2Nlc3MubG9nCmZpbmR0aW1lID0gNjAwCm1heHJldHJ5ID0gMTAKYmFudGltZSA9IDcyMDAKCltERUZBVUxUXQppZ25vcmVpcCA9IDEyNy4wLjAuMS84IDEwLjAuMC4wLzggMTkyLjE2OC4wLjAvMTYgMTcyLjE2LjAuMC8xNgo="
+nginx_req_limit="IyBGYWlsMkJhbiBjb25maWd1cmF0aW9uIGZpbGUKIwojIHN1cHBvcnRzOiBuZ3hfaHR0cF9saW1pdF9yZXFfbW9kdWxlIG1vZHVsZQoKW0RlZmluaXRpb25dCgpmYWlscmVnZXggPSBsaW1pdGluZyByZXF1ZXN0cywgZXhjZXNzOi4qIGJ5IHpvbmUuKmNsaWVudDogPEhPU1Q+CgojIE9wdGlvbjogaWdub3JlcmVnZXgKIyBOb3Rlcy46IHJlZ2V4IHRvIGlnbm9yZS4gSWYgdGhpcyByZWdleCBtYXRjaGVzLCB0aGUgbGluZSBpcyBpZ25vcmVkLgojIFZhbHVlczogVEVYVAojCmlnbm9yZXJlZ2V4ID0K"
+nginx_service="W1VuaXRdCkRlc2NyaXB0aW9uPVRoZSBOR0lOWCBIVFRQIGFuZCByZXZlcnNlIHByb3h5IHNlcnZlcgpBZnRlcj1zeXNsb2cudGFyZ2V0IG5ldHdvcmsudGFyZ2V0IHJlbW90ZS1mcy50YXJnZXQgbnNzLWxvb2t1cC50YXJnZXQKIApbU2VydmljZV0KVHlwZT1mb3JraW5nClBJREZpbGU9L3J1bi9uZ2lueC5waWQKRXhlY1N0YXJ0UHJlPS91c3Ivc2Jpbi9uZ2lueCAtdApFeGVjU3RhcnQ9L3Vzci9zYmluL25naW54CkV4ZWNSZWxvYWQ9L3Vzci9zYmluL25naW54IC1zIHJlbG9hZApFeGVjU3RvcD0vYmluL2tpbGwgLXMgUVVJVCAKUHJpdmF0ZVRtcD10cnVlCiAKW0luc3RhbGxdCldhbnRlZEJ5PW11bHRpLXVzZXIudGFyZ2V0Cgo="
+geoipupdate="QWNjb3VudElEIDU5OTgyNQpMaWNlbnNlS2V5IE9CamMyWXVWdUdSaVZ6UnkKRWRpdGlvbklEcyBHZW9MaXRlMi1BU04gR2VvTGl0ZTItQ2l0eSBHZW9MaXRlMi1Db3VudHJ5Cg=="
+user_agent="IyBCbG9jayB1c2VyIGFnZW50IGRlZmF1bHQgYWxsb3cgYWxsCiN+Km1hbGljaW91cyAgICAgMTsKI34qYmFja2Rvb3IgICAgICAxOwojfipuZXRjcmF3bGVyICAgIDE7CiN+KndlYmJhbmRpdCAgICAgMTsKI34qd2dldCAgICAgICAgICAxOwojfipsaWJ3d3ctcGVybCAgIDE7CiN+KmNVUkwgICAgICAgICAgMTsKI34qQkJCaWtlICAgICAgICAxOwojfipqYXZhICAgICAgICAgIDE7CiN+KnNwaWRlciAgICAgICAgMTsKI34qYm90ICAgICAgICAgICAxOwo="
+country_whitelist="IyBEZWZhdWx0IENvdW50cnkgYmxvY2sgYWxsLgojCiMgZXhhbXBsZTogCiMgQWxsb3cgREUgYW5kIElUCiMgREUgeWVzOwojIElUIHllczsKIyAuLi4uCg=="
+ip_whitelist_limit_req="IyBFeGNsdWRlIHRoZSBpcCBmcm9tIHRoZSBsaW1pdCByZXEKIyBzeW50YXggOgojIDEwLjEwLjEwLjEJMDsgCiMgMTAuMTUuMTUuMC8yNCAgICAwOwojIAo="
+block_asn="IyBCbGFja2xpc3QgQVNOCiMgZGVmYXVsdCAwIGFsbG93IGFsbAojCiMxNTE2OSAgICAgMTsgIyBHb29nbGUgQVNOIG51bWJlciAKIzgwNzUgICAgICAxOyAjIE1pY3Jvc29mdCBBU04gbnVtYmVyCg=="
+sysctl_conf="IyBBdm9pZCBhIHNtdXJmIGF0dGFjawpuZXQuaXB2NC5pY21wX2VjaG9faWdub3JlX2Jyb2FkY2FzdHMgPSAxCgojIFR1cm4gb24gcHJvdGVjdGlvbiBmb3IgYmFkIGljbXAgZXJyb3IgbWVzc2FnZXMKbmV0LmlwdjQuaWNtcF9pZ25vcmVfYm9ndXNfZXJyb3JfcmVzcG9uc2VzID0gMQoKIyBUdXJuIG9uIHN5bmNvb2tpZXMgZm9yIFNZTiBmbG9vZCBhdHRhY2sgcHJvdGVjdGlvbgpuZXQuaXB2NC50Y3Bfc3luY29va2llcyA9IDEKCiMgVHVybiBvbiBhbmQgbG9nIHNwb29mZWQsIHNvdXJjZSByb3V0ZWQsIGFuZCByZWRpcmVjdCBwYWNrZXRzCm5ldC5pcHY0LmNvbmYuYWxsLmxvZ19tYXJ0aWFucyA9IDEKbmV0LmlwdjQuY29uZi5kZWZhdWx0LmxvZ19tYXJ0aWFucyA9IDEKCiMgTm8gc291cmNlIHJvdXRlZCBwYWNrZXRzIGhlcmUKbmV0LmlwdjQuY29uZi5hbGwuYWNjZXB0X3NvdXJjZV9yb3V0ZSA9IDAKbmV0LmlwdjQuY29uZi5kZWZhdWx0LmFjY2VwdF9zb3VyY2Vfcm91dGUgPSAwCgojIFR1cm4gb24gcmV2ZXJzZSBwYXRoIGZpbHRlcmluZwpuZXQuaXB2NC5jb25mLmFsbC5ycF9maWx0ZXIgPSAxCm5ldC5pcHY0LmNvbmYuZGVmYXVsdC5ycF9maWx0ZXIgPSAxCgojIE1ha2Ugc3VyZSBubyBvbmUgY2FuIGFsdGVyIHRoZSByb3V0aW5nIHRhYmxlcwpuZXQuaXB2NC5jb25mLmFsbC5hY2NlcHRfcmVkaXJlY3RzID0gMApuZXQuaXB2NC5jb25mLmRlZmF1bHQuYWNjZXB0X3JlZGlyZWN0cyA9IDAKbmV0LmlwdjQuY29uZi5hbGwuc2VjdXJlX3JlZGlyZWN0cyA9IDAKbmV0LmlwdjQuY29uZi5kZWZhdWx0LnNlY3VyZV9yZWRpcmVjdHMgPSAwCgojIERvbid0IGFjdCBhcyBhIHJvdXRlcgpuZXQuaXB2NC5pcF9mb3J3YXJkID0gMApuZXQuaXB2NC5jb25mLmFsbC5zZW5kX3JlZGlyZWN0cyA9IDAKbmV0LmlwdjQuY29uZi5kZWZhdWx0LnNlbmRfcmVkaXJlY3RzID0gMAoKCiMgVHVybiBvbiBleGVjc2hpbGQKa2VybmVsLmV4ZWMtc2hpZWxkID0gMQprZXJuZWwucmFuZG9taXplX3ZhX3NwYWNlID0gMQoKIyBPcHRpbWl6YXRpb24gZm9yIHBvcnQgdXNlZm9yIExCcwojIEluY3JlYXNlIHN5c3RlbSBmaWxlIGRlc2NyaXB0b3IgbGltaXQKZnMuZmlsZS1tYXggPSA2NTUzNQoKIyBBbGxvdyBmb3IgbW9yZSBQSURzICh0byByZWR1Y2Ugcm9sbG92ZXIgcHJvYmxlbXMpOyBtYXkgYnJlYWsgc29tZSBwcm9ncmFtcyAzMjc2OAprZXJuZWwucGlkX21heCA9IDY1NTM2CgojIEluY3JlYXNlIHN5c3RlbSBJUCBwb3J0IGxpbWl0cwpuZXQuaXB2NC5pcF9sb2NhbF9wb3J0X3JhbmdlID0gMjAwMCA2NTAwMAoKIyBJbmNyZWFzZSBUQ1AgbWF4IGJ1ZmZlciBzaXplIHNldGFibGUgdXNpbmcgc2V0c29ja29wdCgpCm5ldC5pcHY0LnRjcF9ybWVtID0gNDA5NiA4NzM4MCA4Mzg4NjA4Cm5ldC5pcHY0LnRjcF93bWVtID0gNDA5NiA4NzM4MCA4Mzg4NjA4CgojIEluY3JlYXNlIExpbnV4IGF1dG8gdHVuaW5nIFRDUCBidWZmZXIgbGltaXRzCiMgbWluLCBkZWZhdWx0LCBhbmQgbWF4IG51bWJlciBvZiBieXRlcyB0byB1c2UKIyBzZXQgbWF4IHRvIGF0IGxlYXN0IDRNQiwgb3IgaGlnaGVyIGlmIHlvdSB1c2UgdmVyeSBoaWdoIEJEUCBwYXRocwojIFRjcCBXaW5kb3dzIGV0YwpuZXQuY29yZS5ybWVtX21heCA9IDgzODg2MDgKbmV0LmNvcmUud21lbV9tYXggPSA4Mzg4NjA4Cm5ldC5jb3JlLm5ldGRldl9tYXhfYmFja2xvZyA9IDUwMDAKbmV0LmlwdjQudGNwX3dpbmRvd19zY2FsaW5nID0gMQo="
+protect_rules="bG9jYXRpb24gfiogIihcJ3xcIikoLiopKGRyb3B8aW5zZXJ0fG1kNXxzZWxlY3R8dW5pb24pIiB7IGRlbnkgYWxsOyB9CmxvY2F0aW9uIH4qICIoPHwlM0MpLipzY3JpcHQuKig+fCUzKSIgeyBkZW55IGFsbDsgfQo="
+isp_block="IyBJU1AgQmxvY2sKIyBFeGFtcGxlIHRvIGJsb2NrIGV4YWN0IG1hdGNoIDoKIyJMYXNld2ViIERldXRzY2hsYW5kIEdtYkgiCTE7CiMgRXhhbXBsZSB0byBibG9jayBub24gZXhhY3QgOiAKIyJ+Kkxhc2V3ZWIiCTE7Cg=="
+fail2ban_4xx_conf="W0RlZmluaXRpb25dCmZhaWxyZWdleCA9IF48SE9TVD4uKiIoR0VUfFBPU1QpLioiICg0MDR8NDQ0fDQwM3w0MDApIC4qJAppZ25vcmVyZWdleCA9Cg=="
+exclusion_ip="IyBleGNsdWRlIGlwIC8gcmFuZ2UgZnJvbSBjb3VudHJ5IGJsb2NrCiMgZXMuOgojIDEwLjEwLjAuMC8yMSAxOyAKIyAxMC4xMC4xLjEvMzIgMTsK"
+
+
+numcpu=`cat /proc/cpuinfo | grep processor | wc -l`
+
+clear
+echo " "
+echo " "
+echo " Welcome to nginx reverse proxy for XtreamUI / Streamcreed "
+echo " "
+echo " "
+sleep 5
+
+echo " "
+echo " "
+echo " Enter Proxy Listen Port : "
+read proxy_listen_port
+echo " Enter ip of main server : "
+read backend_ip
+echo " Enter port of main server : "
+read backend_port
+echo " Enter fail2ban mysql username : "
+read fail2ban_mysql_user
+echo " Enter fail2ban mysql password : "
+read fail2ban_mysql_pass
+echo " Enter AccountID for geoip2 : "
+read account_id
+echo " Enter LicenseKey for geoip2 : "
+read license_key
+
+sleep 2
+
+clear
+echo " "
+echo " Updating system . . . "
+apt-get update -y
+sleep 1
+echo " Upgrading system . . . "
+apt-get upgrade -y
+sleep 1
+echo " Installing build-essential . . ."
+apt-get install -y build-essential
+sleep 1
+echo " Installing libpcre3-dev . . ."
+apt-get install -y libpcre3-dev
+sleep 1
+echo " Installing zlib1g-dev  . . ."
+apt-get install -y zlib1g-dev
+sleep 1
+echo " Installing libssl-dev . . ."
+apt-get install -y libssl-dev
+sleep 1
+echo " Installing libxslt1-dev . . ."
+apt-get install -y libxslt1-dev 
+sleep 1
+echo " Installing libpcre3 . . ."
+apt-get install -y libpcre3 
+sleep 1
+echo " Installing libpcre3-dev . . ."
+apt-get install -y libpcre3-dev 
+sleep 1
+echo " Installing libssl-dev . . ."
+apt-get install -y libssl-dev
+sleep 1
+echo " Installing fail2ban . . ."
+apt-get install -y fail2ban 
+sleep 1
+echo " Installing mariadb-server . . ."
+apt-get install -y mariadb-server
+sleep 1
+add-apt-repository -y ppa:maxmind/ppa 
+apt-get update -y
+echo " Installing libmaxminddb-dev . . ."
+apt-get install -y libmaxminddb-dev libmaxminddb0 mmdb-bin geoipupdate
+sleep 1
+apt-get install -y git libtool autoconf apache2-dev libxml2-dev libcurl4-openssl-dev automake pkgconf zlib1g-dev libyajl-dev liblua5.1-0-dev
+
+clear
+
+# Compile Mod Security
+echo ""
+echo " Compile mod security . . ."
+sleep 2
+cd /usr/local/src
+git clone -b nginx_refactoring https://github.com/SpiderLabs/ModSecurity.git
+cd ModSecurity
+./autogen.sh
+./configure --enable-standalone-module --disable-mlogc
+make -j $numcpu
+make install
+
+echo " "
+echo " Build nginx . . ."
+echo " "
+echo " "
+sleep 2
+
+# Build Nginx
+cd /usr/local/src/
+wget -q http://nginx.org/download/nginx-1.20.1.tar.gz
+tar xzf nginx-1.20.1.tar.gz 
+wget -q  https://github.com/leev/ngx_http_geoip2_module/archive/master.tar.gz
+tar zxf master.tar.gz 
+cd nginx-1.20.1
+./configure \
+--with-cc-opt='-g -O2 -fPIE -fstack-protector-strong -Wformat -Werror=format-security -fPIC -Wdate-time -D_FORTIFY_SOURCE=2' \
+--with-ld-opt='-Wl,-Bsymbolic-functions -fPIE -pie -Wl,-z,relro -Wl,-z,now -fPIC' \
+--prefix=/usr/share/nginx                 \
+--conf-path=/etc/nginx/nginx.conf         \
+--http-log-path=/var/log/nginx/access.log \
+--error-log-path=/var/log/nginx/error.log \
+--lock-path=/var/lock/nginx.lock          \
+--pid-path=/run/nginx.pid                 \
+--modules-path=/usr/lib/nginx/modules     \
+--http-client-body-temp-path=/var/lib/nginx/body \
+--http-fastcgi-temp-path=/var/lib/nginx/fastcgi  \
+--http-proxy-temp-path=/var/lib/nginx/proxy      \
+--http-scgi-temp-path=/var/lib/nginx/scgi        \
+--http-uwsgi-temp-path=/var/lib/nginx/uwsgi      \
+--with-debug                     \
+--with-pcre-jit                  \
+--with-http_ssl_module           \
+--with-http_stub_status_module   \
+--with-http_realip_module        \
+--with-http_auth_request_module  \
+--with-http_v2_module            \
+--with-http_dav_module           \
+--with-http_slice_module         \
+--with-threads                   \
+--with-http_addition_module      \
+--with-http_gunzip_module        \
+--with-http_gzip_static_module   \
+--with-http_sub_module           \
+--with-http_xslt_module=dynamic  \
+--with-stream=dynamic            \
+--with-stream_ssl_module         \
+--with-stream_ssl_preread_module \
+--with-mail=dynamic              \
+--with-mail_ssl_module           \
+--add-module=/usr/local/src/ModSecurity/nginx/modsecurity \
+--add-dynamic-module=/usr/local/src/ngx_http_geoip2_module-master
+sleep 1
+make -j $numcpu
+make install
+cd /usr/sbin
+ln -s /usr/share/nginx/sbin/nginx nginx
+cd /usr/share/nginx/
+ln -s /usr/lib/nginx/modules modules
+mkdir -p /var/lib/nginx/body
+
+echo " "
+echo " Creating nginx.service . . ."
+sleep 2
+touch /lib/systemd/system/nginx.service
+echo "$nginx_service" | base64 -d > /lib/systemd/system/nginx.service
+
+echo ""
+echo " Creating nginx conf . . . "
+sleep 2
+touch /etc/nginx/nginx.conf
+echo "$nginx_conf" | base64 -d > /etc/nginx/nginx.conf
+sleep 1
+
+# Create default config for ip whitelist limit_req
+echo ""
+echo " Creating ip_whitelist.conf . . ."
+sleep 2
+touch /etc/nginx/ip_whitelist.conf
+echo "$ip_whitelist_limit_req" | base64 -d > /etc/nginx/ip_whitelist.conf
+
+# Create country whitelist rules file
+echo ""
+echo " Creating country_whitlist.conf . . ."
+sleep 2
+touch /etc/nginx/country_whitelist.conf
+echo "$country_whitelist" | base64 -d > /etc/nginx/country_whitelist.conf
+
+# Create Block ASN Blacklist
+echo ""
+echo " Creating ASN Blacklist file . . ."
+sleep 2
+touch /etc/nginx/block_asn.conf
+echo "$block_asn" | base64 -d > /etc/nginx/block_asn.conf
+
+# Create user agent rules file
+echo ""
+echo " Creating useragent.rulse file . . . "
+sleep 2
+touch /etc/nginx/useragent.rules
+echo "$user_agent" | base64 -d > /etc/nginx/useragent.rules
+
+# Create ISP Blacklist file
+echo ""
+echo " Creating isp_block.conf Blacklist file . . ."
+touch /etc/nginx/block_isp.conf
+echo "$isp_block" | base64 -d > /etc/nginx/block_isp.conf
+
+# Create protect.rules file
+echo ""
+echo " Creating protect.rules files . . . "
+sleep 2
+touch /etc/nginx/protect.rules
+echo "$protect_rules" | base64 -d > /etc/nginx/protect.rules 
+
+# Create Exclusion files
+echo ""
+echo " Creating exclusion file . . ."
+sleep 2
+touch /etc/nginx/exclusion_ip.conf
+echo "$exclusion_ip" | base64 -d > /etc/nginx/exclusion_ip.conf
+
+# Change ip e port on nginx conf
+echo ""
+echo " Configuring nginx . . . "
+sleep 2
+sed -i "s/192.168.0.1:25500/$backend_ip:$backend_port/g" /etc/nginx/nginx.conf
+sed -i "s/listen 25500/listen $proxy_listen_port/g" /etc/nginx/nginx.conf
+
+
+##### MOD SECURITY
+touch /etc/nginx/modsec_includes.conf
+mkdir -p /etc/nginx/rules
+mkdir -p /etc/nginx/conf
+mkdir -p /opt/log
+
+echo "include /etc/nginx/conf/modsecurity.conf
+include /etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf
+include /etc/nginx/rules/*.conf" > /etc/nginx/modsec_includes.conf
+
+cp /usr/local/src/ModSecurity/modsecurity.conf-recommended /etc/nginx/conf/modsecurity.conf
+cp /usr/local/src/ModSecurity/unicode.mapping /etc/nginx/conf/
+
+sed -i "s/SecRuleEngine DetectionOnly/SecRuleEngine On/" /etc/nginx/conf/modsecurity.conf
+
+cd /etc/nginx/conf
+git clone https://github.com/SpiderLabs/owasp-modsecurity-crs.git
+cd owasp-modsecurity-crs
+mv crs-setup.conf.example crs-setup.conf
+cd rules
+cp REQUEST-905-COMMON-EXCEPTIONS.conf /etc/nginx/rules/REQUEST-905-COMMON-EXCEPTIONS.conf
+cp REQUEST-910-IP-REPUTATION.conf /etc/nginx/rules/REQUEST-910-IP-REPUTATION.conf
+cp REQUEST-912-DOS-PROTECTION.conf /etc/nginx/rules/REQUEST-912-DOS-PROTECTION.conf
+cp REQUEST-913-SCANNER-DETECTION.conf /etc/nginx/rules/REQUEST-913-SCANNER-DETECTION.conf
+cp REQUEST-920-PROTOCOL-ENFORCEMENT.conf /etc/nginx/rules/REQUEST-920-PROTOCOL-ENFORCEMENT.conf
+cp REQUEST-921-PROTOCOL-ATTACK.conf /etc/nginx/rules/REQUEST-921-PROTOCOL-ATTACK.conf
+cp REQUEST-930-APPLICATION-ATTACK-LFI.conf /etc/nginx/rules/REQUEST-930-APPLICATION-ATTACK-LFI.conf
+cp REQUEST-931-APPLICATION-ATTACK-RFI.conf /etc/nginx/rules/REQUEST-931-APPLICATION-ATTACK-RFI.conf
+cp REQUEST-932-APPLICATION-ATTACK-RCE.conf /etc/nginx/rules/REQUEST-932-APPLICATION-ATTACK-RCE.conf
+cp REQUEST-933-APPLICATION-ATTACK-PHP.conf /etc/nginx/rules/REQUEST-933-APPLICATION-ATTACK-PHP.conf
+cp REQUEST-934-APPLICATION-ATTACK-NODEJS.conf /etc/nginx/rules/REQUEST-934-APPLICATION-ATTACK-NODEJS.conf
+cp REQUEST-941-APPLICATION-ATTACK-XSS.conf /etc/nginx/rules/REQUEST-941-APPLICATION-ATTACK-XSS.conf
+cp REQUEST-942-APPLICATION-ATTACK-SQLI.conf /etc/nginx/rules/REQUEST-942-APPLICATION-ATTACK-SQLI.conf
+cp REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf /etc/nginx/rules/REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf
+cp REQUEST-944-APPLICATION-ATTACK-JAVA.conf /etc/nginx/rules/REQUEST-944-APPLICATION-ATTACK-JAVA.conf
+cp REQUEST-949-BLOCKING-EVALUATION.conf /etc/nginx/rules/REQUEST-949-BLOCKING-EVALUATION.conf
+cp RESPONSE-950-DATA-LEAKAGES.conf /etc/nginx/rules/RESPONSE-950-DATA-LEAKAGES.conf
+cp RESPONSE-951-DATA-LEAKAGES-SQL.conf /etc/nginx/rules/RESPONSE-951-DATA-LEAKAGES-SQL.conf
+cp RESPONSE-952-DATA-LEAKAGES-JAVA.conf /etc/nginx/rules/RESPONSE-952-DATA-LEAKAGES-JAVA.conf
+cp RESPONSE-953-DATA-LEAKAGES-PHP.conf /etc/nginx/rules/RESPONSE-953-DATA-LEAKAGES-PHP.conf
+cp RESPONSE-959-BLOCKING-EVALUATION.conf /etc/nginx/rules/RESPONSE-959-BLOCKING-EVALUATION.conf
+cp RESPONSE-980-CORRELATION.conf /etc/nginx/rules/RESPONSE-980-CORRELATION.conf
+cp crawlers-user-agents.data /etc/nginx/rules/crawlers-user-agents.data
+cp java-classes.data /etc/nginx/rules/java-classes.data
+cp java-code-leakages.data /etc/nginx/rules/java-code-leakages.data
+cp java-errors.data /etc/nginx/rules/java-errors.data
+cp lfi-os-files.data /etc/nginx/rules/lfi-os-files.data
+cp php-config-directives.data /etc/nginx/rules/php-config-directives.data
+cp php-errors.data /etc/nginx/rules/php-errors.data
+cp php-function-names-933150.data /etc/nginx/rules/php-function-names-933150.data
+cp php-function-names-933151.data /etc/nginx/rules/php-function-names-933151.data
+cp php-variables.data /etc/nginx/rules/php-variables.data
+cp restricted-files.data /etc/nginx/rules/restricted-files.data
+cp restricted-upload.data /etc/nginx/rules/restricted-upload.data
+cp scanners-headers.data /etc/nginx/rules/scanners-headers.data
+cp scanners-urls.data /etc/nginx/rules/scanners-urls.data
+cp scanners-user-agents.data /etc/nginx/rules/scanners-user-agents.data
+cp scripting-user-agents.data /etc/nginx/rules/scripting-user-agents.data
+cp sql-errors.data /etc/nginx/rules/sql-errors.data
+cp unix-shell.data /etc/nginx/rules/unix-shell.data
+cp windows-powershell-commands.data /etc/nginx/rules/windows-powershell-commands.data
+
+sed -i "s/SecAuditLogType Serial/SecAuditLogType Concurrent/g" /etc/nginx/conf/modsecurity.conf
+sed -i "s/SecAuditLog \/var\/log\/modsec_audit.log/SecAuditLog \/opt\/log\/modsec_audit.log/g" /etc/nginx/conf/modsecurity.conf
+chmod -R 755 /opt/log
+chown -R www-data:www-data /opt/log
+
+
+echo " "
+echo " Creating database fail2ban . . . "
+sleep 2
+## Install mysql jail
+mysql -uroot -e "CREATE DATABASE fail2ban;"
+mysql -uroot -e "GRANT ALL ON fail2ban.* TO '$fail2ban_mysql_user'@'%' IDENTIFIED BY '$fail2ban_mysql_pass';"
+mysql -uroot -e "GRANT ALL ON fail2ban.* TO '$fail2ban_mysql_user'@'localhost' IDENTIFIED BY '$fail2ban_mysql_pass';"
+mysql -uroot -e "flush privileges;"
+mkdir ~/tmp
+cd ~/tmp
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/sql/fail2ban.mysql
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/action.d/banned_db.conf
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/bin/fail2ban_banned_db
+mysql fail2ban < ~/tmp/fail2ban.mysql
+echo "[client]
+host="127.0.0.1"
+port="3306"
+user="$fail2ban_mysql_user"
+password="$fail2ban_mysql_pass"" > /root/.my.cnf-fail2ban
+mv ~/tmp/banned_db.conf /etc/fail2ban/action.d/
+mv ~/tmp/fail2ban_banned_db /usr/local/bin/
+chmod 0550 /usr/local/bin/fail2ban_banned_db
+
+
+echo " "
+echo " Configuring fail2ban . . . "
+sleep 2
+touch /etc/fail2ban/jail.local
+echo "$jail_local" | base64 -d > /etc/fail2ban/jail.local
+sed -i "s/port=\"25500\"/port=\"$proxy_listen_port\"/g" /etc/fail2ban/jail.local
+
+touch /etc/fail2ban/filter.d/nginx-req-limit.conf
+echo "$nginx_req_limit" | base64 -d > /etc/fail2ban/filter.d/nginx-req-limit.conf
+
+touch /etc/fail2ban/filter.d/nginx-4xx.conf
+echo "$fail2ban_4xx_conf" | base64 -d > /etc/fail2ban/filter.d/nginx-4xx.conf
+
+
+echo " "
+echo " Configuring Geoip . . ."
+echo " "
+sleep 2
+touch /etc/GeoIP.conf
+echo $geoipupdate | base64 -d > /etc/GeoIP.conf
+sed -i "s/AccountID 599825/AccountID $account_id/g" /etc/GeoIP.conf
+sed -i "s/LicenseKey OBjc2YuVuGRiVzRy/LicenseKey $license_key/g" /etc/GeoIP.conf
+echo "0 1 * * *  /usr/bin/geoipupdate" >> /etc/crontab
+
+echo ""
+echo " Updating geoip database "
+sleep 2
+geoipupdate
+
+echo ""
+echo " Restart Service . . . "
+sleep 2
+systemctl enable nginx >  /dev/null
+systemctl start nginx
+systemctl restart fail2ban
+
+echo ""
+echo " Configure iptables rules . . . "
+sleep 1
+iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
+iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+
+echo ""
+echo "Configure sysctl setting . . . "
+echo "$sysctl_conf" | base64 -d >> /etc/sysctl.conf
+sysctl -p
+sleep 1
+
+
+echo ""
+echo ""
+echo " To unban use this sintax : fail2ban-client set nginx-req-limit unbanip IP_ADDRESS_HERE"
+echo ""
+
+

@@ -1,0 +1,481 @@
+load_module modules/ngx_http_geoip2_module.so;
+user www-data;
+worker_processes auto;
+
+worker_rlimit_nofile 300000;
+events {
+        worker_connections 50000;
+        use epoll;
+        accept_mutex on;
+        multi_accept on;
+}
+
+
+http 
+{
+        geoip2 /usr/share/GeoIP/GeoLite2-Country.mmdb
+        {
+                auto_reload 5m;
+                $geoip2_metadata_country_build metadata build_epoch;
+                $geoip2_data_country_code country iso_code;
+                $geoip2_data_country_name country names en;
+        }
+
+        geoip2 /usr/share/GeoIP/GeoLite2-City.mmdb
+        {
+                auto_reload 5m;
+                $geoip2_metadata_city_build metadata build_epoch;
+                $geoip2_data_city_name city names en;
+        }
+
+	geoip2 /usr/share/GeoIP/GeoLite2-ASN.mmdb 
+	{
+		auto_reload 5m;
+		$geoip2_data_autonomous_system_number autonomous_system_number;
+		$geoip2_data_autonomous_system_organization autonomous_system_organization;
+	} 
+
+                fastcgi_param COUNTRY_CODE $geoip2_data_country_code;
+                fastcgi_param COUNTRY_NAME $geoip2_data_country_name;
+                fastcgi_param CITY_NAME    $geoip2_data_city_name;
+
+	# ASN Blacklist default allow.
+	map $geoip2_data_autonomous_system_number $ASN 
+	{
+		default   0;
+		include /etc/nginx/block_asn.conf;
+	}
+
+	# ISP Blacklist default allow.
+        map $geoip2_data_autonomous_system_organization $ISP
+        {
+                default   0;
+                include /etc/nginx/block_isp.conf;
+        }
+
+        # Add IPs to whitelist to bypass limit_req_zone zone=req_zone
+        geo $limit 
+	{
+                default 1;
+		include /etc/nginx/ip_whitelist.conf;
+        }
+        map $limit $limit_key 
+	{
+                0 "";
+                1 $binary_remote_addr;
+        }
+
+	# Add country whitelist default block all 
+        map $geoip2_data_country_code $allowed_country 
+	{
+		default no;
+		include /etc/nginx/country_whitelist.conf;
+        }
+        geo $exclusions
+        {
+                default 0;
+		include /etc/nginx/exclusion_ip.conf;
+        }
+	
+	# User Agent Blacklist default allow all
+	map $http_user_agent $agent2block 
+	{
+        default         0;
+	include /etc/nginx/useragent.rules;	
+	}
+
+
+        sendfile			on;
+        tcp_nopush			on;
+        tcp_nodelay			on;
+        reset_timedout_connection	on;
+        keepalive_timeout		5 5;
+        gzip				off;
+        types_hash_max_size		2048;
+        sendfile_max_chunk		512k;
+	client_body_timeout		10s;
+	client_max_body_size		1k;
+        client_body_buffer_size		1k;
+        client_header_timeout		10s;
+        client_header_buffer_size	1k;
+        large_client_header_buffers	2 1k;
+        server_tokens			off;
+        chunked_transfer_encoding	off;
+        include				mime.types;
+        default_type			application/octet-stream;
+
+
+        log_format  main_geo  '$remote_addr - $remote_user [$time_local] "$request" '
+                              '$status $body_bytes_sent "$http_referer" '
+                              '"$http_user_agent" "$http_x_forwarded_for" '
+                              '"$geoip2_data_country_code $geoip2_data_country_name $geoip2_data_city_name" "AS$geoip2_data_autonomous_system_number" "$geoip2_data_autonomous_system_organization"';
+
+        access_log /var/log/nginx/access.log main_geo;
+	error_log /var/log/nginx/error.log;
+        
+
+	# Default location
+        limit_conn_zone $binary_remote_addr zone=conn_limit:1m;
+        limit_req_zone  $limit_key zone=req_zone:30m rate=20r/s;
+
+	# MAG portal.php
+	limit_req_zone  $limit_key zone=req_zone_mag:10m rate=6r/s;
+	limit_conn_zone $binary_remote_addr zone=conn_limit_mag:1m;
+        
+        
+        #Blocco VPN & PROXY 
+        #include /etc/nginx/blockips.conf;
+
+	server
+	{
+
+		listen 8880;
+                listen 8000;
+                add_header X-Frame-Options "SAMEORIGIN";
+		add_header X-XSS-Protection "1; mode=block";
+		add_header X-Content-Type-Options "nosniff";
+		#include /etc/nginx/protect.rules;
+
+                  ## NEW ### SQL INJECT PROTECTION #####
+
+                 if ($http_user_agent ~ (semrush|opensiteexplorer|ahrefs|seekport|mj12bot)) {
+                 return 403;
+                 }
+  
+  
+                set $block_sql_injections 0;
+                if ($query_string ~ "union.*select.*\(") {
+                set $block_sql_injections 1;
+                }
+                if ($query_string ~ "union.*all.*select.*") {
+                set $block_sql_injections 1;
+                }
+                if ($query_string ~ "concat.*\(") {
+                set $block_sql_injections 1;
+                }
+                if ($block_sql_injections = 1) {
+                return 403;
+                }
+
+## NEW ### FILE INJECTIONS BLOCK #####
+  
+    set $block_file_injections 0;
+    if ($query_string ~ "[a-zA-Z0-9_]=http://") {
+        set $block_file_injections 1;
+    }
+    if ($query_string ~ "[a-zA-Z0-9_]=(\.\.//?)+") {
+        set $block_file_injections 1;
+    }
+    if ($query_string ~ "[a-zA-Z0-9_]=/([a-z0-9_.]//?)+") {
+        set $block_file_injections 1;
+    }
+    if ($block_file_injections = 1) {
+        return 403;
+    }
+  
+## NEW ### EXPLOITS #####
+  
+    set $block_common_exploits 0;
+    if ($query_string ~ "(<|%3C).*script.*(>|%3E)") {
+        set $block_common_exploits 1;
+    }
+    if ($query_string ~ "GLOBALS(=|\[|\%[0-9A-Z]{0,2})") {
+        set $block_common_exploits 1;
+    }
+    if ($query_string ~ "_REQUEST(=|\[|\%[0-9A-Z]{0,2})") {
+        set $block_common_exploits 1;
+    }
+    if ($query_string ~ "proc/self/environ") {
+        set $block_common_exploits 1;
+    }
+    if ($query_string ~ "mosConfig_[a-zA-Z_]{1,21}(=|\%3D)") {
+        set $block_common_exploits 1;
+    }
+    if ($query_string ~ "base64_(en|de)code\(.*\)") {
+        set $block_common_exploits 1;
+    }
+    if ($block_common_exploits = 1) {
+        return 403;
+    }
+  
+## NEW ### SPAMS AND SCANNERS BLOCK #####
+  
+    set $block_spam 0;
+    if ($query_string ~ "\b(ultram|unicauca|valium|viagra|vicodin|xanax|ypxaieo)\b") {
+        set $block_spam 1;
+    }
+    if ($query_string ~ "\b(erections|hoodia|huronriveracres|impotence|levitra|libido)\b") {
+        set $block_spam 1;
+    }
+    if ($query_string ~ "\b(ambien|blue\spill|cialis|cocaine|ejaculation|erectile)\b") {
+        set $block_spam 1;
+    }
+    if ($query_string ~ "\b(lipitor|phentermin|pro[sz]ac|sandyauer|tramadol|troyhamby)\b") {
+        set $block_spam 1;
+    }
+    if ($query_string ~ "\b(lipitor|phentermin|pro[sz]ac|sandyauer|tramadol|troyhamby)\b") {
+        set $block_spam 1;
+  	}
+    if ($query_string ~ "\b(enigma216_script|iptvhit.com|\x16\x03\x01|password=.* HTTP\/1.1\" \"200 24\" )\b") {
+        set $block_spam 1;
+    }
+      if ($query_string = "\b(200 24)\b") {
+        set $block_spam 1;
+    }
+    if ($block_spam = 1) {
+        return 403;
+    }
+     
+      ##### USER AGENTS DE SCANNERS E ATAQUES DE APLICAÇÃO #####
+  
+    set $block_user_agents 0;
+
+#======================================= WGET BLOCK ==============================================#
+# Não desative o wget se você precisar dele para executar cron jobs!
+# Isto também bloqueia o download das listas as listas m3u pelo navegador
+
+ if ($http_user_agent ~ "wget") {
+    set $block_user_agents 0;
+ }
+
+#==================================================================================================#
+
+# Disable Akeeba Remote Control 2.5 and earlier
+    if ($http_user_agent ~ "Indy Library") {
+        set $block_user_agents 1;
+    }
+
+# Common bandwidth hoggers and hacking tools.
+    if ($http_user_agent ~ "libwww-perl") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "GetRight") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "GetWeb!") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Go!Zilla") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Download Demon") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Go-Ahead-Got-It") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "TurnitinBot") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "GrabNet") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "01h4x.com") {
+        set $block_user_agents 1;
+    }
+  	if ($http_user_agent ~ "360Spider") {
+        set $block_user_agents 1;
+    }
+  	if ($http_user_agent ~ "404checker") {
+        set $block_user_agents 1;
+    }
+	  if ($http_user_agent ~* "VLC/3.0.0-git LibVLC/3.0.0-git") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "VLC/3.0.21 LibVLC/3.0.21") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "VLC/3.0.20 LibVLC/3.0.20") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "VLC/3.0.17.3 LibVLC/3.0.17.3") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent = "VLC") {
+        set $block_user_agents 1;
+  	}
+    if ($http_user_agent = "okhttp/4.7.1") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent = "VLC/3.0.16") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Mozilla/4.0") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Opera/9.80") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Smarters Player Lite") {
+        set $block_user_agents 1;
+  	}
+    if ($http_user_agent ~ "Chrome/130.0.0.0") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Version/4.0.4") {
+        set $block_user_agents 1;
+  	}
+    if ($http_user_agent ~ "Firefox/55.0") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Firefox/20.0") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Chrome/80.0.3987.149") {
+        set $block_user_agents 1;
+		}
+    if ($http_user_agent ~ "Chrome/41.0.2224.3") {
+        set $block_user_agents 1;
+	  }
+    if ($http_user_agent ~ "Chrome/41.0.2225.0") {
+        set $block_user_agents 1;
+  	}
+    if ($http_user_agent ~ "Chrome/41.0.2226.0") {
+        set $block_user_agents 1;
+  	}
+    if ($http_user_agent ~ "Chrome/41.0.2228.0") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "Mozilla / 5.0") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "python-requests/2.31.0") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "BotPoke") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "curl") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "CyberOKInspect") {
+        set $block_user_agents 1;
+    }
+    if ($http_user_agent ~ "ModatScanner") {
+        set $block_user_agents 1;               
+    }  
+	  if ($block_user_agents = 1) {
+        return 403;
+    }     
+
+# NEW ##### REGRAS BY Xtreamcursos - BLOQUEAR SCANNERS CONHECIDOS e Download das Listas #########
+		
+    if ($http_user_agent ~ "curl|BotPoke|Foo|Catall Spider|AcoiRobot|SemrushBot|Semrush|AhrefsBot|MJ12bot|YandexBot|YandexImages|MegaIndex.ru|BLEXbot|BLEXBot|ZoominfoBot|YaK|VelenPublicWebCrawler|SentiBot|Vagabondo|SEOkicks|SEOkicks-Robot|mtbot/1.1.0i|SeznamBot|DotBot|Cliqzbot|coccocbot|python|Scrap|SiteCheck-sitecrawl|MauiBot|Java|GumGum|Clickagy|AspiegelBot|Yandex|TkBot|CCBot|Qwantify|MBCrawler|serpstatbot|AwarioSmartBot|Semantici|ScholarBot|proximic|MojeekBot|GrapeshotCrawler|IAScrawler|linkdexbot|contxbot|PlurkBot|PaperLiBot|BomboraBot|Leikibot|weborama-fetcher|NTENTbot|Screaming Frog SEO Spider|admantx-usaspb|Eyeotabot|VoluumDSP-content-bot|SirdataBot|adbeat_bot|TTD-Content|admantx|Nimbostratus-Bot|Mail.RU_Bot|Quantcastboti|Onespot-ScraperBot|Taboolabot|Baidu|Jobboerse|VoilaBot|Sogou|Jyxobot|Exabot|ZGrab|Proximi|Sosospider|Accoona|aiHitBot|Genieo|BecomeBot|ConveraCrawler|NerdyBot|OutclicksBot|findlinks|JikeSpider|Gigabot|CatchBot|Huaweisymantecspider|Offline Explorer|SiteSnagger|TeleportPro|WebCopier|WebReaper|WebStripper|WebZIP|Xaldon_WebSpider|BackDoorBot|AITCSRoboti|Arachnophilia|BackRub|BlowFishi|perl|CherryPicker|CyberSpyder|EmailCollector|Foobot|GetURL|httplib|HTTrack|LinkScan|Openbot|Snooper|SuperBot|URLSpiderPro|MAZBot|EchoboxBot|SerendeputyBot|LivelapBot|linkfluence.com|TweetmemeBot|LinkisBot|CrowdTanglebot")
+
+    {
+    return 403; 
+    }
+			# Block Useragent
+			if ( $agent2block = 1 ) 
+			{
+				return 403;
+			}
+			
+			# Country Blacklist Check
+			if ( $allowed_country = yes )
+			{
+				set $exclusions 1;
+			}
+                        if ( $exclusions = "0" ) {
+                                return 444;
+                        }
+			
+			# ASN Blacklist Check
+			if ( $ASN = 1 ) 
+			{
+				return 403;
+			}
+
+                        # ISP Blacklist Check
+                        if ( $ISP = 1 )
+                        {
+                                return 403;
+                        }
+                        
+                    
+
+			if ( $request_method !~ ^(GET|POST)$ )
+			{
+				return 200;
+			}
+			
+         if ($query_string ~* "streaming_pas\.value= \"(.)\"") {
+         return 403;
+     } 
+			
+                        location /portal.php
+                        {
+
+                                #ModSecurityEnabled on;
+
+                                #ModSecurityConfig /etc/nginx/modsec_includes.conf;
+
+                                ## Conn limit portal.php MAG Device
+                                limit_conn conn_limit_mag 5;
+
+                                ## Request Limit
+                                limit_req zone=req_zone_mag burst=5;
+
+                                proxy_set_header Range "";
+                                proxy_redirect off;
+                                proxy_http_version 1.1;
+                                proxy_set_header Connection "";
+                                proxy_set_header Host $http_host;
+                                proxy_set_header X-Real-IP $remote_addr;
+                                proxy_set_header X-Original-Scheme $scheme;
+                                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                                proxy_pass_request_headers on;
+                                proxy_max_temp_file_size 0;
+                                proxy_connect_timeout 90;
+                                proxy_send_timeout 90;
+                                proxy_read_timeout 90;
+                                proxy_buffer_size 4k;
+                                proxy_buffers 4 32k;
+                                proxy_busy_buffers_size 64k;
+                                proxy_temp_file_write_size 64k;
+                                proxy_pass http://directline.dynu.net:8880;
+
+
+                        } # Close Location
+
+
+
+                        location /
+                        {
+				
+				#ModSecurityEnabled on;
+
+				#ModSecurityConfig /etc/nginx/modsec_includes.conf;
+
+				## Conn Limit 
+				limit_conn conn_limit 10;
+				
+				## Request Limit
+				limit_req zone=req_zone burst=10;
+				
+				proxy_set_header Range "";
+				proxy_redirect off;
+				proxy_http_version 1.1;
+				proxy_set_header Connection "";
+				proxy_set_header Host $http_host;
+				proxy_set_header X-Real-IP $remote_addr;
+				proxy_set_header X-Original-Scheme $scheme;
+				proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+				proxy_pass_request_headers on;
+				proxy_max_temp_file_size 0;
+				proxy_connect_timeout 90;
+				proxy_send_timeout 90;
+				proxy_read_timeout 90;
+				proxy_buffer_size 4k;
+				proxy_buffers 4 32k;
+				proxy_busy_buffers_size 64k;
+				proxy_temp_file_write_size 64k;
+				proxy_pass http://directline.dynu.net:8880;
+
+
+                        } # Close Location
+
+
+ } # Close Server
+
+} # Close http
