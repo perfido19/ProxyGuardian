@@ -15,6 +15,7 @@ import Logs from "@/pages/logs";
 import Configurations from "@/pages/configurations";
 import UserManagement from "@/pages/user-management";
 import VpsManager from "@/pages/vps-manager";
+import VpsDetail from "@/pages/vps-detail";
 import BulkOperations from "@/pages/bulk-operations";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
@@ -62,6 +63,7 @@ function Router() {
       <Route path="/log" component={Logs} />
       <Route path="/configurazioni" component={Configurations} />
       <Route path="/vps" component={VpsManager} />
+      <Route path="/vps/:id" component={VpsDetail} />
       <Route path="/bulk" component={BulkOperations} />
       {user?.role === "admin" && <Route path="/utenti" component={UserManagement} />}
       <Route component={NotFound} />
