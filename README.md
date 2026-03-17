@@ -1,21 +1,20 @@
 # ProxyGuardian
 
-Dashboard di sicurezza per la gestione di VPS con Nginx, Fail2ban e ModSecurity. Progettata per ambienti multi-VPS connessi tramite rete **NetBird**.
+Dashboard di sicurezza centralizzata per la gestione di flotte multi-VPS con Nginx, Fail2ban e MariaDB. Progettata per ambienti connessi tramite rete **NetBird** (WireGuard overlay).
 
 ---
 
 ## Funzionalità
 
-- **Dashboard** — Panoramica in tempo reale: ban attivi, connessioni, richieste (24h), andamento temporale dei ban
-- **Servizi** — Controllo di nginx, fail2ban, mariadb (start / stop / restart / reload)
-- **Firewall** — Gestione regole iptables / nftables
-- **Fail2ban** — Visualizzazione e sblocco IP bannati, gestione jail
-- **Log** — Visualizzatore log nginx (access/error), fail2ban, sistema
-- **Configurazioni** — Editor per file di configurazione nginx e fail2ban
-- **Gestione VPS** — Aggiunta, modifica, monitoraggio salute dei VPS remoti
-- **VPS Detail** — Pannello per-VPS: servizi, IP bannati, log in tempo reale
-- **Bulk Operations** — Azioni di massa su più VPS contemporaneamente
-- **Gestione Utenti** — Multi-utente con ruoli (Admin / Operator / Viewer)
+- **Dashboard** — Fleet overview: stato online/offline di tutti i VPS, servizi attivi, ban totali, connessioni attive. Card cliccabili per accesso diretto al dettaglio.
+- **VPS Detail** — Pannello per-VPS con 5 tab: Servizi, IP Bannati, Fail2ban Jail, Configurazioni (editor file), Log (4 tipi)
+- **Servizi** — Tabella VPS × servizi (nginx/fail2ban/mariadb) con azioni bulk e individuali (start/stop/restart/reload) su tutti i VPS contemporaneamente
+- **Firewall** — Gestione regole nginx per Paesi, ASN, ISP, User-Agent, IP Whitelist, IP Exclusion. Legge dal primo VPS online, applica su tutti.
+- **Fail2ban** — Gestione jail (banTime/maxRetry/findTime), editor filtri `filter.d`, editor `jail.local` / `fail2ban.local`. Bulk su tutti i VPS.
+- **Log** — Visualizzatore log per VPS (nginx access/error, fail2ban, syslog) con ricerca e filtro real-time con evidenziazione
+- **Ricerca** — Ricerca cross-VPS: IP bannati aggregati da tutti i VPS con unban diretto; ricerca grep nei log su tutti i VPS simultaneamente
+- **Gestione VPS** — Aggiunta, modifica, eliminazione VPS. Health check automatico.
+- **Gestione Utenti** — Multi-utente con ruoli RBAC (Admin / Operator / Viewer)
 
 ---
 
@@ -29,6 +28,16 @@ ProxyGuardian/
 └── shared/          # Schema condivisi (Zod)
 ```
 
+### Flusso dati
+
+```
+Browser → Dashboard (Express :5000) → Agent (:3001) su ogni VPS proxy
+                                    ↓
+                         /api/vps/:id/proxy/*     (singolo VPS)
+                         /api/vps/bulk/get        (lettura da tutti)
+                         /api/vps/bulk/post       (scrittura su tutti)
+```
+
 ### Dashboard (client + server)
 
 - **Frontend**: React 18, Vite, TailwindCSS, shadcn/ui, TanStack React Query, Wouter
@@ -37,9 +46,9 @@ ProxyGuardian/
 
 ### Agent VPS (`agent/`)
 
-Processo Node.js standalone da installare su ogni VPS. Espone un'API REST autenticata via `x-api-key`.
+Processo Node.js standalone da installare su ogni VPS proxy. Espone un'API REST autenticata via `x-api-key`. Gira come utente di sistema `pgagent` con permessi sudoers limitati.
 
-**Endpoint principali:**
+**Endpoint API agent:**
 
 | Metodo | Path | Descrizione |
 |--------|------|-------------|
@@ -49,11 +58,54 @@ Processo Node.js standalone da installare su ogni VPS. Espone un'API REST autent
 | `GET` | `/api/banned-ips` | IP bannati da fail2ban |
 | `POST` | `/api/unban` | Sblocca IP specifico |
 | `POST` | `/api/unban-all` | Sblocca tutti gli IP |
-| `GET` | `/api/logs/:type` | Log nginx/fail2ban/system |
+| `GET` | `/api/stats` | Connessioni attive, ban totali |
+| `GET` | `/api/logs/:type` | Log nginx/fail2ban/syslog (`?lines=N`) |
+| `GET` | `/api/grep` | Ricerca grep nei log (`?q=term&type=logtype`) |
 | `GET` | `/api/system` | CPU, RAM, disco, uptime |
-| `GET/POST` | `/api/config/:filename` | Leggi/scrivi configurazioni |
-| `POST` | `/api/nginx/test` | nginx -t |
-| `GET` | `/api/fail2ban/jails` | Lista jail attive |
+| `GET/POST` | `/api/config/:filename` | Leggi/scrivi file di configurazione |
+| `POST` | `/api/nginx/test` | `nginx -t` |
+| `POST` | `/api/nginx/reload` | `nginx -t && systemctl reload nginx` |
+| `GET` | `/api/fail2ban/jails` | Lista jail attive con parametri |
+| `POST` | `/api/fail2ban/jails/:name` | Aggiorna banTime/maxRetry/findTime |
+| `GET` | `/api/fail2ban/filters` | Lista nomi filtri in `filter.d/` |
+| `GET` | `/api/fail2ban/filters/:name` | Leggi contenuto filtro |
+| `POST` | `/api/fail2ban/filters/:name` | Scrivi filtro + reload fail2ban |
+
+**File di configurazione supportati (`/api/config/:filename`):**
+
+| File | Path |
+|------|------|
+| `nginx.conf` | `/etc/nginx/nginx.conf` |
+| `jail.local` | `/etc/fail2ban/jail.local` |
+| `fail2ban.local` | `/etc/fail2ban/fail2ban.local` |
+| `country_whitelist.conf` | `/etc/nginx/country_whitelist.conf` |
+| `block_asn.conf` | `/etc/nginx/block_asn.conf` |
+| `block_isp.conf` | `/etc/nginx/block_isp.conf` |
+| `useragent.rules` | `/etc/nginx/useragent.rules` |
+| `ip_whitelist.conf` | `/etc/nginx/ip_whitelist.conf` |
+| `exclusion_ip.conf` | `/etc/nginx/exclusion_ip.conf` |
+
+**Formati file firewall nginx:**
+```
+# country_whitelist.conf
+IT yes; # Italy
+
+# block_asn.conf
+8075 1; # MICROSOFT-CORP-MSN-AS-BLOCK
+
+# block_isp.conf
+"~*DigitalOcean" 1;
+"Exact ISP Name" 1;
+
+# useragent.rules
+~*malicious 1;
+
+# ip_whitelist.conf  (rate limit exclusion)
+10.0.0.1 0;
+
+# exclusion_ip.conf  (geo block exclusion)
+10.0.0.0/24 1;
+```
 
 ---
 
@@ -65,48 +117,65 @@ Processo Node.js standalone da installare su ogni VPS. Espone un'API REST autent
 git clone https://github.com/perfido19/ProxyGuardian.git
 cd ProxyGuardian
 npm install
-cp .env.example .env   # imposta SESSION_SECRET e altre variabili
-npm run dev
+npm run build
+npm start
+```
+
+Con PM2 (raccomandato per produzione):
+
+```bash
+npm run build
+pm2 start dist/index.js --name proxy-dashboard
+pm2 save
+pm2 startup
 ```
 
 La dashboard sarà disponibile su `http://localhost:5000`.
 
 ### 2. Agent su VPS remoto
 
-**Installazione con singolo comando** (richiede sudo):
+**Prerequisiti:** il VPS deve già avere nginx e fail2ban installati. L'agent deve essere compilato prima dell'installazione.
+
+**Passo 1 — Compila il bundle:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/perfido19/ProxyGuardian/main/agent/install.sh | sudo bash
-```
-
-Oppure con API key personalizzata:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/perfido19/ProxyGuardian/main/agent/install.sh | sudo AGENT_API_KEY=la-tua-chiave bash
-```
-
-Lo script:
-1. Installa Node.js 20 se non presente
-2. Crea l'utente di sistema `pgagent`
-3. Configura i permessi sudoers per nginx/fail2ban/mariadb
-4. Scarica e installa `agent-bundle.js` come servizio systemd
-5. Genera una API key casuale (se non fornita) e la mostra a schermo
-
-Al termine, aggiungere il VPS nella dashboard con IP NetBird, porta e API key.
-
-#### Build manuale dell'agent
-
-```bash
-cd agent
+git clone https://github.com/perfido19/ProxyGuardian.git
+cd ProxyGuardian/agent
 npm install
 npm run build   # genera agent-bundle.js
 ```
+
+**Passo 2 — Installa:**
+
+```bash
+sudo bash install.sh
+# oppure con API key personalizzata:
+sudo AGENT_API_KEY=la-tua-chiave bash install.sh
+```
+
+Lo script:
+1. Crea l'utente di sistema `pgagent`
+2. Copia `agent-bundle.js` in `/opt/proxy-guardian-agent/index.js`
+3. Configura i permessi sudoers per nginx/fail2ban/mariadb (con wildcard per tutti i flag)
+4. Installa e avvia il servizio systemd `proxy-guardian-agent`
+5. Scrive la configurazione in `/opt/proxy-guardian-agent/.env`
+
+**Passo 3 — Aggiungi il VPS nella dashboard:**
+
+Vai su **VPS → Aggiungi VPS** e inserisci:
+- **Host**: IP NetBird del VPS (es. `100.116.x.x`) — _non_ l'IP pubblico
+- **Porta**: `3001`
+- **API Key**: mostrata a fine installazione
 
 ---
 
 ## Rete NetBird
 
-ProxyGuardian è progettato per operare su rete **NetBird** (WireGuard overlay). L'agent si lega automaticamente all'IP NetBird (`100.x.x.x`) se rilevato, altrimenti ascolta su `0.0.0.0` (proteggere la porta con firewall).
+ProxyGuardian è progettato per operare su rete **NetBird** (WireGuard overlay mesh VPN).
+
+- L'agent si lega automaticamente all'IP NetBird (`100.x.x.x`) se rilevato
+- La dashboard deve essere anch'essa sulla stessa rete NetBird per raggiungere gli agent
+- Configurare una policy di accesso NetBird che permetta la comunicazione tra dashboard e VPS proxy
 
 ---
 
@@ -116,7 +185,7 @@ ProxyGuardian è progettato per operare su rete **NetBird** (WireGuard overlay).
 
 | Variabile | Default | Descrizione |
 |-----------|---------|-------------|
-| `SESSION_SECRET` | — | Segreto per cookie di sessione |
+| `SESSION_SECRET` | — | Segreto per cookie di sessione (obbligatorio in produzione) |
 | `PORT` | `5000` | Porta HTTP dashboard |
 | `DATA_DIR` | `./data` | Directory persistenza JSON |
 
@@ -140,6 +209,16 @@ journalctl -u proxy-guardian-agent -f
 
 ---
 
+## Permessi sudoers agent
+
+Il file `/etc/sudoers.d/proxy-guardian-agent` generato dallo script di installazione concede a `pgagent` i permessi NOPASSWD per:
+
+- `systemctl status/start/stop/restart/reload` per nginx, fail2ban, mariadb (con qualsiasi flag)
+- `fail2ban-client *` (tutti i sottocomandi)
+- `nginx -t` (test configurazione)
+
+---
+
 ## Stack tecnico
 
 | Layer | Tecnologia |
@@ -150,8 +229,8 @@ journalctl -u proxy-guardian-agent -f
 | Router | Wouter |
 | Backend | Express, TypeScript |
 | Validazione | Zod |
-| Agent | Node.js + Express (bundle ESBuild) |
-| Fonts | Chakra Petch, DM Sans, JetBrains Mono |
+| Agent | Node.js + Express (bundle CJS via ESBuild) |
+| VPN | NetBird (WireGuard overlay) |
 
 ---
 
