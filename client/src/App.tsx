@@ -27,23 +27,26 @@ const roleLabels = { admin: "Admin", operator: "Operator", viewer: "Viewer" } as
 function Header() {
   const { user, logout } = useAuth();
   return (
-    <header className="flex items-center justify-between px-4 py-3 border-b bg-background">
-      <SidebarTrigger data-testid="button-sidebar-toggle" />
+    <header className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-sidebar/80 backdrop-blur-sm shrink-0">
+      <SidebarTrigger data-testid="button-sidebar-toggle" className="text-muted-foreground hover:text-foreground" />
       <div className="flex items-center gap-3">
-        <span className="text-sm text-muted-foreground font-mono hidden sm:block">
+        <span className="text-[11px] text-muted-foreground font-mono tracking-wider hidden sm:block">
           {new Date().toLocaleString("it-IT", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", year: "numeric" })}
         </span>
         {user && (
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5 text-sm">
-              <User className="w-4 h-4 text-muted-foreground" />
-              <span className="font-medium hidden sm:block">{user.username}</span>
-              <Badge variant={user.role === "admin" ? "default" : user.role === "operator" ? "secondary" : "outline"} className="text-xs">
+            <div className="flex items-center gap-1.5 text-sm border border-border rounded-md px-2.5 py-1">
+              <User className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="font-heading font-medium text-xs tracking-wide hidden sm:block">{user.username}</span>
+              <Badge
+                variant={user.role === "admin" ? "default" : user.role === "operator" ? "secondary" : "outline"}
+                className="text-[10px] font-heading tracking-wide h-4 px-1.5"
+              >
                 {roleLabels[user.role]}
               </Badge>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => logout()} data-testid="button-logout" className="gap-1.5">
-              <LogOut className="w-4 h-4" /><span className="hidden sm:block">Esci</span>
+            <Button variant="ghost" size="sm" onClick={() => logout()} data-testid="button-logout" className="gap-1.5 h-7 text-xs font-heading">
+              <LogOut className="w-3.5 h-3.5" /><span className="hidden sm:block">Esci</span>
             </Button>
           </div>
         )}
