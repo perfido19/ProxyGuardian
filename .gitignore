@@ -4,3 +4,8 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+data/
+agent/agent-bundle.js
+agent/package-lock.json
+agent/node_modules
+.env

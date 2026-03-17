@@ -1,4 +1,6 @@
 import * as crypto from "crypto";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { join } from "path";
 
 export interface VpsConfig {
   id: string;
@@ -15,7 +17,38 @@ export interface VpsConfig {
 
 export type SafeVpsConfig = Omit<VpsConfig, "apiKey"> & { apiKey: "***" };
 
-const vpsStore = new Map<string, VpsConfig>();
+const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), "data");
+const VPS_FILE = join(DATA_DIR, "vps.json");
+
+function ensureDataDir() {
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+}
+
+function loadVpsStore(): Map<string, VpsConfig> {
+  ensureDataDir();
+  try {
+    if (existsSync(VPS_FILE)) {
+      const raw = readFileSync(VPS_FILE, "utf-8");
+      const arr: VpsConfig[] = JSON.parse(raw);
+      return new Map(arr.map(v => [v.id, v]));
+    }
+  } catch (e) {
+    console.error("[VpsManager] Failed to load vps.json:", e);
+  }
+  return new Map();
+}
+
+function saveVpsStore() {
+  ensureDataDir();
+  try {
+    const arr = Array.from(vpsStore.values());
+    writeFileSync(VPS_FILE, JSON.stringify(arr, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[VpsManager] Failed to save vps.json:", e);
+  }
+}
+
+const vpsStore = loadVpsStore();
 
 function generateId(): string {
   return crypto.randomBytes(8).toString("hex");
@@ -40,6 +73,7 @@ export function createVps(data: { name: string; host: string; port?: number; api
     tags: data.tags || [], createdAt: new Date().toISOString(), lastStatus: "unknown",
   };
   vpsStore.set(vps.id, vps);
+  saveVpsStore();
   return toSafeVps(vps);
 }
 
@@ -47,12 +81,14 @@ export function updateVps(id: string, data: Partial<Pick<VpsConfig, "name" | "ho
   const vps = vpsStore.get(id);
   if (!vps) throw new Error("VPS non trovato");
   Object.assign(vps, data);
+  saveVpsStore();
   return toSafeVps(vps);
 }
 
 export function deleteVps(id: string): void {
   if (!vpsStore.has(id)) throw new Error("VPS non trovato");
   vpsStore.delete(id);
+  saveVpsStore();
 }
 
 const REQUEST_TIMEOUT = 10000;

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { useVpsList, useVpsHealth, useCreateVps, useUpdateVps, useDeleteVps, type VpsConfig } from "@/hooks/use-vps";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Plus, Pencil, Trash2, Server, Wifi, WifiOff, RefreshCw } from "lucide-react";
+import { Plus, Pencil, Trash2, Server, Wifi, WifiOff, RefreshCw, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -137,6 +138,9 @@ export default function VpsManager() {
                           <Button variant="ghost" size="icon" onClick={() => handleCheckHealth(vps)} disabled={checkingHealth === vps.id} title="Verifica connessione">
                             {checkingHealth === vps.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
                           </Button>
+                          <Link href={`/vps/${vps.id}`}>
+                            <Button variant="ghost" size="icon" title="Dettagli"><ExternalLink className="w-4 h-4" /></Button>
+                          </Link>
                           <Button variant="outline" size="icon" onClick={() => handleEditOpen(vps)}><Pencil className="w-4 h-4" /></Button>
                           <Button variant="ghost" size="icon" onClick={() => { setSelected(vps); setDeleteOpen(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                         </div>
