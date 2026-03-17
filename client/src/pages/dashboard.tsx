@@ -1,305 +1,265 @@
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { ServiceStatusCard } from "@/components/service-status-card";
-import { StatCard } from "@/components/stat-card";
-import { BannedIpsTable } from "@/components/banned-ips-table";
-import { LoadingState } from "@/components/loading-state";
-import { Shield, Activity, Globe, TrendingUp, ShieldOff } from "lucide-react";
-import type { Service, Stats, BannedIp } from "@shared/schema";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { useToast } from "@/hooks/use-toast";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
+import { useVpsList, useVpsHealth, type VpsConfig } from "@/hooks/use-vps";
+import { apiRequest } from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { LoadingState } from "@/components/loading-state";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+  Server, Wifi, WifiOff, Shield, Activity, RefreshCw,
+  AlertTriangle, CheckCircle, XCircle, Search, ChevronRight,
+} from "lucide-react";
+
+interface BulkResult {
+  vpsId: string;
+  vpsName: string;
+  success: boolean;
+  data?: any;
+  error?: string;
+}
+
+function useBulkStats() {
+  return useQuery<BulkResult[]>({
+    queryKey: ["bulk-stats"],
+    queryFn: async () => {
+      const res = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: "all", path: "/api/stats" });
+      return res.json();
+    },
+    refetchInterval: 60000,
+    retry: false,
+  });
+}
+
+function useBulkServices() {
+  return useQuery<BulkResult[]>({
+    queryKey: ["bulk-services"],
+    queryFn: async () => {
+      const res = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: "all", path: "/api/services" });
+      return res.json();
+    },
+    refetchInterval: 60000,
+    retry: false,
+  });
+}
+
+function ServiceBadge({ name, running }: { name: string; running: boolean }) {
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-mono ${running ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
+      {running ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+      {name}
+    </span>
+  );
+}
 
 export default function Dashboard() {
-  const { toast } = useToast();
+  const [filter, setFilter] = useState<"all" | "online" | "offline">("all");
+  const [search, setSearch] = useState("");
 
-  const { data: services, isLoading: servicesLoading } = useQuery<Service[]>({
-    queryKey: ['/api/services'],
-    refetchInterval: 5000, // Refresh every 5 seconds
-  });
+  const { data: vpsList, isLoading: vpsLoading, refetch: refetchVps } = useVpsList();
+  const { data: healthMap, refetch: refetchHealth } = useVpsHealth();
+  const { data: bulkStats, refetch: refetchStats } = useBulkStats();
+  const { data: bulkServices, refetch: refetchServices } = useBulkServices();
 
-  const { data: stats, isLoading: statsLoading } = useQuery<Stats>({
-    queryKey: ['/api/stats'],
-    refetchInterval: 10000, // Refresh every 10 seconds
-  });
-
-  const { data: bannedIps, isLoading: bannedIpsLoading } = useQuery<BannedIp[]>({
-    queryKey: ['/api/banned-ips'],
-    refetchInterval: 5000,
-  });
-
-  const serviceActionMutation = useMutation({
-    mutationFn: async ({ service, action }: { service: string; action: string }) => {
-      const res = await apiRequest('POST', '/api/services/action', { service, action });
-      return res.json() as Promise<{ success: boolean; name: string }>;
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/services'] });
-      toast({
-        title: "Azione completata",
-        description: `Servizio ${data.name} aggiornato con successo`,
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Errore",
-        description: "Impossibile eseguire l'azione sul servizio",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const unbanMutation = useMutation({
-    mutationFn: async ({ ip, jail }: { ip: string; jail: string }) => {
-      const res = await apiRequest('POST', '/api/unban', { ip, jail });
-      return res.json() as Promise<{ success: boolean; message: string }>;
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/banned-ips'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
-      toast({
-        title: "IP Sbloccato",
-        description: data.message,
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Errore",
-        description: "Impossibile sbloccare l'IP",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const unbanAllMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest('POST', '/api/unban-all', {});
-      return res.json() as Promise<{ 
-        message: string; 
-        unbannedCount: number; 
-        jailsProcessed: number;
-      }>;
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/banned-ips'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
-      toast({
-        title: "Tutti gli IP Sbloccati",
-        description: data.message,
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Errore",
-        description: "Impossibile sbloccare tutti gli IP",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const handleServiceAction = (service: string, action: string) => {
-    serviceActionMutation.mutate({ service, action });
+  const handleRefresh = () => {
+    refetchVps();
+    refetchHealth();
+    refetchStats();
+    refetchServices();
   };
 
-  const handleUnban = (ip: string, jail: string) => {
-    unbanMutation.mutate({ ip, jail });
-  };
+  if (vpsLoading) return <LoadingState message="Caricamento VPS..." />;
 
-  if (servicesLoading || statsLoading) {
-    return <LoadingState message="Caricamento dashboard..." />;
-  }
+  const list = vpsList || [];
 
-  const displayStats = stats || {
-    totalBans24h: 0,
-    activeConnections: 0,
-    blockedCountries: 0,
-    totalRequests24h: 0,
-    topBannedIps: [],
-    bansByCountry: [],
-    banTimeline: [],
-  };
+  // Build lookup maps
+  const statsMap: Record<string, any> = {};
+  const servicesMap: Record<string, any[]> = {};
+  (bulkStats || []).forEach(r => { if (r.success && r.data) statsMap[r.vpsId] = r.data; });
+  (bulkServices || []).forEach(r => { if (r.success && r.data) servicesMap[r.vpsId] = r.data; });
 
-  const displayServices = services || [];
-  const displayBannedIps = bannedIps || [];
+  // Filter & search
+  const filtered = list.filter(vps => {
+    const online = healthMap?.[vps.id] ?? false;
+    if (filter === "online" && !online) return false;
+    if (filter === "offline" && online) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      return vps.name.toLowerCase().includes(q) || vps.host.toLowerCase().includes(q) || vps.tags?.some(t => t.toLowerCase().includes(q));
+    }
+    return true;
+  });
+
+  // Summary counts
+  const totalOnline = list.filter(v => healthMap?.[v.id]).length;
+  const totalOffline = list.length - totalOnline;
+  const totalBans = Object.values(statsMap).reduce((sum, s) => sum + (s?.totalBans24h || 0), 0);
+  const totalConnections = Object.values(statsMap).reduce((sum, s) => sum + (s?.activeConnections || 0), 0);
 
   return (
-    <div className="space-y-7">
-      <div>
-        <h1 className="text-2xl font-heading font-bold tracking-tight">Dashboard</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Panoramica generale del sistema e dei servizi
-        </p>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-heading font-bold tracking-tight">Fleet Overview</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">{list.length} VPS configurati · aggiornamento ogni 60s</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={handleRefresh}>
+          <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
+        </Button>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="Ban Totali (24h)"
-          value={displayStats.totalBans24h}
-          icon={Shield}
-          testId="stat-total-bans"
-        />
-        <StatCard
-          title="Connessioni Attive"
-          value={displayStats.activeConnections}
-          icon={Activity}
-          testId="stat-active-connections"
-        />
-        <StatCard
-          title="Paesi Bloccati"
-          value={displayStats.blockedCountries}
-          icon={Globe}
-          testId="stat-blocked-countries"
-        />
-        <StatCard
-          title="Richieste (24h)"
-          value={displayStats.totalRequests24h.toLocaleString()}
-          icon={TrendingUp}
-          testId="stat-total-requests"
-        />
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card className="border-card-border">
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Wifi className="w-3.5 h-3.5 text-green-500" />Online</div>
+            <p className="text-2xl font-heading font-bold text-green-500">{totalOnline}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-card-border">
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><WifiOff className="w-3.5 h-3.5 text-red-500" />Offline</div>
+            <p className="text-2xl font-heading font-bold text-red-500">{totalOffline}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-card-border">
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Shield className="w-3.5 h-3.5" />Ban attivi</div>
+            <p className="text-2xl font-heading font-bold">{totalBans}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-card-border">
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Activity className="w-3.5 h-3.5" />Connessioni</div>
+            <p className="text-2xl font-heading font-bold">{totalConnections}</p>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Services Status */}
-      <div>
-        <h2 className="text-xs font-heading font-semibold tracking-[0.12em] uppercase text-muted-foreground mb-3">Stato Servizi</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {displayServices.map((service) => (
-            <ServiceStatusCard
-              key={service.name}
-              service={service}
-              onAction={handleServiceAction}
-              isLoading={serviceActionMutation.isPending}
-            />
+      {/* Filters & search */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-1 rounded-md border border-border p-1">
+          {(["all", "online", "offline"] as const).map(f => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors capitalize ${filter === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              {f === "all" ? "Tutti" : f === "online" ? "Online" : "Offline"}
+              {f === "online" && <span className="ml-1 text-green-400">({totalOnline})</span>}
+              {f === "offline" && <span className="ml-1 text-red-400">({totalOffline})</span>}
+            </button>
           ))}
+        </div>
+        <div className="relative flex-1 max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Cerca per nome, IP, tag..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-8 h-8 text-sm"
+          />
         </div>
       </div>
 
-      {/* Charts and Recent Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Ban Timeline Chart */}
-        <Card className="lg:col-span-2 border-card-border">
-          <CardHeader>
-            <CardTitle className="font-heading text-sm tracking-wide uppercase text-muted-foreground">Andamento Ban (24h)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {displayStats.banTimeline.length > 0 ? (
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={displayStats.banTimeline}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="time" className="text-xs" />
-                  <YAxis className="text-xs" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: '6px',
-                    }}
-                  />
-                  <Bar dataKey="count" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="flex items-center justify-center h-64 text-muted-foreground">
-                Nessun dato disponibile
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Top Banned IPs */}
+      {/* VPS Grid */}
+      {list.length === 0 ? (
         <Card className="border-card-border">
-          <CardHeader>
-            <CardTitle className="font-heading text-sm tracking-wide uppercase text-muted-foreground">Top IP Bannati</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {displayStats.topBannedIps.length > 0 ? (
-              <div className="space-y-2.5">
-                {displayStats.topBannedIps.slice(0, 5).map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between py-1 border-b border-border/40 last:border-0" data-testid={`top-ip-${idx}`}>
-                    <span className="font-mono text-xs text-foreground/80">{item.ip}</span>
-                    <span className="text-xs font-heading font-semibold text-primary">
-                      {item.count}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
-                Nessun dato disponibile
-              </div>
-            )}
+          <CardContent className="py-16 text-center text-muted-foreground">
+            <Server className="w-12 h-12 mx-auto mb-3 opacity-30" />
+            <p className="font-medium">Nessun VPS configurato</p>
+            <p className="text-sm mt-1">Vai su <Link href="/vps" className="text-primary underline">Gestione VPS</Link> per aggiungerne uno</p>
           </CardContent>
         </Card>
-      </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center text-muted-foreground py-12">
+          <AlertTriangle className="w-8 h-8 mx-auto mb-2 opacity-40" />
+          <p>Nessun VPS corrisponde ai filtri</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {filtered.map(vps => {
+            const online = healthMap?.[vps.id] ?? false;
+            const stats = statsMap[vps.id];
+            const services: any[] = servicesMap[vps.id] || [];
+            const nginx = services.find(s => s.name === "nginx");
+            const fail2ban = services.find(s => s.name === "fail2ban");
+            const mariadb = services.find(s => s.name === "mariadb");
 
-      {/* Recent Banned IPs */}
-      <div>
-        <Card className="border-card-border">
-          <CardHeader>
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <CardTitle className="font-heading text-sm tracking-wide uppercase text-muted-foreground">IP Bannati Recenti</CardTitle>
-                <CardDescription>
-                  {displayBannedIps.length} IP attualmente bannati
-                </CardDescription>
-              </div>
-              {displayBannedIps.length > 0 && (
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button 
-                      variant="destructive" 
-                      size="sm"
-                      disabled={unbanAllMutation.isPending}
-                      data-testid="button-unban-all"
-                    >
-                      <ShieldOff className="h-4 w-4 mr-2" />
-                      {unbanAllMutation.isPending ? "Sblocco..." : "Sblocca Tutti"}
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Conferma Sblocco Totale</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Sei sicuro di voler sbloccare <strong>tutti i {displayBannedIps.length} IP bannati</strong> da tutte le jail?
-                        Questa azione non può essere annullata.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel data-testid="button-cancel-unban-all">Annulla</AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={() => unbanAllMutation.mutate()}
-                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        data-testid="button-confirm-unban-all"
-                      >
-                        Sblocca Tutti
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            <BannedIpsTable
-              bannedIps={displayBannedIps.slice(0, 10)}
-              onUnban={handleUnban}
-              isUnbanning={unbanMutation.isPending}
-            />
-          </CardContent>
-        </Card>
-      </div>
+            return (
+              <Link key={vps.id} href={`/vps/${vps.id}`}>
+                <Card className={`border-card-border cursor-pointer hover:border-primary/50 transition-colors ${!online ? "opacity-70" : ""}`}>
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <CardTitle className="text-base font-heading truncate">{vps.name}</CardTitle>
+                        <p className="text-xs font-mono text-muted-foreground truncate mt-0.5">{vps.host}:{vps.port}</p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Badge
+                          className={online ? "bg-green-600 text-white" : "bg-destructive text-white"}
+                        >
+                          {online
+                            ? <><Wifi className="w-3 h-3 mr-1" />Online</>
+                            : <><WifiOff className="w-3 h-3 mr-1" />Offline</>
+                          }
+                        </Badge>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {/* Services */}
+                    {services.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {nginx && <ServiceBadge name="nginx" running={nginx.status === "running"} />}
+                        {fail2ban && <ServiceBadge name="fail2ban" running={fail2ban.status === "running"} />}
+                        {mariadb && <ServiceBadge name="mariadb" running={mariadb.status === "running"} />}
+                      </div>
+                    ) : online ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        <span className="text-xs text-muted-foreground">Caricamento servizi...</span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        <span className="text-xs text-muted-foreground italic">Non raggiungibile</span>
+                      </div>
+                    )}
+
+                    {/* Stats */}
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border/40">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Ban attivi</p>
+                        <p className="text-sm font-semibold font-heading">
+                          {stats ? stats.totalBans24h : <span className="text-muted-foreground">—</span>}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Connessioni</p>
+                        <p className="text-sm font-semibold font-heading">
+                          {stats ? stats.activeConnections : <span className="text-muted-foreground">—</span>}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Tags */}
+                    {vps.tags && vps.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {vps.tags.map(tag => (
+                          <span key={tag} className="text-xs bg-secondary text-secondary-foreground px-1.5 py-0.5 rounded">{tag}</span>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </Link>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

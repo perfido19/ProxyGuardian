@@ -1,148 +1,195 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ServiceStatusCard } from "@/components/service-status-card";
+import { useVpsList, useVpsHealth } from "@/hooks/use-vps";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/loading-state";
-import type { Service } from "@shared/schema";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
-import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff } from "lucide-react";
+
+interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
+
+const SERVICES = ["nginx", "fail2ban", "mariadb"];
+
+function useBulkServices() {
+  return useQuery<BulkResult[]>({
+    queryKey: ["bulk-services-page"],
+    queryFn: async () => {
+      const r = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: "all", path: "/api/services" });
+      return r.json();
+    },
+    refetchInterval: 60000,
+  });
+}
+
+function StatusDot({ running }: { running: boolean | null }) {
+  if (running === null) return <span className="w-2 h-2 rounded-full bg-muted-foreground/30 inline-block" />;
+  return running
+    ? <CheckCircle className="w-4 h-4 text-green-500 inline" />
+    : <XCircle className="w-4 h-4 text-red-500 inline" />;
+}
 
 export default function Services() {
   const { toast } = useToast();
+  const { data: vpsList, isLoading } = useVpsList();
+  const { data: healthMap, refetch: refetchHealth } = useVpsHealth();
+  const { data: bulkServices, refetch: refetchServices } = useBulkServices();
 
-  const { data: services, isLoading } = useQuery<Service[]>({
-    queryKey: ['/api/services'],
-    refetchInterval: 5000,
+  const bulkActionMutation = useMutation({
+    mutationFn: async ({ service, action, vpsIds }: { service: string; action: string; vpsIds: string[] | "all" }) => {
+      const r = await apiRequest("POST", "/api/vps/bulk/post", {
+        vpsIds,
+        path: `/api/services/${service}/action`,
+        body: { action },
+      });
+      return r.json() as Promise<BulkResult[]>;
+    },
+    onSuccess: (results, vars) => {
+      const ok = results.filter(r => r.success).length;
+      toast({
+        title: `${vars.action} ${vars.service}`,
+        description: `${ok}/${results.length} VPS aggiornati`,
+        variant: ok === results.length ? "default" : "destructive",
+      });
+      setTimeout(() => { refetchServices(); refetchHealth(); }, 2000);
+    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
-  const serviceActionMutation = useMutation({
-    mutationFn: async ({ service, action }: { service: string; action: string }) => {
-      const res = await apiRequest('POST', '/api/services/action', { service, action });
-      return res.json() as Promise<{ name: string }>;
+  const singleActionMutation = useMutation({
+    mutationFn: async ({ vpsId, service, action }: { vpsId: string; service: string; action: string }) => {
+      const r = await apiRequest("POST", `/api/vps/${vpsId}/proxy/api/services/${service}/action`, { action });
+      return r.json();
     },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/services'] });
-      toast({
-        title: "Azione completata",
-        description: `Servizio ${data.name} aggiornato con successo`,
-      });
+    onSuccess: () => {
+      setTimeout(() => refetchServices(), 2000);
+      toast({ title: "Azione eseguita" });
     },
-    onError: () => {
-      toast({
-        title: "Errore",
-        description: "Impossibile eseguire l'azione sul servizio",
-        variant: "destructive",
-      });
-    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
-  const handleServiceAction = (service: string, action: string) => {
-    serviceActionMutation.mutate({ service, action });
-  };
+  const isPending = bulkActionMutation.isPending || singleActionMutation.isPending;
 
-  if (isLoading) {
-    return <LoadingState message="Caricamento servizi..." />;
-  }
+  if (isLoading) return <LoadingState message="Caricamento..." />;
 
-  const displayServices = services || [];
+  const list = vpsList || [];
 
-  const serviceInfo = {
-    nginx: {
-      description: "Server web e reverse proxy ad alte prestazioni",
-      details: [
-        "Gestisce il traffico HTTP/HTTPS in ingresso",
-        "Implementa rate limiting e filtering",
-        "Integrato con ModSecurity per la sicurezza",
-        "Utilizza GeoIP2 per il blocco geografico",
-      ],
-    },
-    fail2ban: {
-      description: "Sistema di prevenzione intrusioni basato su log",
-      details: [
-        "Monitora i log di nginx per attività sospette",
-        "Banna automaticamente IP che superano le soglie",
-        "Gestisce le jail nginx-req-limit e nginx-4xx",
-        "Salva gli IP bannati nel database MariaDB",
-      ],
-    },
-    mariadb: {
-      description: "Database relazionale per archiviazione dati",
-      details: [
-        "Memorizza la cronologia degli IP bannati",
-        "Utilizzato da fail2ban per persistenza",
-        "Fornisce dati per statistiche e report",
-      ],
-    },
-  };
+  // Build services map: vpsId → { nginx: running, fail2ban: running, mariadb: running }
+  const servicesMap: Record<string, Record<string, boolean>> = {};
+  (bulkServices || []).forEach(r => {
+    if (r.success && Array.isArray(r.data)) {
+      servicesMap[r.vpsId] = {};
+      r.data.forEach((svc: any) => { servicesMap[r.vpsId][svc.name] = svc.status === "running"; });
+    }
+  });
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Gestione Servizi</h1>
-        <p className="text-muted-foreground">
-          Controlla e monitora i servizi del sistema
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-heading font-bold tracking-tight">Gestione Servizi</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">Controlla nginx, fail2ban e mariadb su tutti i VPS</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchHealth(); }}>
+          <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
+        </Button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {displayServices.map((service) => (
-          <ServiceStatusCard
-            key={service.name}
-            service={service}
-            onAction={handleServiceAction}
-            isLoading={serviceActionMutation.isPending}
-          />
-        ))}
-      </div>
+      {/* Azioni bulk */}
+      <Card className="border-card-border">
+        <CardHeader>
+          <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground">Azioni su tutti i VPS</CardTitle>
+          <CardDescription>Esegue l'azione simultaneamente su tutti i VPS online</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-3">
+            {SERVICES.map(svc => (
+              <div key={svc} className="flex items-center gap-1.5 border border-border rounded-md p-1.5">
+                <span className="text-sm font-mono font-semibold w-20">{svc}</span>
+                <Button size="sm" variant="outline" disabled={isPending}
+                  onClick={() => bulkActionMutation.mutate({ service: svc, action: "restart", vpsIds: "all" })}>
+                  <RotateCw className="w-3 h-3 mr-1" />Restart
+                </Button>
+                <Button size="sm" variant="outline" disabled={isPending}
+                  onClick={() => bulkActionMutation.mutate({ service: svc, action: "start", vpsIds: "all" })}>
+                  <Play className="w-3 h-3 mr-1" />Start
+                </Button>
+                <Button size="sm" variant="outline" disabled={isPending}
+                  onClick={() => bulkActionMutation.mutate({ service: svc, action: "stop", vpsIds: "all" })}>
+                  <Square className="w-3 h-3 mr-1" />Stop
+                </Button>
+                {svc === "nginx" && (
+                  <Button size="sm" variant="outline" disabled={isPending}
+                    onClick={() => bulkActionMutation.mutate({ service: svc, action: "reload", vpsIds: "all" })}>
+                    <RefreshCw className="w-3 h-3 mr-1" />Reload
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
-      <div>
-        <h2 className="text-lg font-semibold mb-4">Informazioni Servizi</h2>
-        <Accordion type="single" collapsible className="space-y-4">
-          {displayServices.map((service) => {
-            const info = serviceInfo[service.name as keyof typeof serviceInfo];
-            if (!info) return null;
-
-            return (
-              <AccordionItem
-                key={service.name}
-                value={service.name}
-                className="border rounded-md px-4"
-              >
-                <AccordionTrigger className="hover:no-underline" data-testid={`accordion-${service.name}`}>
-                  <div className="flex items-center gap-3">
-                    <span className="text-base font-semibold capitalize">
-                      {service.name}
-                    </span>
-                  </div>
-                </AccordionTrigger>
-                <AccordionContent>
-                  <Card className="mt-2">
-                    <CardContent className="p-4 space-y-4">
-                      <p className="text-sm text-muted-foreground">{info.description}</p>
-                      <div>
-                        <p className="text-sm font-medium mb-2">Funzionalità:</p>
-                        <ul className="space-y-1">
-                          {info.details.map((detail, idx) => (
-                            <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
-                              <span className="text-primary mt-1">•</span>
-                              <span>{detail}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </AccordionContent>
-              </AccordionItem>
-            );
-          })}
-        </Accordion>
-      </div>
+      {/* Tabella VPS × Servizi */}
+      {list.length === 0 ? (
+        <p className="text-center text-muted-foreground py-12">Nessun VPS configurato</p>
+      ) : (
+        <Card className="border-card-border">
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left p-3 text-xs font-heading uppercase tracking-wide text-muted-foreground">VPS</th>
+                    <th className="text-left p-3 text-xs font-heading uppercase tracking-wide text-muted-foreground">Stato</th>
+                    {SERVICES.map(s => (
+                      <th key={s} className="text-center p-3 text-xs font-heading uppercase tracking-wide text-muted-foreground">{s}</th>
+                    ))}
+                    <th className="text-right p-3 text-xs font-heading uppercase tracking-wide text-muted-foreground">Azioni</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.map(vps => {
+                    const online = healthMap?.[vps.id] ?? false;
+                    const svcs = servicesMap[vps.id];
+                    return (
+                      <tr key={vps.id} className="border-b border-border/50 hover:bg-muted/30">
+                        <td className="p-3">
+                          <p className="font-medium text-sm">{vps.name}</p>
+                          <p className="text-xs font-mono text-muted-foreground">{vps.host}</p>
+                        </td>
+                        <td className="p-3">
+                          <Badge className={online ? "bg-green-600 text-white" : "bg-destructive text-white"}>
+                            {online ? <><Wifi className="w-3 h-3 mr-1" />Online</> : <><WifiOff className="w-3 h-3 mr-1" />Offline</>}
+                          </Badge>
+                        </td>
+                        {SERVICES.map(s => (
+                          <td key={s} className="p-3 text-center">
+                            <StatusDot running={svcs ? (svcs[s] ?? null) : null} />
+                          </td>
+                        ))}
+                        <td className="p-3 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            {SERVICES.map(s => (
+                              <Button key={s} size="sm" variant="ghost" disabled={!online || isPending}
+                                onClick={() => singleActionMutation.mutate({ vpsId: vps.id, service: s, action: "restart" })}
+                                title={`Restart ${s}`}>
+                                <RotateCw className="w-3 h-3" />
+                                <span className="ml-1 text-xs">{s}</span>
+                              </Button>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

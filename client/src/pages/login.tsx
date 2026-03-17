@@ -50,7 +50,7 @@ export default function Login() {
                   id="username"
                   type="text"
                   autoComplete="username"
-                  placeholder="admin"
+                  placeholder="Username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   disabled={loginPending}
@@ -106,9 +106,6 @@ export default function Login() {
           </CardContent>
         </Card>
 
-        <p className="text-center text-xs text-muted-foreground">
-          Credenziali default: <span className="font-mono">admin / admin123</span>
-        </p>
       </div>
     </div>
   );

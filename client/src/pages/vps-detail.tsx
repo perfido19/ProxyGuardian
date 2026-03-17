@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useParams, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -5,44 +6,50 @@ import { useVpsList } from "@/hooks/use-vps";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LoadingState } from "@/components/loading-state";
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, RefreshCw, Server, Shield, Activity,
   HardDrive, Cpu, MemoryStick, CheckCircle, XCircle,
-  Play, Square, RotateCw, ShieldOff, Wifi,
+  Play, Square, RotateCw, ShieldOff, Wifi, WifiOff,
+  FileText, Settings, Save, AlertTriangle,
 } from "lucide-react";
 
-interface ServiceStatus {
-  name: string;
-  status: string;
-  pid?: number;
-  uptime?: string;
-}
-
-interface BannedIp {
-  ip: string;
-  jail: string;
-  banTime: string;
-}
-
-interface LogEntry {
-  id: number;
-  timestamp: string;
-  level: string;
-  message: string;
-  source: string;
-}
-
+interface ServiceStatus { name: string; status: string; pid?: number; uptime?: string; }
+interface BannedIp { ip: string; jail: string; banTime: string; }
+interface LogEntry { id: number; timestamp: string; level: string; message: string; source: string; }
 interface SystemInfo {
-  uptime: string;
-  hostname: string;
+  uptime: string; hostname: string;
   memory: { total: number; used: number; free: number };
   disk: { total: string; used: string; free: string; percent: string };
   load: { "1m": number; "5m": number; "15m": number };
 }
+interface Jail { name: string; enabled: boolean; banTime: number; maxRetry: number; findTime: number; }
+
+const REFETCH = 60000;
+
+const CONFIG_FILES = [
+  { value: "nginx.conf", label: "nginx.conf" },
+  { value: "jail.local", label: "jail.local (fail2ban)" },
+  { value: "fail2ban.local", label: "fail2ban.local" },
+  { value: "country_whitelist.conf", label: "country_whitelist.conf" },
+  { value: "block_asn.conf", label: "block_asn.conf" },
+  { value: "block_isp.conf", label: "block_isp.conf" },
+  { value: "useragent.rules", label: "useragent.rules" },
+  { value: "ip_whitelist.conf", label: "ip_whitelist.conf" },
+  { value: "exclusion_ip.conf", label: "exclusion_ip.conf" },
+];
+
+const LOG_TYPES = [
+  { value: "nginx_access", label: "Nginx Access" },
+  { value: "nginx_error", label: "Nginx Error" },
+  { value: "fail2ban", label: "Fail2ban" },
+  { value: "system", label: "Syslog" },
+];
 
 function statusColor(s: string) {
   if (s === "running") return "bg-green-600 text-white";
@@ -56,81 +63,98 @@ export default function VpsDetail() {
   const { data: vpsList } = useVpsList();
   const vps = vpsList?.find(v => v.id === id);
 
-  // Proxy requests to this specific VPS
+  const [selectedConfig, setSelectedConfig] = useState("nginx.conf");
+  const [configContent, setConfigContent] = useState<string | null>(null);
+  const [logType, setLogType] = useState("nginx_access");
+  const [editingJail, setEditingJail] = useState<Jail | null>(null);
+
   const proxy = (path: string) => `/api/vps/${id}/proxy${path}`;
 
   const { data: services, isLoading: servicesLoading, refetch: refetchServices } = useQuery<ServiceStatus[]>({
     queryKey: [`vps-${id}-services`],
-    queryFn: async () => {
-      const res = await apiRequest("GET", proxy("/api/services"));
-      return res.json();
-    },
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/services")); return r.json(); },
     enabled: !!vps,
-    refetchInterval: 15000,
+    refetchInterval: REFETCH,
   });
 
   const { data: systemInfo, refetch: refetchSystem } = useQuery<SystemInfo>({
     queryKey: [`vps-${id}-system`],
-    queryFn: async () => {
-      const res = await apiRequest("GET", proxy("/api/system"));
-      return res.json();
-    },
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/system")); return r.json(); },
     enabled: !!vps,
-    refetchInterval: 30000,
+    refetchInterval: REFETCH,
   });
 
   const { data: bannedIps, isLoading: bannedLoading, refetch: refetchBanned } = useQuery<BannedIp[]>({
     queryKey: [`vps-${id}-banned`],
-    queryFn: async () => {
-      const res = await apiRequest("GET", proxy("/api/banned-ips"));
-      return res.json();
-    },
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/banned-ips")); return r.json(); },
     enabled: !!vps,
-    refetchInterval: 20000,
+    refetchInterval: REFETCH,
   });
 
   const { data: logs, isLoading: logsLoading, refetch: refetchLogs } = useQuery<LogEntry[]>({
-    queryKey: [`vps-${id}-logs`],
-    queryFn: async () => {
-      const res = await apiRequest("GET", proxy("/api/logs/nginx_access?lines=100"));
-      return res.json();
-    },
+    queryKey: [`vps-${id}-logs-${logType}`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy(`/api/logs/${logType}?lines=200`)); return r.json(); },
+    enabled: !!vps,
+    refetchInterval: REFETCH,
+  });
+
+  const { data: jails, isLoading: jailsLoading, refetch: refetchJails } = useQuery<Jail[]>({
+    queryKey: [`vps-${id}-jails`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/fail2ban/jails")); return r.json(); },
+    enabled: !!vps,
+    refetchInterval: REFETCH,
+  });
+
+  const { data: configData, isLoading: configLoading, refetch: refetchConfig } = useQuery<{ filename: string; content: string }>({
+    queryKey: [`vps-${id}-config-${selectedConfig}`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy(`/api/config/${selectedConfig}`)); return r.json(); },
     enabled: !!vps,
   });
 
+  // Keep textarea in sync with fetched data (only when not editing)
+  if (configData && configContent === null) {
+    setConfigContent(configData.content);
+  }
+
   const serviceActionMutation = useMutation({
     mutationFn: async ({ service, action }: { service: string; action: string }) => {
-      const res = await apiRequest("POST", `/api/vps/${id}/proxy/api/services/${service}/action`, { action });
-      return res.json();
+      const r = await apiRequest("POST", proxy(`/api/services/${service}/action`), { action });
+      return r.json();
     },
-    onSuccess: () => {
-      refetchServices();
-      toast({ title: "Azione eseguita" });
-    },
+    onSuccess: () => { refetchServices(); toast({ title: "Azione eseguita" }); },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
   const unbanMutation = useMutation({
     mutationFn: async ({ ip, jail }: { ip: string; jail: string }) => {
-      const res = await apiRequest("POST", `/api/vps/${id}/proxy/api/unban`, { ip, jail });
-      return res.json();
+      const r = await apiRequest("POST", proxy("/api/unban"), { ip, jail });
+      return r.json();
     },
-    onSuccess: () => {
+    onSuccess: () => { refetchBanned(); toast({ title: "IP sbloccato" }); },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const unbanAllMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", proxy("/api/unban-all"), {});
+      return r.json();
+    },
+    onSuccess: (data: any) => {
       refetchBanned();
-      toast({ title: "IP sbloccato" });
+      toast({ title: "Tutti gli IP sbloccati", description: `${data.unbannedCount} IP sbloccati` });
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
   const nginxTestMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/vps/${id}/proxy/api/nginx/test`, {});
-      return res.json() as Promise<{ ok: boolean; output: string }>;
+      const r = await apiRequest("POST", proxy("/api/nginx/test"), {});
+      return r.json() as Promise<{ ok: boolean; output: string }>;
     },
     onSuccess: (data) => {
       toast({
         title: data.ok ? "nginx -t OK" : "nginx -t fallito",
-        description: data.output.slice(0, 200),
+        description: data.output.slice(0, 300),
         variant: data.ok ? "default" : "destructive",
       });
     },
@@ -138,43 +162,67 @@ export default function VpsDetail() {
 
   const nginxReloadMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/vps/${id}/proxy/api/nginx/reload`, {});
-      return res.json();
+      const r = await apiRequest("POST", proxy("/api/nginx/reload"), {});
+      return r.json();
     },
     onSuccess: () => { refetchServices(); toast({ title: "nginx ricaricato" }); },
     onError: (e: any) => toast({ title: "Errore reload nginx", description: e.message, variant: "destructive" }),
+  });
+
+  const saveConfigMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", proxy(`/api/config/${selectedConfig}`), { content: configContent });
+      return r.json();
+    },
+    onSuccess: () => toast({ title: "Configurazione salvata", description: selectedConfig }),
+    onError: (e: any) => toast({ title: "Errore salvataggio", description: e.message, variant: "destructive" }),
+  });
+
+  const updateJailMutation = useMutation({
+    mutationFn: async (jail: Jail) => {
+      const r = await apiRequest("POST", proxy(`/api/fail2ban/jails/${jail.name}`), {
+        config: { banTime: jail.banTime, maxRetry: jail.maxRetry, findTime: jail.findTime },
+      });
+      return r.json();
+    },
+    onSuccess: () => {
+      refetchJails();
+      setEditingJail(null);
+      toast({ title: "Jail aggiornata" });
+    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
   if (!vpsList) return <LoadingState message="Caricamento..." />;
   if (!vps) {
     return (
       <div className="space-y-4">
-        <Link href="/vps"><Button variant="ghost" size="sm"><ArrowLeft className="w-4 h-4 mr-1" />VPS</Button></Link>
+        <Link href="/"><Button variant="ghost" size="sm"><ArrowLeft className="w-4 h-4 mr-1" />Dashboard</Button></Link>
         <p className="text-muted-foreground">VPS non trovato.</p>
       </div>
     );
   }
 
   const memPct = systemInfo ? Math.round((systemInfo.memory.used / systemInfo.memory.total) * 100) : 0;
+  const online = vps.lastStatus === "online";
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <Link href="/vps">
-          <Button variant="ghost" size="sm"><ArrowLeft className="w-4 h-4 mr-1" />VPS</Button>
+        <Link href="/">
+          <Button variant="ghost" size="sm"><ArrowLeft className="w-4 h-4 mr-1" />Dashboard</Button>
         </Link>
         <div className="flex-1">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">{vps.name}</h1>
-            <Badge variant={vps.lastStatus === "online" ? "default" : vps.lastStatus === "offline" ? "destructive" : "outline"}
-              className={vps.lastStatus === "online" ? "bg-green-600" : ""}>
-              {vps.lastStatus === "online" ? <><Wifi className="w-3 h-3 mr-1" />Online</> : vps.lastStatus || "Sconosciuto"}
+            <h1 className="text-2xl font-bold font-heading">{vps.name}</h1>
+            <Badge className={online ? "bg-green-600 text-white" : "bg-destructive text-white"}>
+              {online ? <><Wifi className="w-3 h-3 mr-1" />Online</> : <><WifiOff className="w-3 h-3 mr-1" />Offline</>}
             </Badge>
           </div>
           <p className="text-sm text-muted-foreground font-mono">{vps.host}:{vps.port}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchSystem(); refetchBanned(); }}>
+        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchSystem(); refetchBanned(); refetchLogs(); refetchJails(); }}>
           <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
         </Button>
       </div>
@@ -215,13 +263,17 @@ export default function VpsDetail() {
 
       {/* Tabs */}
       <Tabs defaultValue="services">
-        <TabsList>
+        <TabsList className="flex-wrap h-auto gap-1">
           <TabsTrigger value="services">Servizi</TabsTrigger>
-          <TabsTrigger value="banned">IP Bannati {bannedIps?.length ? `(${bannedIps.length})` : ""}</TabsTrigger>
+          <TabsTrigger value="banned">
+            IP Bannati {bannedIps?.length ? <span className="ml-1 bg-destructive text-white text-xs rounded-full px-1.5">{bannedIps.length}</span> : ""}
+          </TabsTrigger>
+          <TabsTrigger value="fail2ban">Fail2ban Jail</TabsTrigger>
+          <TabsTrigger value="configs">Configurazioni</TabsTrigger>
           <TabsTrigger value="logs">Log</TabsTrigger>
         </TabsList>
 
-        {/* Servizi */}
+        {/* ── Servizi ── */}
         <TabsContent value="services" className="space-y-4 pt-4">
           <div className="flex gap-2 flex-wrap">
             <Button size="sm" variant="outline" onClick={() => nginxTestMutation.mutate()} disabled={nginxTestMutation.isPending}>
@@ -265,13 +317,22 @@ export default function VpsDetail() {
           )}
         </TabsContent>
 
-        {/* IP Bannati */}
+        {/* ── IP Bannati ── */}
         <TabsContent value="banned" className="pt-4">
           {bannedLoading ? <LoadingState message="Caricamento IP..." /> : (
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />IP Bannati</CardTitle>
-                <CardDescription>{bannedIps?.length || 0} IP bannati</CardDescription>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />IP Bannati</CardTitle>
+                    <CardDescription>{bannedIps?.length || 0} IP bannati attualmente</CardDescription>
+                  </div>
+                  {(bannedIps?.length ?? 0) > 0 && (
+                    <Button size="sm" variant="destructive" onClick={() => unbanAllMutation.mutate()} disabled={unbanAllMutation.isPending}>
+                      <ShieldOff className="w-4 h-4 mr-1" />Sblocca tutti
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
               <CardContent>
                 {!bannedIps?.length ? (
@@ -290,11 +351,9 @@ export default function VpsDetail() {
                       <TableBody>
                         {bannedIps.map((item, i) => (
                           <TableRow key={i}>
-                            <TableCell className="font-mono">{item.ip}</TableCell>
+                            <TableCell className="font-mono text-sm">{item.ip}</TableCell>
                             <TableCell><Badge variant="outline">{item.jail}</Badge></TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {new Date(item.banTime).toLocaleString("it-IT")}
-                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{new Date(item.banTime).toLocaleString("it-IT")}</TableCell>
                             <TableCell className="text-right">
                               <Button size="sm" variant="ghost" onClick={() => unbanMutation.mutate({ ip: item.ip, jail: item.jail })} disabled={unbanMutation.isPending}>
                                 <ShieldOff className="w-4 h-4 mr-1" />Unban
@@ -311,24 +370,199 @@ export default function VpsDetail() {
           )}
         </TabsContent>
 
-        {/* Log */}
-        <TabsContent value="logs" className="pt-4">
+        {/* ── Fail2ban Jails ── */}
+        <TabsContent value="fail2ban" className="pt-4 space-y-4">
+          {jailsLoading ? <LoadingState message="Caricamento jail..." /> : (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />Fail2ban Jails</CardTitle>
+                <CardDescription>{jails?.length || 0} jail configurate</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {!jails?.length ? (
+                  <p className="text-center text-muted-foreground py-8">Nessuna jail trovata</p>
+                ) : editingJail ? (
+                  <div className="space-y-4 max-w-sm">
+                    <h3 className="font-semibold">Modifica jail: <span className="font-mono text-primary">{editingJail.name}</span></h3>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs text-muted-foreground uppercase tracking-wide">Ban Time (secondi)</label>
+                        <input
+                          type="number"
+                          className="w-full mt-1 px-3 py-1.5 text-sm border border-border rounded-md bg-background"
+                          value={editingJail.banTime}
+                          onChange={e => setEditingJail({ ...editingJail, banTime: parseInt(e.target.value) || 0 })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground uppercase tracking-wide">Max Retry</label>
+                        <input
+                          type="number"
+                          className="w-full mt-1 px-3 py-1.5 text-sm border border-border rounded-md bg-background"
+                          value={editingJail.maxRetry}
+                          onChange={e => setEditingJail({ ...editingJail, maxRetry: parseInt(e.target.value) || 0 })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground uppercase tracking-wide">Find Time (secondi)</label>
+                        <input
+                          type="number"
+                          className="w-full mt-1 px-3 py-1.5 text-sm border border-border rounded-md bg-background"
+                          value={editingJail.findTime}
+                          onChange={e => setEditingJail({ ...editingJail, findTime: parseInt(e.target.value) || 0 })}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => updateJailMutation.mutate(editingJail)} disabled={updateJailMutation.isPending}>
+                        <Save className="w-4 h-4 mr-1" />Salva
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setEditingJail(null)}>Annulla</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="border rounded-md">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Jail</TableHead>
+                          <TableHead>Ban Time</TableHead>
+                          <TableHead>Max Retry</TableHead>
+                          <TableHead>Find Time</TableHead>
+                          <TableHead className="text-right">Azioni</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {jails.map(jail => (
+                          <TableRow key={jail.name}>
+                            <TableCell className="font-mono text-sm">{jail.name}</TableCell>
+                            <TableCell className="text-sm">{jail.banTime}s</TableCell>
+                            <TableCell className="text-sm">{jail.maxRetry}</TableCell>
+                            <TableCell className="text-sm">{jail.findTime}s</TableCell>
+                            <TableCell className="text-right">
+                              <Button size="sm" variant="ghost" onClick={() => setEditingJail({ ...jail })}>
+                                <Settings className="w-4 h-4 mr-1" />Modifica
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        {/* ── Configurazioni ── */}
+        <TabsContent value="configs" className="pt-4 space-y-4">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Log nginx access</CardTitle>
-                <Button size="sm" variant="outline" onClick={() => refetchLogs()}><RefreshCw className="w-4 h-4" /></Button>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="flex items-center gap-2"><FileText className="w-4 h-4" />Editor Configurazioni</CardTitle>
+                  <CardDescription>Modifica i file di configurazione del VPS remoto</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={selectedConfig}
+                    onValueChange={v => { setSelectedConfig(v); setConfigContent(null); }}
+                  >
+                    <SelectTrigger className="w-56">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CONFIG_FILES.map(f => (
+                        <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button size="sm" variant="outline" onClick={() => { setConfigContent(null); refetchConfig(); }}>
+                    <RefreshCw className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {configLoading ? (
+                <LoadingState message="Caricamento file..." />
+              ) : (
+                <>
+                  <Textarea
+                    value={configContent ?? ""}
+                    onChange={e => setConfigContent(e.target.value)}
+                    className="font-mono text-xs h-96 resize-y bg-muted"
+                    placeholder="File vuoto o non trovato sul VPS"
+                    spellCheck={false}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" onClick={() => saveConfigMutation.mutate()} disabled={saveConfigMutation.isPending}>
+                      <Save className="w-4 h-4 mr-1" />
+                      {saveConfigMutation.isPending ? "Salvataggio..." : "Salva"}
+                    </Button>
+                    {selectedConfig.includes("nginx") && (
+                      <Button size="sm" variant="outline" onClick={() => nginxTestMutation.mutate()} disabled={nginxTestMutation.isPending}>
+                        <CheckCircle className="w-4 h-4 mr-1" />nginx -t
+                      </Button>
+                    )}
+                    {selectedConfig.includes("nginx") && (
+                      <Button size="sm" variant="outline" onClick={() => nginxReloadMutation.mutate()} disabled={nginxReloadMutation.isPending}>
+                        <RotateCw className="w-4 h-4 mr-1" />Reload nginx
+                      </Button>
+                    )}
+                    <p className="text-xs text-muted-foreground ml-auto">
+                      <AlertTriangle className="w-3 h-3 inline mr-1 text-yellow-500" />
+                      I file nginx vengono validati con nginx -t prima del salvataggio
+                    </p>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Log ── */}
+        <TabsContent value="logs" className="pt-4 space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <CardTitle className="flex items-center gap-2"><Activity className="w-4 h-4" />Log</CardTitle>
+                <div className="flex items-center gap-2">
+                  <Select value={logType} onValueChange={v => setLogType(v)}>
+                    <SelectTrigger className="w-44">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LOG_TYPES.map(l => (
+                        <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button size="sm" variant="outline" onClick={() => refetchLogs()}>
+                    <RefreshCw className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
               {logsLoading ? <LoadingState message="Caricamento log..." /> : (
-                <div className="bg-muted rounded-md p-3 font-mono text-xs h-96 overflow-y-auto space-y-0.5">
+                <div className="bg-muted rounded-md p-3 font-mono text-xs h-[32rem] overflow-y-auto space-y-0.5">
                   {(logs || []).map((entry, i) => (
-                    <div key={i} className={`${entry.level === "error" ? "text-red-400" : entry.level === "warn" ? "text-yellow-400" : "text-muted-foreground"}`}>
+                    <div
+                      key={i}
+                      className={
+                        entry.level === "error" ? "text-red-400" :
+                        entry.level === "warn" ? "text-yellow-400" :
+                        "text-muted-foreground"
+                      }
+                    >
                       {entry.message}
                     </div>
                   ))}
-                  {(!logs || logs.length === 0) && <p className="text-muted-foreground">Nessun log disponibile</p>}
+                  {(!logs || logs.length === 0) && (
+                    <p className="text-muted-foreground py-4 text-center">Nessun log disponibile</p>
+                  )}
                 </div>
               )}
             </CardContent>

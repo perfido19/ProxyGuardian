@@ -1,8 +1,9 @@
 import express, { Request, Response, NextFunction } from "express";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { readFile, writeFile, access } from "fs/promises";
+import { readFile, writeFile, access, readdir } from "fs/promises";
 import { constants } from "fs";
+import path from "path";
 
 const execAsync = promisify(exec);
 
@@ -248,6 +249,69 @@ app.post("/api/config/:filename", async (req, res) => {
       }
     }
     res.json({ ok: true, message: `${req.params.filename} updated` });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Grep / search ────────────────────────────────────────────────────────────
+
+app.get("/api/grep", async (req, res) => {
+  const q = String(req.query.q ?? "").trim();
+  const logType = String(req.query.type ?? "nginx_access");
+  const lines = Math.min(parseInt(req.query.lines as string) || 500, 500);
+  if (q.length < 2) return res.status(400).json({ error: "Query troppo breve (min 2 caratteri)" });
+  // Sanitize: allow only chars safe for a grep pattern (no shell metacharacters)
+  const safe = q.replace(/[`$\\|;&<>'"!\n\r]/g, "").slice(0, 200);
+  const logPath = LOG_PATHS[logType];
+  if (!logPath) return res.status(400).json({ error: "Tipo log sconosciuto" });
+  try {
+    await access(logPath, constants.R_OK);
+    const { stdout } = await runCmd(`grep -i -m ${lines} "${safe}" "${logPath}" 2>/dev/null`);
+    const entries = stdout.split("\n").filter(Boolean).map((line, i) => ({
+      id: i,
+      level: line.toLowerCase().includes("error") ? "error" : line.toLowerCase().includes("warn") ? "warn" : "info",
+      message: line,
+    }));
+    res.json({ query: safe, logType, count: entries.length, entries });
+  } catch {
+    res.json({ query: safe, logType, count: 0, entries: [] });
+  }
+});
+
+// ─── Fail2ban filters ─────────────────────────────────────────────────────────
+
+const FILTER_DIR = "/etc/fail2ban/filter.d";
+
+app.get("/api/fail2ban/filters", async (_req, res) => {
+  try {
+    const files = await readdir(FILTER_DIR);
+    const names = files.filter(f => f.endsWith(".conf")).map(f => path.basename(f, ".conf"));
+    res.json(names);
+  } catch {
+    res.json([]);
+  }
+});
+
+app.get("/api/fail2ban/filters/:name", async (req, res) => {
+  const filePath = path.join(FILTER_DIR, `${req.params.name}.conf`);
+  try {
+    await access(filePath, constants.R_OK);
+    const content = await readFile(filePath, "utf-8");
+    res.json({ name: req.params.name, content, path: filePath });
+  } catch {
+    res.json({ name: req.params.name, content: "", path: filePath });
+  }
+});
+
+app.post("/api/fail2ban/filters/:name", async (req, res) => {
+  const filePath = path.join(FILTER_DIR, `${req.params.name}.conf`);
+  const { content } = req.body;
+  if (typeof content !== "string") return res.status(400).json({ error: "content required" });
+  try {
+    await writeFile(filePath, content, "utf-8");
+    await runCmd("sudo fail2ban-client reload 2>/dev/null || true");
+    res.json({ ok: true, message: `Filter ${req.params.name} updated` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
