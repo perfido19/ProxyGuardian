@@ -14,29 +14,23 @@ import Fail2banManagement from "@/pages/fail2ban-management";
 import Logs from "@/pages/logs";
 import Configurations from "@/pages/configurations";
 import UserManagement from "@/pages/user-management";
+import VpsManager from "@/pages/vps-manager";
+import BulkOperations from "@/pages/bulk-operations";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LogOut, User } from "lucide-react";
 
-const roleLabels = {
-  admin: "Admin",
-  operator: "Operator",
-  viewer: "Viewer",
-} as const;
+const roleLabels = { admin: "Admin", operator: "Operator", viewer: "Viewer" } as const;
 
 function Header() {
   const { user, logout } = useAuth();
-
   return (
     <header className="flex items-center justify-between px-4 py-3 border-b bg-background">
       <SidebarTrigger data-testid="button-sidebar-toggle" />
       <div className="flex items-center gap-3">
         <span className="text-sm text-muted-foreground font-mono hidden sm:block">
-          {new Date().toLocaleString("it-IT", {
-            hour: "2-digit", minute: "2-digit",
-            day: "2-digit", month: "2-digit", year: "numeric",
-          })}
+          {new Date().toLocaleString("it-IT", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", year: "numeric" })}
         </span>
         {user && (
           <div className="flex items-center gap-2">
@@ -47,15 +41,8 @@ function Header() {
                 {roleLabels[user.role]}
               </Badge>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => logout()}
-              data-testid="button-logout"
-              className="gap-1.5"
-            >
-              <LogOut className="w-4 h-4" />
-              <span className="hidden sm:block">Esci</span>
+            <Button variant="ghost" size="sm" onClick={() => logout()} data-testid="button-logout" className="gap-1.5">
+              <LogOut className="w-4 h-4" /><span className="hidden sm:block">Esci</span>
             </Button>
           </div>
         )}
@@ -66,7 +53,6 @@ function Header() {
 
 function Router() {
   const { user } = useAuth();
-
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
@@ -75,30 +61,23 @@ function Router() {
       <Route path="/fail2ban" component={Fail2banManagement} />
       <Route path="/log" component={Logs} />
       <Route path="/configurazioni" component={Configurations} />
-      {user?.role === "admin" && (
-        <Route path="/utenti" component={UserManagement} />
-      )}
+      <Route path="/vps" component={VpsManager} />
+      <Route path="/bulk" component={BulkOperations} />
+      {user?.role === "admin" && <Route path="/utenti" component={UserManagement} />}
       <Route component={NotFound} />
     </Switch>
   );
 }
 
 function AppLayout() {
-  const style = {
-    "--sidebar-width": "16rem",
-    "--sidebar-width-icon": "3rem",
-  };
-
   return (
-    <SidebarProvider style={style as React.CSSProperties}>
+    <SidebarProvider style={{ "--sidebar-width": "16rem", "--sidebar-width-icon": "3rem" } as React.CSSProperties}>
       <div className="flex h-screen w-full">
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
           <Header />
           <main className="flex-1 overflow-auto p-8 bg-background">
-            <div className="mx-auto max-w-7xl">
-              <Router />
-            </div>
+            <div className="mx-auto max-w-7xl"><Router /></div>
           </main>
         </div>
       </div>
@@ -110,9 +89,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <ProtectedRoute>
-          <AppLayout />
-        </ProtectedRoute>
+        <ProtectedRoute><AppLayout /></ProtectedRoute>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>

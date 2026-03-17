@@ -76,7 +76,8 @@ function JailsTab() {
 
   const updateJailMutation = useMutation({
     mutationFn: async ({ name, config }: { name: string; config: Partial<JailConfig> }) => {
-      return apiRequest('POST', `/api/fail2ban/jails/${name}`, { config }) as Promise<{ message: string }>;
+      const res = await apiRequest('POST', `/api/fail2ban/jails/${name}`, { config });
+      return res.json() as Promise<{ message: string }>;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['/api/fail2ban/jails'] });
@@ -296,7 +297,8 @@ function FiltersTab() {
 
   const updateFilterMutation = useMutation({
     mutationFn: async ({ name, failregex, ignoreregex }: { name: string; failregex: string[]; ignoreregex?: string[] }) => {
-      return apiRequest('POST', `/api/fail2ban/filters/${name}`, { failregex, ignoreregex }) as Promise<{ message: string }>;
+      const res = await apiRequest('POST', `/api/fail2ban/filters/${name}`, { failregex, ignoreregex });
+      return res.json() as Promise<{ message: string }>;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['/api/fail2ban/filters'] });
@@ -610,7 +612,8 @@ function ConfigsTab() {
 
   const updateConfigMutation = useMutation({
     mutationFn: async ({ type, content }: { type: string; content: string }) => {
-      return apiRequest('POST', `/api/fail2ban/config/${type}`, { content }) as Promise<{ message: string }>;
+      const res = await apiRequest('POST', `/api/fail2ban/config/${type}`, { content });
+      return res.json() as Promise<{ message: string }>;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['/api/fail2ban/config'] });

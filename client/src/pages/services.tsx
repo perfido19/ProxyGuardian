@@ -22,7 +22,8 @@ export default function Services() {
 
   const serviceActionMutation = useMutation({
     mutationFn: async ({ service, action }: { service: string; action: string }) => {
-      return apiRequest('POST', '/api/services/action', { service, action });
+      const res = await apiRequest('POST', '/api/services/action', { service, action });
+      return res.json() as Promise<{ name: string }>;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['/api/services'] });

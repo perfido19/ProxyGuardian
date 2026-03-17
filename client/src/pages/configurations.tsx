@@ -62,7 +62,8 @@ export default function Configurations() {
 
   const updateConfigMutation = useMutation({
     mutationFn: async ({ filename, content }: { filename: string; content: string }) => {
-      return apiRequest('POST', '/api/config/update', { filename, content });
+      const res = await apiRequest('POST', '/api/config/update', { filename, content });
+      return res.json() as Promise<{ message: string }>;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['/api/config'] });
