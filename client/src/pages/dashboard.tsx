@@ -135,16 +135,16 @@ export default function Dashboard() {
   const displayBannedIps = bannedIps || [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       <div>
-        <h1 className="text-2xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground">
+        <h1 className="text-2xl font-heading font-bold tracking-tight">Dashboard</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
           Panoramica generale del sistema e dei servizi
         </p>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Ban Totali (24h)"
           value={displayStats.totalBans24h}
@@ -173,8 +173,8 @@ export default function Dashboard() {
 
       {/* Services Status */}
       <div>
-        <h2 className="text-lg font-semibold mb-4">Stato Servizi</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <h2 className="text-xs font-heading font-semibold tracking-[0.12em] uppercase text-muted-foreground mb-3">Stato Servizi</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {displayServices.map((service) => (
             <ServiceStatusCard
               key={service.name}
@@ -187,11 +187,11 @@ export default function Dashboard() {
       </div>
 
       {/* Charts and Recent Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Ban Timeline Chart */}
-        <Card className="lg:col-span-2">
+        <Card className="lg:col-span-2 border-card-border">
           <CardHeader>
-            <CardTitle>Andamento Ban (24h)</CardTitle>
+            <CardTitle className="font-heading text-sm tracking-wide uppercase text-muted-foreground">Andamento Ban (24h)</CardTitle>
           </CardHeader>
           <CardContent>
             {displayStats.banTimeline.length > 0 ? (
@@ -219,17 +219,17 @@ export default function Dashboard() {
         </Card>
 
         {/* Top Banned IPs */}
-        <Card>
+        <Card className="border-card-border">
           <CardHeader>
-            <CardTitle>Top IP Bannati</CardTitle>
+            <CardTitle className="font-heading text-sm tracking-wide uppercase text-muted-foreground">Top IP Bannati</CardTitle>
           </CardHeader>
           <CardContent>
             {displayStats.topBannedIps.length > 0 ? (
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 {displayStats.topBannedIps.slice(0, 5).map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between" data-testid={`top-ip-${idx}`}>
-                    <span className="font-mono text-sm">{item.ip}</span>
-                    <span className="text-sm font-semibold text-muted-foreground">
+                  <div key={idx} className="flex items-center justify-between py-1 border-b border-border/40 last:border-0" data-testid={`top-ip-${idx}`}>
+                    <span className="font-mono text-xs text-foreground/80">{item.ip}</span>
+                    <span className="text-xs font-heading font-semibold text-primary">
                       {item.count}
                     </span>
                   </div>
@@ -246,11 +246,11 @@ export default function Dashboard() {
 
       {/* Recent Banned IPs */}
       <div>
-        <Card>
+        <Card className="border-card-border">
           <CardHeader>
             <div className="flex items-center justify-between gap-4">
               <div>
-                <CardTitle>IP Bannati Recenti</CardTitle>
+                <CardTitle className="font-heading text-sm tracking-wide uppercase text-muted-foreground">IP Bannati Recenti</CardTitle>
                 <CardDescription>
                   {displayBannedIps.length} IP attualmente bannati
                 </CardDescription>

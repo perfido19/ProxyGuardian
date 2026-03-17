@@ -1,5 +1,5 @@
-import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Settings, Users, Network, Zap } from "lucide-react";
-import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
+import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Settings, Users, Network, Zap, ShieldCheck } from "lucide-react";
+import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter } from "@/components/ui/sidebar";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -19,22 +19,51 @@ export function AppSidebar() {
   const { user } = useAuth();
   return (
     <Sidebar>
+      <SidebarHeader className="px-4 py-5 border-b border-sidebar-border">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/15 border border-primary/30">
+            <ShieldCheck className="w-4 h-4 text-primary" />
+          </div>
+          <div>
+            <div className="text-sm font-bold font-heading tracking-wide text-foreground leading-none">ProxyGuardian</div>
+            <div className="text-[10px] text-muted-foreground tracking-widest uppercase mt-0.5">Security Ops</div>
+          </div>
+        </div>
+      </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-base font-semibold px-4 py-4">ProxyGuardian</SidebarGroupLabel>
+        <SidebarGroup className="pt-4">
+          <SidebarGroupLabel className="text-[10px] tracking-widest uppercase text-muted-foreground px-4 mb-1 font-heading">
+            Navigazione
+          </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {menuItems.map(item => (
                 <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location === item.url} data-testid={`link-${item.title.toLowerCase().replace(" ", "-")}`}>
-                    <Link href={item.url}><item.icon className="w-4 h-4" /><span>{item.title}</span></Link>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === item.url}
+                    data-testid={`link-${item.title.toLowerCase().replace(" ", "-")}`}
+                    className="font-heading text-sm tracking-wide"
+                  >
+                    <Link href={item.url}>
+                      <item.icon className="w-4 h-4" />
+                      <span>{item.title}</span>
+                    </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
               {user?.role === "admin" && (
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/utenti"} data-testid="link-utenti">
-                    <Link href="/utenti"><Users className="w-4 h-4" /><span>Utenti</span></Link>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === "/utenti"}
+                    data-testid="link-utenti"
+                    className="font-heading text-sm tracking-wide"
+                  >
+                    <Link href="/utenti">
+                      <Users className="w-4 h-4" />
+                      <span>Utenti</span>
+                    </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               )}
@@ -42,6 +71,12 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      <SidebarFooter className="px-4 py-3 border-t border-sidebar-border">
+        <div className="flex items-center gap-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+          <span className="text-[10px] text-muted-foreground font-mono tracking-wider">SISTEMA ONLINE</span>
+        </div>
+      </SidebarFooter>
     </Sidebar>
   );
 }

@@ -76,10 +76,11 @@
   --chart-4: 280 65% 38%;
   --chart-5: 340 75% 40%;
 
-  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-heading: "Chakra Petch", "DM Sans", sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: "JetBrains Mono", "Fira Code", Menlo, monospace;
-  --radius: .5rem; /* 8px */
+  --radius: .375rem; /* 6px — slightly sharper */
   --shadow-2xs: 0px 1px 2px 0px hsl(220 8% 12% / 0.05);
   --shadow-xs: 0px 1px 2px 0px hsl(220 8% 12% / 0.06);
   --shadow-sm: 0px 1px 2px 0px hsl(220 8% 12% / 0.05), 0px 1px 3px -1px hsl(220 8% 12% / 0.08);
@@ -123,77 +124,75 @@
 }
 
 .dark {
-  --button-outline: rgba(255,255,255, .10);
+  --button-outline: rgba(255,255,255, .08);
   --badge-outline: rgba(255,255,255, .05);
 
-  --opaque-button-border-intensity: 9;  /* In terms of percentages */
+  --opaque-button-border-intensity: 9;
 
-  /* Backgrounds applied on top of other backgrounds when hovered/active */
   --elevate-1: rgba(255,255,255, .04);
-  --elevate-2: rgba(255,255,255, .09);
+  --elevate-2: rgba(255,255,255, .08);
 
-  --background: 220 6% 8%;
+  --background: 222 28% 7%;
 
-  --foreground: 0 0% 95%;
+  --foreground: 200 10% 93%;
 
-  --border: 220 6% 18%;
+  --border: 222 18% 16%;
 
-  --card: 220 5% 10%;
+  --card: 222 24% 9%;
 
-  --card-foreground: 0 0% 95%;
+  --card-foreground: 200 10% 93%;
 
-  --card-border: 220 6% 20%;
+  --card-border: 222 20% 15%;
 
-  --sidebar: 220 5% 12%;
+  --sidebar: 222 30% 8%;
 
-  --sidebar-foreground: 0 0% 95%;
+  --sidebar-foreground: 200 10% 90%;
 
-  --sidebar-border: 220 6% 22%;
+  --sidebar-border: 222 22% 14%;
 
-  --sidebar-primary: 217 91% 35%;
+  --sidebar-primary: 173 75% 42%;
 
-  --sidebar-primary-foreground: 0 0% 98%;
+  --sidebar-primary-foreground: 222 28% 7%;
 
-  --sidebar-accent: 220 8% 18%;
+  --sidebar-accent: 222 20% 14%;
 
-  --sidebar-accent-foreground: 0 0% 92%;
+  --sidebar-accent-foreground: 200 10% 85%;
 
-  --sidebar-ring: 217 91% 45%;
+  --sidebar-ring: 173 75% 50%;
 
-  --popover: 220 5% 14%;
+  --popover: 222 26% 10%;
 
-  --popover-foreground: 0 0% 95%;
+  --popover-foreground: 200 10% 93%;
 
-  --popover-border: 220 6% 24%;
+  --popover-border: 222 20% 18%;
 
-  --primary: 217 91% 35%;
+  --primary: 173 75% 42%;
 
-  --primary-foreground: 0 0% 98%;
+  --primary-foreground: 222 28% 7%;
 
-  --secondary: 220 8% 20%;
+  --secondary: 222 20% 16%;
 
-  --secondary-foreground: 0 0% 92%;
+  --secondary-foreground: 200 10% 85%;
 
-  --muted: 220 10% 16%;
+  --muted: 222 22% 13%;
 
-  --muted-foreground: 0 0% 70%;
+  --muted-foreground: 220 8% 52%;
 
-  --accent: 217 18% 18%;
+  --accent: 222 20% 15%;
 
-  --accent-foreground: 0 0% 90%;
+  --accent-foreground: 200 10% 88%;
 
-  --destructive: 0 84% 32%;
+  --destructive: 0 72% 50%;
 
   --destructive-foreground: 0 0% 98%;
 
-  /* Used as the border around inputs. Dark mode: Should be a border that is light enough to have high contrast when rendered on a --card background. More contrast than standard --border */
-  --input: 220 8% 32%;
-  --ring: 217 91% 45%;
-  --chart-1: 217 91% 65%;
-  --chart-2: 142 76% 55%;
-  --chart-3: 27 87% 65%;
-  --chart-4: 280 65% 60%;
-  --chart-5: 340 75% 62%;
+  --input: 222 20% 22%;
+  --ring: 173 75% 42%;
+  --chart-1: 173 75% 45%;
+  --chart-2: 142 65% 48%;
+  --chart-3: 39 90% 55%;
+  --chart-4: 280 60% 60%;
+  --chart-5: 340 70% 60%;
 
   --shadow-2xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.30);
   --shadow-xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.35);
@@ -242,6 +241,51 @@
 
   body {
     @apply font-sans antialiased bg-background text-foreground;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+    letter-spacing: -0.01em;
+  }
+
+  /* Refined scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.4);
+  }
+}
+
+@layer utilities {
+  .font-heading {
+    font-family: var(--font-heading);
+  }
+
+  /* Teal glow effect for primary elements */
+  .glow-primary {
+    box-shadow: 0 0 12px hsl(var(--primary) / 0.25);
+  }
+
+  /* Subtle left accent border */
+  .accent-border-l {
+    border-left: 2px solid hsl(var(--primary));
+  }
+
+  /* Stat number display */
+  .stat-number {
+    font-family: var(--font-heading);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
   }
 }
 
