@@ -151,16 +151,8 @@ app.post("/api/unban-all", async (_req, res) => {
 
 app.get("/api/stats", async (_req, res) => {
   try {
-    const [connections, nginxStatus] = await Promise.all([
-      runCmd("ss -tn state established '( dport = :80 or dport = :443 or dport = :8880 )' | wc -l"),
-      runCmd("curl -sf http://127.0.0.1/nginx_status 2>/dev/null || echo ''"),
-    ]);
-
-    let activeConnections = parseInt(connections.stdout) || 0;
-    if (nginxStatus.stdout) {
-      const m = nginxStatus.stdout.match(/Active connections:\s*(\d+)/);
-      if (m) activeConnections = parseInt(m[1]);
-    }
+    const connections = await runCmd("ss -tn state established 'dport = :8880' | wc -l");
+    const activeConnections = Math.max(0, (parseInt(connections.stdout) || 1) - 1); // subtract header line
 
     const { stdout: fail2banStatus } = await runCmd("sudo fail2ban-client status 2>/dev/null || echo ''");
     const totalBannedMatch = fail2banStatus.match(/Currently banned:\s*(\d+)/);
