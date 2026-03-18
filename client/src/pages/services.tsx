@@ -5,10 +5,11 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LoadingState } from "@/components/loading-state";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff, Search } from "lucide-react";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
 
@@ -35,6 +36,7 @@ function StatusDot({ running }: { running: boolean | null }) {
 export default function Services() {
   const { toast } = useToast();
   const [selectedVps, setSelectedVps] = useState("all");
+  const [search, setSearch] = useState("");
   const { data: vpsList, isLoading } = useVpsList();
   const { data: healthMap, refetch: refetchHealth } = useVpsHealth();
   const { data: bulkServices, refetch: refetchServices } = useBulkServices();
@@ -76,9 +78,8 @@ export default function Services() {
 
   if (isLoading) return <LoadingState message="Caricamento..." />;
 
-  const list = selectedVps === "all"
-    ? (vpsList || [])
-    : (vpsList || []).filter(v => v.id === selectedVps);
+  const list = (selectedVps === "all" ? (vpsList || []) : (vpsList || []).filter(v => v.id === selectedVps))
+    .filter(v => !search || v.name.toLowerCase().includes(search.toLowerCase()) || v.host?.toLowerCase().includes(search.toLowerCase()));
 
   // Build services map: vpsId → { nginx: running, fail2ban: running, mariadb: running }
   const servicesMap: Record<string, Record<string, boolean>> = {};
@@ -146,6 +147,12 @@ export default function Services() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Ricerca */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <Input placeholder="Cerca VPS..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+      </div>
 
       {/* Tabella VPS × Servizi */}
       {list.length === 0 ? (
