@@ -16,10 +16,10 @@ import { LoadingState } from "@/components/loading-state";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; error?: string; }
 
-function useRefVps() {
+function useDefaultVpsId() {
   const { data: vpsList } = useVpsList();
   const { data: healthMap } = useVpsHealth();
-  return vpsList?.find(v => healthMap?.[v.id]) ?? null;
+  return vpsList?.find(v => healthMap?.[v.id])?.id ?? null;
 }
 
 function useBulkPost(path: string) {
@@ -50,12 +50,41 @@ function RefVpsBanner({ name, count }: { name: string; count: number }) {
   );
 }
 
+function VpsSelector({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  const { data: vpsList } = useVpsList();
+  const { data: healthMap } = useVpsHealth();
+  const onlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="w-44 h-8 text-sm">
+        <SelectValue placeholder="Seleziona VPS" />
+      </SelectTrigger>
+      <SelectContent>
+        {onlineVps.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+        {(vpsList || []).filter(v => !healthMap?.[v.id]).map(v => (
+          <SelectItem key={v.id} value={v.id} disabled>{v.name} (offline)</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export default function Fail2banManagement() {
+  const defaultVpsId = useDefaultVpsId();
+  const [selectedVpsId, setSelectedVpsId] = useState<string>("");
+  const { data: vpsList } = useVpsList();
+
+  const refVpsId = selectedVpsId || defaultVpsId || "";
+  const refVps = (vpsList || []).find(v => v.id === refVpsId) ?? null;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-heading font-bold tracking-tight">Gestione Fail2ban</h1>
-        <p className="text-muted-foreground text-sm">Le modifiche vengono applicate a tutti i VPS simultaneamente</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-heading font-bold tracking-tight">Gestione Fail2ban</h1>
+          <p className="text-muted-foreground text-sm">Le modifiche vengono applicate a tutti i VPS simultaneamente</p>
+        </div>
+        <VpsSelector value={refVpsId} onChange={setSelectedVpsId} />
       </div>
       <Tabs defaultValue="jails">
         <TabsList>
@@ -63,9 +92,9 @@ export default function Fail2banManagement() {
           <TabsTrigger value="filters">Filtri</TabsTrigger>
           <TabsTrigger value="configs">Configurazioni</TabsTrigger>
         </TabsList>
-        <TabsContent value="jails"><JailsTab /></TabsContent>
-        <TabsContent value="filters"><FiltersTab /></TabsContent>
-        <TabsContent value="configs"><ConfigsTab /></TabsContent>
+        <TabsContent value="jails"><JailsTab refVps={refVps} /></TabsContent>
+        <TabsContent value="filters"><FiltersTab refVps={refVps} /></TabsContent>
+        <TabsContent value="configs"><ConfigsTab refVps={refVps} /></TabsContent>
       </Tabs>
     </div>
   );
@@ -75,9 +104,8 @@ export default function Fail2banManagement() {
 
 interface Jail { name: string; enabled: boolean; banTime: number; maxRetry: number; findTime: number; }
 
-function JailsTab() {
+function JailsTab({ refVps }: { refVps: { id: string; name: string } | null }) {
   const { toast } = useToast();
-  const refVps = useRefVps();
   const { data: vpsList } = useVpsList();
   const [editing, setEditing] = useState<Jail | null>(null);
 
@@ -189,8 +217,7 @@ function JailsTab() {
 
 // ── Filters ────────────────────────────────────────────────────────────────────
 
-function FiltersTab() {
-  const refVps = useRefVps();
+function FiltersTab({ refVps }: { refVps: { id: string; name: string } | null }) {
   const { data: vpsList } = useVpsList();
   const [selectedName, setSelectedName] = useState<string>("");
   const [content, setContent] = useState("");
@@ -276,8 +303,7 @@ function FiltersTab() {
 const FAIL2BAN_CONFIGS = ["jail.local", "fail2ban.local"] as const;
 type F2BConfig = typeof FAIL2BAN_CONFIGS[number];
 
-function ConfigsTab() {
-  const refVps = useRefVps();
+function ConfigsTab({ refVps }: { refVps: { id: string; name: string } | null }) {
   const { data: vpsList } = useVpsList();
   const [activeConfig, setActiveConfig] = useState<F2BConfig>("jail.local");
   const [content, setContent] = useState("");

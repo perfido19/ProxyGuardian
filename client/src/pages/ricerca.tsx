@@ -28,13 +28,24 @@ const LOG_TYPES = [
 function BannedIpsTab() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
+  const [selectedVps, setSelectedVps] = useState("all");
   const [unbanning, setUnbanning] = useState<string | null>(null);
+  const { data: vpsList } = useVpsList();
+  const { data: healthMap } = useVpsHealth();
+  const onlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
 
   const { data: results, isLoading, refetch } = useQuery<BulkResult[]>({
-    queryKey: ["search-banned-ips"],
+    queryKey: ["search-banned-ips", selectedVps],
     queryFn: async () => {
-      const r = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: "all", path: "/api/banned-ips" });
-      return r.json();
+      if (selectedVps === "all") {
+        const r = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: "all", path: "/api/banned-ips" });
+        return r.json();
+      } else {
+        const r = await apiRequest("GET", `/api/vps/${selectedVps}/proxy/api/banned-ips`);
+        const data = await r.json();
+        const vps = vpsList?.find(v => v.id === selectedVps);
+        return [{ vpsId: selectedVps, vpsName: vps?.name ?? selectedVps, success: true, data }];
+      }
     },
     refetchInterval: 60000,
   });
@@ -78,13 +89,24 @@ function BannedIpsTab() {
 
   return (
     <div className="space-y-4 pt-4">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <div className="flex gap-2 text-xs text-muted-foreground">
           <span>{onlineCount}/{(results || []).length} VPS risposto</span>
           <span>·</span>
           <span className="font-semibold text-foreground">{allBanned.length} IP bannati totali</span>
         </div>
-        <Button variant="outline" size="sm" className="ml-auto" onClick={() => refetch()}>Aggiorna</Button>
+        <div className="flex items-center gap-2 ml-auto">
+          <Select value={selectedVps} onValueChange={setSelectedVps}>
+            <SelectTrigger className="w-44 h-8 text-sm">
+              <SelectValue placeholder="Tutti i VPS" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Tutti i VPS</SelectItem>
+              {onlineVps.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="sm" onClick={() => refetch()}>Aggiorna</Button>
+        </div>
       </div>
 
       {/* Summary per VPS */}

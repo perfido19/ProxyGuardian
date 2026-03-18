@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useVpsList, useVpsHealth } from "@/hooks/use-vps";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LoadingState } from "@/components/loading-state";
 import { useToast } from "@/hooks/use-toast";
 import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff } from "lucide-react";
@@ -32,6 +34,7 @@ function StatusDot({ running }: { running: boolean | null }) {
 
 export default function Services() {
   const { toast } = useToast();
+  const [selectedVps, setSelectedVps] = useState("all");
   const { data: vpsList, isLoading } = useVpsList();
   const { data: healthMap, refetch: refetchHealth } = useVpsHealth();
   const { data: bulkServices, refetch: refetchServices } = useBulkServices();
@@ -73,7 +76,9 @@ export default function Services() {
 
   if (isLoading) return <LoadingState message="Caricamento..." />;
 
-  const list = vpsList || [];
+  const list = selectedVps === "all"
+    ? (vpsList || [])
+    : (vpsList || []).filter(v => v.id === selectedVps);
 
   // Build services map: vpsId → { nginx: running, fail2ban: running, mariadb: running }
   const servicesMap: Record<string, Record<string, boolean>> = {};
@@ -91,9 +96,20 @@ export default function Services() {
           <h1 className="text-2xl font-heading font-bold tracking-tight">Gestione Servizi</h1>
           <p className="text-muted-foreground text-sm mt-0.5">Controlla nginx, fail2ban e mariadb su tutti i VPS</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchHealth(); }}>
-          <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
-        </Button>
+        <div className="flex items-center gap-2">
+          <Select value={selectedVps} onValueChange={setSelectedVps}>
+            <SelectTrigger className="w-44 h-8 text-sm">
+              <SelectValue placeholder="Tutti i VPS" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Tutti i VPS</SelectItem>
+              {(vpsList || []).map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchHealth(); }}>
+            <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
+          </Button>
+        </div>
       </div>
 
       {/* Azioni bulk */}
