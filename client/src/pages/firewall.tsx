@@ -7,59 +7,101 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Save, Trash2, Wifi } from "lucide-react";
+import { Plus, Save, Trash2, Wifi, Search } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; error?: string; }
+interface Vps { id: string; name: string; }
 
-function useRefVps() {
+function useDefaultVpsId() {
   const { data: vpsList } = useVpsList();
   const { data: healthMap } = useVpsHealth();
-  return vpsList?.find(v => healthMap?.[v.id]) ?? null;
+  return vpsList?.find(v => healthMap?.[v.id])?.id ?? null;
 }
 
-function useBulkSaveConfig(filename: string) {
+function useSaveConfig(filename: string, vpsId: string) {
   const { toast } = useToast();
   return useMutation({
     mutationFn: async (content: string) => {
-      const r = await apiRequest("POST", "/api/vps/bulk/post", {
-        vpsIds: "all",
-        path: `/api/config/${filename}`,
-        body: { content },
-      });
-      return r.json() as Promise<BulkResult[]>;
+      if (vpsId === "all") {
+        const r = await apiRequest("POST", "/api/vps/bulk/post", { vpsIds: "all", path: `/api/config/${filename}`, body: { content } });
+        return r.json() as Promise<BulkResult[]>;
+      } else {
+        const r = await apiRequest("POST", `/api/vps/${vpsId}/proxy/api/config/${filename}`, { content });
+        const data = await r.json();
+        return [{ vpsId, vpsName: vpsId, success: true, data }] as BulkResult[];
+      }
     },
     onSuccess: (results) => {
       const ok = results.filter(r => r.success).length;
       toast({
-        title: ok === results.length ? "Salvato su tutti i VPS" : `Salvato su ${ok}/${results.length} VPS`,
+        title: vpsId === "all"
+          ? (ok === results.length ? "Salvato su tutti i VPS" : `Salvato su ${ok}/${results.length} VPS`)
+          : "Salvato sul VPS selezionato",
         description: filename,
-        variant: ok === results.length ? "default" : "destructive",
+        variant: ok > 0 ? "default" : "destructive",
       });
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 }
 
-function RefVpsBanner({ name, count }: { name: string; count: number }) {
+function VpsBanner({ refVps, saveTarget, totalCount }: { refVps: Vps; saveTarget: string; totalCount: number }) {
   return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 border border-border rounded-md px-3 py-2 mb-4">
       <Wifi className="w-3.5 h-3.5 text-green-500" />
-      <span>Lettura da: <strong className="text-foreground">{name}</strong></span>
-      <span className="ml-auto">Applica a <strong className="text-foreground">{count}</strong> VPS</span>
+      <span>Lettura da: <strong className="text-foreground">{refVps.name}</strong></span>
+      <span className="ml-auto">
+        Salva su: <strong className="text-foreground">{saveTarget === "all" ? `tutti i ${totalCount} VPS` : refVps.name}</strong>
+      </span>
     </div>
   );
 }
 
+function VpsSelector({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  const { data: vpsList } = useVpsList();
+  const { data: healthMap } = useVpsHealth();
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="w-44 h-8 text-sm">
+        <SelectValue placeholder="Seleziona VPS" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">Tutti i VPS</SelectItem>
+        {(vpsList || []).filter(v => healthMap?.[v.id]).map(v => (
+          <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
+        ))}
+        {(vpsList || []).filter(v => !healthMap?.[v.id]).map(v => (
+          <SelectItem key={v.id} value={v.id} disabled>{v.name} (offline)</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export default function Firewall() {
+  const defaultVpsId = useDefaultVpsId();
+  const [selectedVps, setSelectedVps] = useState("all");
+  const { data: vpsList } = useVpsList();
+  const { data: healthMap } = useVpsHealth();
+
+  const refVpsId = selectedVps === "all"
+    ? (defaultVpsId ?? "")
+    : selectedVps;
+  const refVps = (vpsList || []).find(v => v.id === refVpsId) ?? null;
+  const totalCount = (vpsList || []).length;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-heading font-bold tracking-tight">Regole Firewall</h1>
-        <p className="text-muted-foreground text-sm">Le modifiche vengono applicate a tutti i VPS simultaneamente</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-heading font-bold tracking-tight">Regole Firewall</h1>
+          <p className="text-muted-foreground text-sm">Lettura e salvataggio configurabile per VPS singolo o tutti</p>
+        </div>
+        <VpsSelector value={selectedVps} onChange={setSelectedVps} />
       </div>
       <Tabs defaultValue="countries">
         <TabsList className="flex-wrap h-auto gap-1">
@@ -70,26 +112,27 @@ export default function Firewall() {
           <TabsTrigger value="ip">IP Whitelist</TabsTrigger>
           <TabsTrigger value="exclusion">IP Exclusion</TabsTrigger>
         </TabsList>
-        <TabsContent value="countries"><CountriesTab /></TabsContent>
-        <TabsContent value="asn"><AsnTab /></TabsContent>
-        <TabsContent value="isp"><IspTab /></TabsContent>
-        <TabsContent value="useragent"><UserAgentTab /></TabsContent>
-        <TabsContent value="ip"><IpWhitelistTab /></TabsContent>
-        <TabsContent value="exclusion"><ExclusionIpTab /></TabsContent>
+        <TabsContent value="countries"><CountriesTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
+        <TabsContent value="asn"><AsnTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
+        <TabsContent value="isp"><IspTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
+        <TabsContent value="useragent"><UserAgentTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
+        <TabsContent value="ip"><IpWhitelistTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
+        <TabsContent value="exclusion"><ExclusionIpTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
       </Tabs>
     </div>
   );
 }
 
+interface TabProps { refVps: Vps | null; saveTarget: string; totalCount: number; }
+
 // ── Countries ──────────────────────────────────────────────────────────────────
 
-function CountriesTab() {
-  const refVps = useRefVps();
-  const { data: vpsList } = useVpsList();
+function CountriesTab({ refVps, saveTarget, totalCount }: TabProps) {
   const [countries, setCountries] = useState<string[]>([]);
   const [newCountry, setNewCountry] = useState("");
+  const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
-  const saveMutation = useBulkSaveConfig("country_whitelist.conf");
+  const saveMutation = useSaveConfig("country_whitelist.conf", saveTarget);
 
   const { data: configData, isLoading } = useQuery<{ content: string }>({
     queryKey: ["proxy-config-country_whitelist", refVps?.id],
@@ -104,10 +147,18 @@ function CountriesTab() {
     }
   }, [configData]);
 
+  const addCountry = () => {
+    if (newCountry.length === 2 && !countries.includes(newCountry)) {
+      setCountries([...countries, newCountry]); setNewCountry(""); setHasChanges(true);
+    }
+  };
+
   const handleSave = () => {
     const content = countries.map(c => `${c} yes;`).join("\n") + "\n";
     saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
   };
+
+  const filtered = search ? countries.filter(c => c.toLowerCase().includes(search.toLowerCase())) : countries;
 
   if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
   if (isLoading) return <LoadingState message="Caricamento..." />;
@@ -119,20 +170,23 @@ function CountriesTab() {
         <CardDescription>Codici ISO 3166-1 alpha-2 (es. IT, DE, FR)</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <RefVpsBanner name={refVps.name} count={vpsList?.length ?? 0} />
+        <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
         <div className="flex gap-2">
-          <Input placeholder="Codice paese (es. IT)" value={newCountry} onChange={e => setNewCountry(e.target.value.toUpperCase())} maxLength={2} onKeyPress={e => e.key === "Enter" && newCountry.length === 2 && !countries.includes(newCountry) && (setCountries([...countries, newCountry]), setNewCountry(""), setHasChanges(true))} />
-          <Button onClick={() => { if (newCountry.length === 2 && !countries.includes(newCountry)) { setCountries([...countries, newCountry]); setNewCountry(""); setHasChanges(true); } }}>
-            <Plus className="w-4 h-4 mr-1" />Aggiungi
-          </Button>
+          <Input placeholder="Codice paese (es. IT)" value={newCountry} onChange={e => setNewCountry(e.target.value.toUpperCase())} maxLength={2} onKeyDown={e => e.key === "Enter" && addCountry()} />
+          <Button onClick={addCountry}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
         </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca paese..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {countries.length} risultati</p>}
         <div className="border rounded-md">
           <Table>
             <TableHeader><TableRow><TableHead>Codice</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
-              {countries.length === 0 ? (
-                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">Nessun paese configurato</TableCell></TableRow>
-              ) : countries.map(code => (
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun paese configurato"}</TableCell></TableRow>
+              ) : filtered.map(code => (
                 <TableRow key={code}>
                   <TableCell className="font-mono font-semibold">{code}</TableCell>
                   <TableCell><Badge variant="secondary">Consentito</Badge></TableCell>
@@ -144,7 +198,7 @@ function CountriesTab() {
         </div>
         <div className="flex justify-end">
           <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
-            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : "Salva su tutti i VPS"}
+            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
       </CardContent>
@@ -154,13 +208,12 @@ function CountriesTab() {
 
 // ── ASN ────────────────────────────────────────────────────────────────────────
 
-function AsnTab() {
-  const refVps = useRefVps();
-  const { data: vpsList } = useVpsList();
+function AsnTab({ refVps, saveTarget, totalCount }: TabProps) {
   const [asns, setAsns] = useState<Array<{ asn: string; description?: string }>>([]);
   const [newAsn, setNewAsn] = useState(""); const [newDesc, setNewDesc] = useState("");
+  const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
-  const saveMutation = useBulkSaveConfig("block_asn.conf");
+  const saveMutation = useSaveConfig("block_asn.conf", saveTarget);
 
   const { data: configData, isLoading } = useQuery<{ content: string }>({
     queryKey: ["proxy-config-block_asn", refVps?.id],
@@ -181,10 +234,20 @@ function AsnTab() {
     }
   }, [configData]);
 
+  const addAsn = () => {
+    if (newAsn && !asns.find(a => a.asn === newAsn)) {
+      setAsns([...asns, { asn: newAsn, description: newDesc || undefined }]); setNewAsn(""); setNewDesc(""); setHasChanges(true);
+    }
+  };
+
   const handleSave = () => {
     const content = asns.map(({ asn, description }) => `${asn} 1;${description ? ` # ${description}` : ""}`).join("\n") + "\n";
     saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
   };
+
+  const filtered = search
+    ? asns.filter(a => a.asn.includes(search) || (a.description ?? "").toLowerCase().includes(search.toLowerCase()))
+    : asns;
 
   if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
   if (isLoading) return <LoadingState message="Caricamento..." />;
@@ -193,21 +256,24 @@ function AsnTab() {
     <Card className="mt-4">
       <CardHeader><CardTitle>Blacklist ASN</CardTitle><CardDescription>Blocca Autonomous System Numbers (es. Google: 15169)</CardDescription></CardHeader>
       <CardContent className="space-y-4">
-        <RefVpsBanner name={refVps.name} count={vpsList?.length ?? 0} />
+        <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
           <Input placeholder="Numero ASN" value={newAsn} onChange={e => setNewAsn(e.target.value)} />
           <Input placeholder="Descrizione (opzionale)" value={newDesc} onChange={e => setNewDesc(e.target.value)} />
-          <Button onClick={() => { if (newAsn && !asns.find(a => a.asn === newAsn)) { setAsns([...asns, { asn: newAsn, description: newDesc || undefined }]); setNewAsn(""); setNewDesc(""); setHasChanges(true); } }}>
-            <Plus className="w-4 h-4 mr-1" />Aggiungi
-          </Button>
+          <Button onClick={addAsn}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
         </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca ASN o descrizione..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {asns.length} risultati</p>}
         <div className="border rounded-md">
           <Table>
             <TableHeader><TableRow><TableHead>ASN</TableHead><TableHead>Descrizione</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
-              {asns.length === 0 ? (
-                <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">Nessun ASN bloccato</TableCell></TableRow>
-              ) : asns.map(({ asn, description }) => (
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun ASN bloccato"}</TableCell></TableRow>
+              ) : filtered.map(({ asn, description }) => (
                 <TableRow key={asn}>
                   <TableCell className="font-mono font-semibold">{asn}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{description || "—"}</TableCell>
@@ -220,7 +286,7 @@ function AsnTab() {
         </div>
         <div className="flex justify-end">
           <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
-            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : "Salva su tutti i VPS"}
+            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
       </CardContent>
@@ -230,13 +296,12 @@ function AsnTab() {
 
 // ── ISP ────────────────────────────────────────────────────────────────────────
 
-function IspTab() {
-  const refVps = useRefVps();
-  const { data: vpsList } = useVpsList();
+function IspTab({ refVps, saveTarget, totalCount }: TabProps) {
   const [isps, setIsps] = useState<Array<{ name: string; type: string }>>([]);
   const [newIsp, setNewIsp] = useState(""); const [matchType, setMatchType] = useState<"exact" | "partial">("partial");
+  const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
-  const saveMutation = useBulkSaveConfig("block_isp.conf");
+  const saveMutation = useSaveConfig("block_isp.conf", saveTarget);
 
   const { data: configData, isLoading } = useQuery<{ content: string }>({
     queryKey: ["proxy-config-block_isp", refVps?.id],
@@ -249,7 +314,6 @@ function IspTab() {
       const parsed = configData.content.split("\n").map(line => {
         const t = line.trim();
         if (t.startsWith("#") || !t) return null;
-        // Format: "~*Pattern" 1;  or  "Exact Name" 1;
         const m = t.match(/^"([^"]+)"\s+\S+;/);
         if (!m) return null;
         const raw = m[1];
@@ -260,10 +324,18 @@ function IspTab() {
     }
   }, [configData]);
 
+  const addIsp = () => {
+    if (newIsp && !isps.find(i => i.name === newIsp)) {
+      setIsps([...isps, { name: newIsp, type: matchType }]); setNewIsp(""); setHasChanges(true);
+    }
+  };
+
   const handleSave = () => {
     const content = isps.map(({ name, type }) => type === "partial" ? `"~*${name}" 1;` : `"${name}" 1;`).join("\n") + "\n";
     saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
   };
+
+  const filtered = search ? isps.filter(i => i.name.toLowerCase().includes(search.toLowerCase())) : isps;
 
   if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
   if (isLoading) return <LoadingState message="Caricamento..." />;
@@ -272,19 +344,24 @@ function IspTab() {
     <Card className="mt-4">
       <CardHeader><CardTitle>Blacklist ISP</CardTitle><CardDescription>Blocca provider internet per nome</CardDescription></CardHeader>
       <CardContent className="space-y-4">
-        <RefVpsBanner name={refVps.name} count={vpsList?.length ?? 0} />
+        <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <Input placeholder="Nome ISP" value={newIsp} onChange={e => setNewIsp(e.target.value)} className="md:col-span-2" />
           <Select value={matchType} onValueChange={v => setMatchType(v as any)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="exact">Esatto</SelectItem><SelectItem value="partial">Parziale</SelectItem></SelectContent></Select>
-          <Button onClick={() => { if (newIsp && !isps.find(i => i.name === newIsp)) { setIsps([...isps, { name: newIsp, type: matchType }]); setNewIsp(""); setHasChanges(true); } }}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
+          <Button onClick={addIsp}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
         </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca ISP..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {isps.length} risultati</p>}
         <div className="border rounded-md">
           <Table>
             <TableHeader><TableRow><TableHead>ISP</TableHead><TableHead>Tipo</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
-              {isps.length === 0 ? (
-                <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">Nessun ISP bloccato</TableCell></TableRow>
-              ) : isps.map(({ name, type }) => (
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun ISP bloccato"}</TableCell></TableRow>
+              ) : filtered.map(({ name, type }) => (
                 <TableRow key={name}>
                   <TableCell className="font-mono">{name}</TableCell>
                   <TableCell><Badge variant="outline">{type === "exact" ? "Esatto" : "Parziale"}</Badge></TableCell>
@@ -297,7 +374,7 @@ function IspTab() {
         </div>
         <div className="flex justify-end">
           <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
-            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : "Salva su tutti i VPS"}
+            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
       </CardContent>
@@ -307,13 +384,12 @@ function IspTab() {
 
 // ── User-Agent ─────────────────────────────────────────────────────────────────
 
-function UserAgentTab() {
-  const refVps = useRefVps();
-  const { data: vpsList } = useVpsList();
+function UserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
   const [patterns, setPatterns] = useState<string[]>([]);
   const [newPattern, setNewPattern] = useState("");
+  const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
-  const saveMutation = useBulkSaveConfig("useragent.rules");
+  const saveMutation = useSaveConfig("useragent.rules", saveTarget);
 
   const { data: configData, isLoading } = useQuery<{ content: string }>({
     queryKey: ["proxy-config-useragent", refVps?.id],
@@ -326,7 +402,6 @@ function UserAgentTab() {
       const parsed = configData.content.split("\n").map(line => {
         const t = line.trim();
         if (t.startsWith("#") || !t) return null;
-        // Format: ~*pattern  1;  (with tab/spaces before value)
         const m = t.match(/^~?\*?(.+?)\s+\S+;/);
         return m ? m[1].trim() : null;
       }).filter(Boolean) as string[];
@@ -334,10 +409,18 @@ function UserAgentTab() {
     }
   }, [configData]);
 
+  const addPattern = () => {
+    if (newPattern && !patterns.includes(newPattern)) {
+      setPatterns([...patterns, newPattern]); setNewPattern(""); setHasChanges(true);
+    }
+  };
+
   const handleSave = () => {
     const content = patterns.map(p => `~*${p} 1;`).join("\n") + "\n";
     saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
   };
+
+  const filtered = search ? patterns.filter(p => p.toLowerCase().includes(search.toLowerCase())) : patterns;
 
   if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
   if (isLoading) return <LoadingState message="Caricamento..." />;
@@ -346,18 +429,23 @@ function UserAgentTab() {
     <Card className="mt-4">
       <CardHeader><CardTitle>Blacklist User-Agent</CardTitle><CardDescription>Blocca bot e crawler per pattern regex</CardDescription></CardHeader>
       <CardContent className="space-y-4">
-        <RefVpsBanner name={refVps.name} count={vpsList?.length ?? 0} />
+        <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          <Input placeholder="Pattern (es. bot|crawler)" className="md:col-span-2" value={newPattern} onChange={e => setNewPattern(e.target.value)} onKeyPress={e => e.key === "Enter" && newPattern && !patterns.includes(newPattern) && (setPatterns([...patterns, newPattern]), setNewPattern(""), setHasChanges(true))} />
-          <Button onClick={() => { if (newPattern && !patterns.includes(newPattern)) { setPatterns([...patterns, newPattern]); setNewPattern(""); setHasChanges(true); } }}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
+          <Input placeholder="Pattern (es. bot|crawler)" className="md:col-span-2" value={newPattern} onChange={e => setNewPattern(e.target.value)} onKeyDown={e => e.key === "Enter" && addPattern()} />
+          <Button onClick={addPattern}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
         </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca pattern..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {patterns.length} risultati</p>}
         <div className="border rounded-md">
           <Table>
             <TableHeader><TableRow><TableHead>Pattern</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
-              {patterns.length === 0 ? (
-                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">Nessun pattern configurato</TableCell></TableRow>
-              ) : patterns.map(pattern => (
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun pattern configurato"}</TableCell></TableRow>
+              ) : filtered.map(pattern => (
                 <TableRow key={pattern}>
                   <TableCell className="font-mono text-sm">{pattern}</TableCell>
                   <TableCell><Badge variant="destructive">Bloccato</Badge></TableCell>
@@ -369,7 +457,7 @@ function UserAgentTab() {
         </div>
         <div className="flex justify-end">
           <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
-            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : "Salva su tutti i VPS"}
+            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
       </CardContent>
@@ -379,13 +467,12 @@ function UserAgentTab() {
 
 // ── IP Whitelist ───────────────────────────────────────────────────────────────
 
-function IpWhitelistTab() {
-  const refVps = useRefVps();
-  const { data: vpsList } = useVpsList();
+function IpWhitelistTab({ refVps, saveTarget, totalCount }: TabProps) {
   const [ips, setIps] = useState<string[]>([]);
   const [newIp, setNewIp] = useState("");
+  const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
-  const saveMutation = useBulkSaveConfig("ip_whitelist.conf");
+  const saveMutation = useSaveConfig("ip_whitelist.conf", saveTarget);
 
   const { data: configData, isLoading } = useQuery<{ content: string }>({
     queryKey: ["proxy-config-ip_whitelist", refVps?.id],
@@ -398,16 +485,22 @@ function IpWhitelistTab() {
       const parsed = configData.content.split("\n").map(l => {
         const t = l.trim();
         if (t.startsWith("#") || !t) return null;
-        return t.split(/\s+/)[0]; // extract IP/CIDR, ignore value and comments
+        return t.split(/\s+/)[0];
       }).filter(Boolean) as string[];
       setIps(parsed); setHasChanges(false);
     }
   }, [configData]);
 
+  const addIp = () => {
+    if (newIp && !ips.includes(newIp)) { setIps([...ips, newIp]); setNewIp(""); setHasChanges(true); }
+  };
+
   const handleSave = () => {
     const content = ips.map(ip => `${ip} 0;`).join("\n") + "\n";
     saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
   };
+
+  const filtered = search ? ips.filter(ip => ip.includes(search)) : ips;
 
   if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
   if (isLoading) return <LoadingState message="Caricamento..." />;
@@ -416,18 +509,23 @@ function IpWhitelistTab() {
     <Card className="mt-4">
       <CardHeader><CardTitle>IP Whitelist</CardTitle><CardDescription>IP esclusi dal rate limiting (singoli o CIDR)</CardDescription></CardHeader>
       <CardContent className="space-y-4">
-        <RefVpsBanner name={refVps.name} count={vpsList?.length ?? 0} />
+        <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          <Input placeholder="IP o Range (es. 10.0.0.0/24)" className="md:col-span-2" value={newIp} onChange={e => setNewIp(e.target.value)} onKeyPress={e => e.key === "Enter" && newIp && !ips.includes(newIp) && (setIps([...ips, newIp]), setNewIp(""), setHasChanges(true))} />
-          <Button onClick={() => { if (newIp && !ips.includes(newIp)) { setIps([...ips, newIp]); setNewIp(""); setHasChanges(true); } }}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
+          <Input placeholder="IP o Range (es. 10.0.0.0/24)" className="md:col-span-2" value={newIp} onChange={e => setNewIp(e.target.value)} onKeyDown={e => e.key === "Enter" && addIp()} />
+          <Button onClick={addIp}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
         </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca IP o range..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 font-mono" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {ips.length} risultati</p>}
         <div className="border rounded-md">
           <Table>
             <TableHeader><TableRow><TableHead>IP / Range</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
-              {ips.length === 0 ? (
-                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">Nessun IP in whitelist</TableCell></TableRow>
-              ) : ips.map(ip => (
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun IP in whitelist"}</TableCell></TableRow>
+              ) : filtered.map(ip => (
                 <TableRow key={ip}>
                   <TableCell className="font-mono">{ip}</TableCell>
                   <TableCell><Badge variant="secondary">Escluso</Badge></TableCell>
@@ -439,7 +537,7 @@ function IpWhitelistTab() {
         </div>
         <div className="flex justify-end">
           <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
-            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : "Salva su tutti i VPS"}
+            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
       </CardContent>
@@ -449,13 +547,12 @@ function IpWhitelistTab() {
 
 // ── IP Exclusion ───────────────────────────────────────────────────────────────
 
-function ExclusionIpTab() {
-  const refVps = useRefVps();
-  const { data: vpsList } = useVpsList();
+function ExclusionIpTab({ refVps, saveTarget, totalCount }: TabProps) {
   const [ips, setIps] = useState<string[]>([]);
   const [newIp, setNewIp] = useState("");
+  const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
-  const saveMutation = useBulkSaveConfig("exclusion_ip.conf");
+  const saveMutation = useSaveConfig("exclusion_ip.conf", saveTarget);
 
   const { data: configData, isLoading } = useQuery<{ content: string }>({
     queryKey: ["proxy-config-exclusion_ip", refVps?.id],
@@ -474,10 +571,16 @@ function ExclusionIpTab() {
     }
   }, [configData]);
 
+  const addIp = () => {
+    if (newIp && !ips.includes(newIp)) { setIps([...ips, newIp]); setNewIp(""); setHasChanges(true); }
+  };
+
   const handleSave = () => {
     const content = ips.map(ip => `${ip} 1;`).join("\n") + "\n";
     saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
   };
+
+  const filtered = search ? ips.filter(ip => ip.includes(search)) : ips;
 
   if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
   if (isLoading) return <LoadingState message="Caricamento..." />;
@@ -486,18 +589,23 @@ function ExclusionIpTab() {
     <Card className="mt-4">
       <CardHeader><CardTitle>IP Exclusion</CardTitle><CardDescription>IP esclusi dal blocco geografico</CardDescription></CardHeader>
       <CardContent className="space-y-4">
-        <RefVpsBanner name={refVps.name} count={vpsList?.length ?? 0} />
+        <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          <Input placeholder="IP o Range (es. 10.0.0.0/24)" className="md:col-span-2" value={newIp} onChange={e => setNewIp(e.target.value)} onKeyPress={e => e.key === "Enter" && newIp && !ips.includes(newIp) && (setIps([...ips, newIp]), setNewIp(""), setHasChanges(true))} />
-          <Button onClick={() => { if (newIp && !ips.includes(newIp)) { setIps([...ips, newIp]); setNewIp(""); setHasChanges(true); } }}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
+          <Input placeholder="IP o Range (es. 10.0.0.0/24)" className="md:col-span-2" value={newIp} onChange={e => setNewIp(e.target.value)} onKeyDown={e => e.key === "Enter" && addIp()} />
+          <Button onClick={addIp}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
         </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca IP o range..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 font-mono" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {ips.length} risultati</p>}
         <div className="border rounded-md">
           <Table>
             <TableHeader><TableRow><TableHead>IP / Range</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
-              {ips.length === 0 ? (
-                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">Nessun IP configurato</TableCell></TableRow>
-              ) : ips.map(ip => (
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun IP configurato"}</TableCell></TableRow>
+              ) : filtered.map(ip => (
                 <TableRow key={ip}>
                   <TableCell className="font-mono">{ip}</TableCell>
                   <TableCell><Badge variant="secondary">Escluso</Badge></TableCell>
@@ -509,7 +617,7 @@ function ExclusionIpTab() {
         </div>
         <div className="flex justify-end">
           <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
-            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : "Salva su tutti i VPS"}
+            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
       </CardContent>

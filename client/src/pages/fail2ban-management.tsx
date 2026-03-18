@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Save, Wifi, RefreshCw } from "lucide-react";
+import { Save, Wifi, RefreshCw, Search } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
@@ -108,6 +108,7 @@ function JailsTab({ refVps }: { refVps: { id: string; name: string } | null }) {
   const { toast } = useToast();
   const { data: vpsList } = useVpsList();
   const [editing, setEditing] = useState<Jail | null>(null);
+  const [search, setSearch] = useState("");
 
   const { data: jails, isLoading, refetch } = useQuery<Jail[]>({
     queryKey: ["proxy-jails", refVps?.id],
@@ -153,6 +154,10 @@ function JailsTab({ refVps }: { refVps: { id: string; name: string } | null }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <RefVpsBanner name={refVps.name} count={vpsList?.length ?? 0} />
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca jail..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
         <div className="border rounded-md">
           <Table>
             <TableHeader>
@@ -165,9 +170,9 @@ function JailsTab({ refVps }: { refVps: { id: string; name: string } | null }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(jails || []).length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">Nessuna jail</TableCell></TableRow>
-              ) : (jails || []).map(jail => (
+              {(jails || []).filter(j => !search || j.name.toLowerCase().includes(search.toLowerCase())).length === 0 ? (
+                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">{search ? "Nessun risultato" : "Nessuna jail"}</TableCell></TableRow>
+              ) : (jails || []).filter(j => !search || j.name.toLowerCase().includes(search.toLowerCase())).map(jail => (
                 <TableRow key={jail.name}>
                   {editing?.name === jail.name ? (
                     <>
