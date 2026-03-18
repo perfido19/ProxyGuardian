@@ -78,10 +78,7 @@ fi
 
 # ── Sudoers ──────────────────────────────────────────────────────────────────
 cat > /etc/sudoers.d/proxy-guardian-agent << SUDOEOF
-$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl status nginx
-$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl status fail2ban
-$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl status mariadb
-$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl status mysql
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl status *
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl start nginx
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx
