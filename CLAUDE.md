@@ -1,136 +1,136 @@
 # ProxyGuardian — Claude Code Context
 
 ## Project Overview
-Full-stack dashboard for managing proxy infrastructure (nginx, fail2ban, MariaDB) across a fleet
-of 64 VPS machines connected via NetBird mesh WireGuard network.
+Full-stack dashboard per la gestione di infrastrutture proxy (nginx, fail2ban, MariaDB) su una fleet di VPS connessi via rete **NetBird** (WireGuard mesh). Ogni VPS remoto ha un agent Node.js standalone che espone una REST API autenticata.
 
 ## Stack
-| Layer | Technology |
+| Layer | Tecnologia |
 |---|---|
-| Frontend | React + TypeScript + Shadcn/ui + Tailwind CSS |
-| Backend | Express.js (orchestrator, main server) |
-| Database | MariaDB |
-| Remote Agents | Lightweight Express (port 3001, deployed on each VPS) |
-| Network | NetBird mesh WireGuard |
-| Auth | Session-based, 3 roles: admin / operator / viewer |
+| Frontend | React 18 + TypeScript + Vite + TailwindCSS + shadcn/ui |
+| Backend | Express.js + TypeScript (porta 5000) |
+| Persistenza | JSON file (`data/vps.json`) — nessun database |
+| Agent remoto | Node.js + Express standalone (porta 3001, su ogni VPS) |
+| Rete | NetBird mesh WireGuard (IP range 100.x.x.x) |
+| Auth | Cookie session + ruoli RBAC (admin / operator / viewer) |
+| Validazione | Zod (schemi in `shared/schema.ts`) |
+| Build agent | ESBuild → `agent/agent-bundle.js` |
+| Deploy dashboard | PM2 su VPS `185.229.236.50` in `/root/proxy-dashboard/` |
 
-## Project Structure
+## Struttura Reale del Progetto
 ```
 ProxyGuardian/
 ├── CLAUDE.md
-├── .env                        ← secrets, never commit
-├── .env.example                ← template senza valori reali
-├── frontend/                   ← React + Vite
-│   ├── CLAUDE.md
-│   ├── src/
-│   │   ├── components/         ← Shadcn/ui + custom components
-│   │   ├── pages/              ← route-level components
-│   │   ├── hooks/              ← custom React hooks
-│   │   ├── lib/                ← utilities, api client
-│   │   └── types/              ← TypeScript types condivisi
-│   └── ...
-├── backend/                    ← Express orchestrator
-│   ├── CLAUDE.md
-│   ├── src/
-│   │   ├── routes/             ← endpoint REST
-│   │   ├── middleware/         ← auth, logging, error handling
-│   │   ├── services/           ← business logic
-│   │   ├── db/                 ← MariaDB queries
-│   │   └── types/              ← TypeScript types
-│   └── ...
-└── agent/                      ← Express agent (deployato sui VPS)
-    ├── CLAUDE.md
-    └── src/
-        ├── routes/             ← endpoint agente
-        └── middleware/         ← API key auth
+├── .env                          ← secrets (SESSION_SECRET, PORT, DATA_DIR)
+├── client/                       ← React + Vite (frontend)
+│   └── src/
+│       ├── App.tsx               ← routing (Wouter)
+│       ├── components/           ← shadcn/ui + custom (app-sidebar, loading-state)
+│       ├── hooks/                ← use-auth, use-vps, use-toast, use-mobile
+│       ├── lib/                  ← queryClient, apiRequest
+│       └── pages/
+│           ├── dashboard.tsx     ← fleet overview, stats per VPS
+│           ├── services.tsx      ← stato nginx/fail2ban/mariadb, bulk actions
+│           ├── fail2ban-management.tsx ← jail, filtri, configurazioni
+│           ├── firewall.tsx      ← paesi, ASN, ISP, user-agent, IP whitelist/exclusion
+│           ├── logs.tsx          ← visualizzatore log real-time
+│           ├── ricerca.tsx       ← ricerca IP bannati + grep log cross-VPS
+│           ├── vps-detail.tsx    ← pannello per-VPS (5 tab)
+│           ├── vps-manager.tsx   ← gestione VPS (add/edit/delete)
+│           └── user-management.tsx ← gestione utenti
+├── server/                       ← Express API
+│   ├── index.ts                  ← entry point, middleware, logging
+│   ├── routes.ts                 ← tutti gli endpoint REST
+│   ├── auth.ts                   ← sessioni, RBAC
+│   ├── storage.ts                ← lettura/scrittura data/vps.json
+│   ├── vps-manager.ts            ← proxy calls agli agent remoti, bulk ops
+│   └── vite.ts                   ← serve frontend in dev/prod
+├── agent/                        ← Agent standalone per VPS remoti
+│   ├── index.ts                  ← sorgente TypeScript
+│   ├── agent-bundle.js           ← bundle ESBuild (committato nel repo)
+│   ├── install.sh                ← script installazione curl|bash
+│   └── package.json
+├── shared/
+│   └── schema.ts                 ← schemi Zod condivisi frontend/backend
+└── data/
+    └── vps.json                  ← persistenza VPS (non committato)
 ```
 
-## Architecture — Key Concepts
+## Architettura — Concetti Chiave
 
-### Orchestrator ↔ Agent Communication
-- Agenti in ascolto su **porta 3001** su ogni VPS
-- Auth tramite **shared API key** nell'header `X-API-Key`
-- Comunicazione tramite **NetBird IPs** (non IP pubblici)
-- Orchestrator fa poll / call dirette agli agenti per raccogliere metriche e inviare comandi
+### Dashboard ↔ Agent
+- Il server Express fa da **proxy/orchestrator**: riceve richieste dal frontend e le inoltra agli agent
+- Endpoint proxy: `GET/POST /api/vps/:id/proxy/*` → forwarda al VPS corrispondente
+- Bulk operations: `POST /api/vps/bulk/get` e `POST /api/vps/bulk/post` → parallelizza su tutti i VPS
+- Ogni VPS ha: `{ id, name, host, port, apiKey }` persistito in `data/vps.json`
+- Connessioni misurate sulla **porta 8880** (proxy squid)
 
-### Session Auth (Orchestrator)
-- Session-based con express-session
-- 3 ruoli con permessi crescenti:
-  - `viewer` → sola lettura
-  - `operator` → operazioni sui proxy, fail2ban
-  - `admin` → gestione utenti, configurazioni globali, bulk ops
+### Auth
+- Cookie session con `express-session`
+- Ruoli: `admin` > `operator` > `viewer`
+- Credenziali default configurabili via `.env`
 
-## Coding Rules
+### Agent VPS
+- Autenticazione: header `x-api-key` o `Authorization: Bearer <key>`
+- Si lega all'IP NetBird (`100.x.x.x`) se rilevato, altrimenti `0.0.0.0`
+- Installazione: `curl -fsSL .../agent/install.sh | sudo bash`
+- Service systemd: `proxy-guardian-agent` come utente `pgagent`
+- Sudoers: wildcard su `systemctl status *`, `fail2ban-client *`, `nginx -t`
 
-### General
-- TypeScript strict mode ovunque — no `any` impliciti
-- Variabili d'ambiente → sempre in `.env`, mai hardcoded nel codice
-- Ogni secret/config va documentato in `.env.example`
-- Nessuna logica business nel layer route → usare services/
-- Error handling centralizzato — non try/catch sparsi
+## Regole di Sviluppo
 
-### Backend (Express)
-- Ogni nuovo endpoint deve:
-  1. Validare input con **zod**
-  2. Applicare middleware auth con ruolo minimo richiesto
-  3. Usare il service layer per la logica
-  4. Restituire risposte strutturate `{ success, data, error }`
-  5. Aggiornare `backend/src/types/api.ts`
-- Mai modificare `middleware/auth.ts` senza conferma esplicita
-- Query MariaDB → sempre parametrizzate, mai interpolazione stringa
+### Generale
+- TypeScript ovunque — minimizzare `any`
+- Variabili d'ambiente sempre in `.env`, mai hardcoded
+- Nessun database — la persistenza è solo `data/vps.json` via `server/storage.ts`
 
-### Frontend (React)
-- Componenti Shadcn/ui come base — non reinventare UI primitives
-- Stato globale minimo — preferire React Query per server state
-- Tipi condivisi frontend/backend in `types/` sincronizzati
-- Nessuna chiamata API diretta nei componenti → usare hooks in `hooks/`
+### Frontend
+- Componenti shadcn/ui come base UI — non reinventare primitive
+- Stato server tramite **TanStack React Query** — no stato globale complesso
+- Chiamate API tramite `apiRequest` da `lib/queryClient.ts`
+- Hook centralizzati in `hooks/` (es. `useVpsList`, `useVpsHealth`)
+- Routing con **Wouter** (non React Router)
 
-### Agent (VPS)
-- Codice minimale e autonomo — l'agente non ha dipendenze dal db centrale
-- Ogni operazione esposta (nginx reload, fail2ban ban/unban, etc.) deve loggare localmente
-- Validare sempre `X-API-Key` prima di qualsiasi operazione
+### Backend
+- Tutta la logica in `server/routes.ts` e `server/vps-manager.ts`
+- Proxy agli agent via `vps-manager.ts` — non chiamare agent direttamente dalle route
+- Validazione input con schemi Zod da `shared/schema.ts`
 
-## Bulk Operations
-- Le bulk ops su più VPS devono essere eseguite con **concorrenza limitata** (max 5 parallele)
-- Ogni operazione bulk deve restituire un report per VPS: `{ vpsId, success, error }`
-- Timeout per singolo agente: **10 secondi**
+### Agent
+- Codice minimale e autonomo — nessuna dipendenza dal server centrale
+- Ogni modifica a `agent/index.ts` richiede rebuild: `cd agent && npm run build`
+- Il bundle `agent-bundle.js` va committato dopo ogni rebuild
+- Dopo push, aggiornare il VPS: `git pull && npm run build && pm2 restart proxy-dashboard`
 
-## Security Rules
-- Input sanitization obbligatoria su tutti gli endpoint pubblici
-- Rate limiting su login e endpoint agente
-- Headers di sicurezza (helmet.js) sul server principale
-- Nessun log di secrets, API key o password
-- Fail2ban actions via agente → whitelist IP NetBird obbligatoria prima del ban
+## Workflow Git
+- Branch unico: `main`
+- Push tramite token GitHub o GitHub Desktop
+- Deploy automatico: SSH su `185.229.236.50` → `git pull + npm run build + pm2 restart`
+- Commit message format: `feat:`, `fix:`, `chore:` + descrizione breve
 
-## Git Workflow
-- Branch: `main` (produzione), `dev` (sviluppo)
-- Commit message format: `[area] descrizione breve` — es. `[agent] add nginx status endpoint`
-- File delivery: Claude genera file con path relativi → Giovanni copia in `ProxyGuardian/` → commit e push
-
-## Common Tasks — Reference
-
-### Aggiungere un endpoint al backend
-1. Creare route in `backend/src/routes/`
-2. Creare/aggiornare service in `backend/src/services/`
-3. Aggiungere schema zod per validazione
-4. Aggiornare `backend/src/types/api.ts`
-5. Registrare la route in `app.ts`
-
-### Aggiungere un endpoint all'agente
-1. Creare route in `agent/src/routes/`
-2. Assicurarsi che passi per middleware `X-API-Key`
-3. Testare localmente prima del deploy sui VPS
-
-### Deploy agente su nuovo VPS
-1. Copiare cartella `agent/` sul VPS
-2. Configurare `.env` con API key e NetBird IP
-3. Avviare con PM2 o systemd su porta 3001
-4. Registrare il VPS nel db orchestrator
+## Endpoint Agent — Riferimento Rapido
+| Metodo | Path | Descrizione |
+|---|---|---|
+| GET | `/health` | Ping, hostname, timestamp |
+| GET | `/api/services` | Stato nginx/fail2ban/mariadb |
+| POST | `/api/services/:name/action` | start/stop/restart/reload |
+| GET | `/api/banned-ips` | IP bannati da fail2ban |
+| POST | `/api/unban` | Sblocca IP da jail |
+| POST | `/api/unban-all` | Sblocca tutti gli IP |
+| GET | `/api/stats` | Connessioni porta 8880, ban attivi |
+| GET | `/api/logs/:type` | nginx_access/nginx_error/fail2ban/system |
+| GET | `/api/grep` | Ricerca nei log con query sanitizzata |
+| GET | `/api/system` | CPU, RAM, disco, uptime |
+| GET/POST | `/api/config/:filename` | Leggi/scrivi file config nginx/fail2ban |
+| GET | `/api/fail2ban/jails` | Lista jail con parametri |
+| POST | `/api/fail2ban/jails/:name` | Modifica parametri jail |
+| GET | `/api/fail2ban/filters` | Lista filter.d |
+| GET/POST | `/api/fail2ban/filters/:name` | Leggi/scrivi filtro |
+| POST | `/api/nginx/test` | nginx -t |
+| POST | `/api/nginx/reload` | test + reload nginx |
 
 ## Do NOT
-- Non riscrivere `middleware/auth.ts` senza conferma
-- Non usare `any` in TypeScript
-- Non committare `.env` o file con secrets
-- Non esporre endpoint agente su IP pubblici (solo NetBird)
-- Non fare query SQL con interpolazione di stringhe
-- Non aggiungere dipendenze npm senza valutare alternative già presenti
+- Non committare `.env` o `data/vps.json`
+- Non esporre agent su IP pubblici — solo NetBird o con firewall
+- Non modificare `server/auth.ts` senza conferma esplicita
+- Non dimenticare il rebuild di `agent-bundle.js` dopo modifiche all'agent
+- Non usare `npm install` senza verificare le dipendenze già presenti
