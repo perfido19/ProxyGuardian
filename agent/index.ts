@@ -423,6 +423,47 @@ app.post("/api/netbird/update", async (_req, res) => {
   res.json({ ok: result.ok, output: result.stdout || result.stderr, running: status.stdout.trim() === "active" });
 });
 
+app.get("/api/netbird/status", async (_req, res) => {
+  try {
+    const [serviceResult, statusResult] = await Promise.all([
+      runCmd("systemctl is-active netbird 2>/dev/null"),
+      runCmd("netbird status 2>/dev/null"),
+    ]);
+    const running = serviceResult.stdout.trim() === "active";
+    const output = statusResult.stdout;
+
+    const ipMatch = output.match(/NetBird IP:\s*([\d.]+)(?:\/\d+)?/);
+    const ip = ipMatch ? ipMatch[1] : null;
+
+    const managementMatch = output.match(/Management:\s*(\w+)/);
+    const connected = managementMatch ? managementMatch[1] === "Connected" : false;
+
+    const peers: Array<{ name: string; ip: string; latency: string; connected: boolean }> = [];
+    const peerSectionMatch = output.match(/^Peers:\n([\s\S]*)/m);
+    if (peerSectionMatch) {
+      const entries = peerSectionMatch[1].split(/\n(?= \S)/);
+      for (const entry of entries) {
+        const nameMatch = entry.match(/^ (.+)/);
+        const peerIpMatch = entry.match(/NetBird IP:\s*([\d.]+)/);
+        const latencyMatch = entry.match(/Latency:\s*(\S+)/);
+        const statusMatch = entry.match(/Status:\s*(\w+)/);
+        if (nameMatch && peerIpMatch) {
+          peers.push({
+            name: nameMatch[1].trim(),
+            ip: peerIpMatch[1],
+            latency: latencyMatch ? latencyMatch[1] : "?",
+            connected: statusMatch ? statusMatch[1] === "Connected" : false,
+          });
+        }
+      }
+    }
+
+    res.json({ running, connected, ip, peers });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Grep / search ────────────────────────────────────────────────────────────
 
 app.get("/api/grep", async (req, res) => {
