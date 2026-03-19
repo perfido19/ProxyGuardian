@@ -151,22 +151,19 @@ app.post("/api/unban-all", async (_req, res) => {
 
 app.get("/api/stats", async (_req, res) => {
   try {
-    const connections = await runCmd("ss -tn state established 'dport = :8880' | wc -l");
-    const activeConnections = Math.max(0, (parseInt(connections.stdout) || 1) - 1); // subtract header line
+    const connections = await runCmd("ss -tn state established 'dport = :8880' 2>/dev/null | wc -l");
+    const activeConnections = Math.max(0, (parseInt(connections.stdout) || 1) - 1);
 
-    const { stdout: fail2banStatus } = await runCmd("sudo fail2ban-client status 2>/dev/null || echo ''");
-    const totalBannedMatch = fail2banStatus.match(/Currently banned:\s*(\d+)/);
-    const totalBans24h = totalBannedMatch ? parseInt(totalBannedMatch[1]) : 0;
+    const { stdout: jailList } = await runCmd("sudo fail2ban-client status 2>/dev/null | grep 'Jail list' | cut -d: -f2 || echo ''");
+    const jails = jailList.split(",").map((j: string) => j.trim()).filter(Boolean);
+    let totalBans24h = 0;
+    for (const jail of jails) {
+      const { stdout } = await runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`);
+      const match = stdout.match(/Currently banned:\s*(\d+)/);
+      if (match) totalBans24h += parseInt(match[1]);
+    }
 
-    res.json({
-      totalBans24h,
-      activeConnections,
-      blockedCountries: 0,
-      totalRequests24h: 0,
-      topBannedIps: [],
-      bansByCountry: [],
-      banTimeline: [],
-    });
+    res.json({ totalBans24h, activeConnections, blockedCountries: 0, totalRequests24h: 0, topBannedIps: [], bansByCountry: [], banTimeline: [] });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -411,6 +408,23 @@ app.get("/api/netbird", async (_req, res) => {
 app.post("/api/netbird/restart", async (_req, res) => {
   const result = await runCmd("sudo systemctl restart netbird");
   res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post("/api/netbird/start", async (_req, res) => {
+  const result = await runCmd("sudo systemctl start netbird");
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post("/api/netbird/stop", async (_req, res) => {
+  const result = await runCmd("sudo systemctl stop netbird");
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post("/api/netbird/update", async (_req, res) => {
+  const result = await runCmd("sudo apt-get install -y netbird 2>&1");
+  await new Promise(r => setTimeout(r, 2000));
+  const status = await runCmd("systemctl is-active netbird 2>/dev/null");
+  res.json({ ok: result.ok, output: result.stdout || result.stderr, running: status.stdout.trim() === "active" });
 });
 
 // ─── Grep / search ────────────────────────────────────────────────────────────
