@@ -17,7 +17,7 @@ import {
   ArrowLeft, RefreshCw, Server, Shield, Activity,
   HardDrive, Cpu, MemoryStick, CheckCircle, XCircle,
   Play, Square, RotateCw, ShieldOff, Wifi, WifiOff,
-  FileText, Settings, Save, AlertTriangle, Search,
+  FileText, Settings, Save, AlertTriangle, Search, Plus, Trash2, Network,
 } from "lucide-react";
 
 interface ServiceStatus { name: string; status: string; pid?: number; uptime?: string; }
@@ -30,6 +30,9 @@ interface SystemInfo {
   load: { "1m": number; "5m": number; "15m": number };
 }
 interface Jail { name: string; enabled: boolean; banTime: number; maxRetry: number; findTime: number; }
+interface IpSetMeta { name: string; type: string; count: number; }
+interface IpSetDetail extends IpSetMeta { members: string[]; }
+interface IpTablesChain { name: string; policy: string; rules: string[]; }
 
 const REFETCH = 60000;
 
@@ -71,11 +74,15 @@ export default function VpsDetail() {
   const [ipSearch, setIpSearch] = useState("");
   const [logSearch, setLogSearch] = useState("");
   const [debouncedLogSearch, setDebouncedLogSearch] = useState("");
+  const [selectedIpset, setSelectedIpset] = useState("");
+  const [ipsetSearch, setIpsetSearch] = useState("");
+  const [newIp, setNewIp] = useState("");
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedLogSearch(logSearch), 400);
     return () => clearTimeout(t);
   }, [logSearch]);
+
 
   const proxy = (path: string) => `/api/vps/${id}/proxy${path}`;
 
@@ -111,6 +118,30 @@ export default function VpsDetail() {
     enabled: !!vps,
     refetchInterval: REFETCH,
   });
+
+  const { data: ipsets, refetch: refetchIpsets } = useQuery<IpSetMeta[]>({
+    queryKey: [`vps-${id}-ipsets`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/ipset")); return r.json(); },
+    enabled: !!vps,
+    refetchInterval: REFETCH,
+  });
+
+  const { data: ipsetDetail, isLoading: ipsetDetailLoading, refetch: refetchIpsetDetail } = useQuery<IpSetDetail>({
+    queryKey: [`vps-${id}-ipset-${selectedIpset}`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy(`/api/ipset/${selectedIpset}`)); return r.json(); },
+    enabled: !!vps && !!selectedIpset,
+  });
+
+  const { data: iptables, refetch: refetchIptables } = useQuery<IpTablesChain[]>({
+    queryKey: [`vps-${id}-iptables`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/iptables")); return r.json(); },
+    enabled: !!vps,
+    refetchInterval: REFETCH,
+  });
+
+  useEffect(() => {
+    if (ipsets?.length && !selectedIpset) setSelectedIpset(ipsets[0].name);
+  }, [ipsets, selectedIpset]);
 
   const { data: jails, isLoading: jailsLoading, refetch: refetchJails } = useQuery<Jail[]>({
     queryKey: [`vps-${id}-jails`],
@@ -157,6 +188,24 @@ export default function VpsDetail() {
       refetchBanned();
       toast({ title: "Tutti gli IP sbloccati", description: `${data.unbannedCount} IP sbloccati` });
     },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const addToIpsetMutation = useMutation({
+    mutationFn: async ({ name, ip }: { name: string; ip: string }) => {
+      const r = await apiRequest("POST", proxy(`/api/ipset/${name}/add`), { ip });
+      return r.json();
+    },
+    onSuccess: () => { refetchIpsetDetail(); refetchIpsets(); setNewIp(""); toast({ title: "IP aggiunto all'ipset" }); },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const removeFromIpsetMutation = useMutation({
+    mutationFn: async ({ name, ip }: { name: string; ip: string }) => {
+      const r = await apiRequest("POST", proxy(`/api/ipset/${name}/remove`), { ip });
+      return r.json();
+    },
+    onSuccess: () => { refetchIpsetDetail(); refetchIpsets(); toast({ title: "IP rimosso dall'ipset" }); },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
@@ -231,6 +280,10 @@ export default function VpsDetail() {
     );
   }
 
+  const filteredMembers = (ipsetDetail?.members || []).filter(ip =>
+    !ipsetSearch || ip.includes(ipsetSearch)
+  );
+
   const filteredBannedIps = (bannedIps || []).filter(item =>
     !ipSearch || item.ip.includes(ipSearch) || item.jail.toLowerCase().includes(ipSearch.toLowerCase())
   );
@@ -254,7 +307,7 @@ export default function VpsDetail() {
           </div>
           <p className="text-sm text-muted-foreground font-mono">{vps.host}:{vps.port}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchSystem(); refetchBanned(); refetchLogs(); refetchJails(); }}>
+        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchSystem(); refetchBanned(); refetchLogs(); refetchJails(); refetchIpsets(); refetchIpsetDetail(); refetchIptables(); }}>
           <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
         </Button>
       </div>
@@ -303,6 +356,7 @@ export default function VpsDetail() {
           <TabsTrigger value="fail2ban">Fail2ban Jail</TabsTrigger>
           <TabsTrigger value="configs">Configurazioni</TabsTrigger>
           <TabsTrigger value="logs">Log</TabsTrigger>
+          <TabsTrigger value="ipset">IPSet / IPTables</TabsTrigger>
         </TabsList>
 
         {/* ── Servizi ── */}
@@ -632,6 +686,167 @@ export default function VpsDetail() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+        {/* ── IPSet / IPTables ── */}
+        <TabsContent value="ipset" className="pt-4 space-y-4">
+
+          {/* IPSet */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />IPSet</CardTitle>
+                  <CardDescription>{ipsets?.length || 0} set configurati</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  {ipsets && ipsets.length > 0 && (
+                    <Select value={selectedIpset} onValueChange={v => { setSelectedIpset(v); setIpsetSearch(""); setNewIp(""); }}>
+                      <SelectTrigger className="w-52">
+                        <SelectValue placeholder="Seleziona ipset..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ipsets.map(s => (
+                          <SelectItem key={s.name} value={s.name}>
+                            {s.name} <span className="text-muted-foreground text-xs ml-1">({s.count})</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <Button size="sm" variant="outline" onClick={() => { refetchIpsets(); refetchIpsetDetail(); }}>
+                    <RefreshCw className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!ipsets?.length ? (
+                <p className="text-center text-muted-foreground py-8">Nessun ipset trovato</p>
+              ) : !selectedIpset ? null : ipsetDetailLoading ? (
+                <LoadingState message="Caricamento ipset..." />
+              ) : (
+                <>
+                  {ipsetDetail && (
+                    <div className="flex gap-4 text-sm text-muted-foreground mb-1">
+                      <span>Tipo: <span className="font-mono text-foreground">{ipsetDetail.type}</span></span>
+                      <span>Entries: <span className="font-semibold text-foreground">{ipsetDetail.members.length}</span></span>
+                    </div>
+                  )}
+
+                  {/* Aggiungi IP */}
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="IP da aggiungere (es. 1.2.3.4)"
+                      value={newIp}
+                      onChange={e => setNewIp(e.target.value)}
+                      className="font-mono"
+                      onKeyDown={e => e.key === "Enter" && newIp && addToIpsetMutation.mutate({ name: selectedIpset, ip: newIp })}
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => addToIpsetMutation.mutate({ name: selectedIpset, ip: newIp })}
+                      disabled={!newIp || addToIpsetMutation.isPending}
+                    >
+                      <Plus className="w-4 h-4 mr-1" />Aggiungi
+                    </Button>
+                  </div>
+
+                  {/* Ricerca */}
+                  {(ipsetDetail?.members.length ?? 0) > 0 && (
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Cerca IP nell'ipset..."
+                        value={ipsetSearch}
+                        onChange={e => setIpsetSearch(e.target.value)}
+                        className="pl-8"
+                      />
+                      {ipsetSearch && (
+                        <span className="absolute right-3 top-2.5 text-xs text-muted-foreground">
+                          {filteredMembers.length} / {ipsetDetail?.members.length}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tabella members */}
+                  {filteredMembers.length === 0 && ipsetSearch ? (
+                    <p className="text-center text-muted-foreground py-6">Nessun risultato per "{ipsetSearch}"</p>
+                  ) : filteredMembers.length === 0 ? (
+                    <p className="text-center text-muted-foreground py-6">IPSet vuoto</p>
+                  ) : (
+                    <div className="border rounded-md max-h-80 overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>IP</TableHead>
+                            <TableHead className="text-right">Azioni</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredMembers.map((ip, i) => (
+                            <TableRow key={i}>
+                              <TableCell className="font-mono text-sm">{ip}</TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => removeFromIpsetMutation.mutate({ name: selectedIpset, ip })}
+                                  disabled={removeFromIpsetMutation.isPending}
+                                >
+                                  <Trash2 className="w-4 h-4 mr-1" />Rimuovi
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* IPTables */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="flex items-center gap-2"><Network className="w-4 h-4" />IPTables</CardTitle>
+                  <CardDescription>{iptables?.length || 0} chain</CardDescription>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => refetchIptables()}>
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!iptables?.length ? (
+                <p className="text-center text-muted-foreground py-8">Nessuna regola trovata</p>
+              ) : (
+                iptables.map(chain => (
+                  <div key={chain.name}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-semibold text-sm font-mono">{chain.name}</span>
+                      <Badge variant="outline" className="text-xs">policy: {chain.policy}</Badge>
+                      <span className="text-xs text-muted-foreground">{chain.rules.length} regole</span>
+                    </div>
+                    {chain.rules.length > 0 && (
+                      <div className="bg-muted rounded-md p-2 font-mono text-xs overflow-x-auto space-y-0.5 max-h-48 overflow-y-auto">
+                        {chain.rules.map((rule, i) => (
+                          <div key={i} className={rule.toLowerCase().includes("drop") || rule.toLowerCase().includes("reject") ? "text-red-400" : "text-muted-foreground"}>
+                            {rule}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
         </TabsContent>
       </Tabs>
     </div>

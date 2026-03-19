@@ -22794,6 +22794,84 @@ app.post("/api/config/:filename", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+function parseIpsetList(output) {
+  const sets = [];
+  const blocks = output.split(/(?=^Name:)/m);
+  for (const block of blocks) {
+    const nameMatch = block.match(/^Name:\s+(.+)/m);
+    const typeMatch = block.match(/^Type:\s+(.+)/m);
+    const countMatch = block.match(/^Number of entries:\s+(\d+)/m);
+    const membersSection = block.match(/^Members:\n([\s\S]*)/m);
+    if (!nameMatch) continue;
+    const members = membersSection ? membersSection[1].trim().split("\n").filter(Boolean) : [];
+    sets.push({
+      name: nameMatch[1].trim(),
+      type: typeMatch ? typeMatch[1].trim() : "unknown",
+      count: countMatch ? parseInt(countMatch[1]) : members.length,
+      members
+    });
+  }
+  return sets;
+}
+app.get("/api/ipset", async (_req, res) => {
+  try {
+    const { stdout, ok } = await runCmd("sudo ipset list");
+    if (!ok) return res.status(500).json({ error: "ipset non disponibile" });
+    const sets = parseIpsetList(stdout);
+    res.json(sets.map(({ members, ...meta }) => ({ ...meta, count: members.length })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get("/api/ipset/:name", async (req, res) => {
+  const { name } = req.params;
+  if (!/^[\w\-]+$/.test(name)) return res.status(400).json({ error: "Nome ipset non valido" });
+  try {
+    const { stdout, ok } = await runCmd(`sudo ipset list ${name}`);
+    if (!ok) return res.status(404).json({ error: "IPSet non trovato" });
+    const sets = parseIpsetList(stdout);
+    if (!sets.length) return res.status(404).json({ error: "IPSet non trovato" });
+    res.json(sets[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/ipset/:name/add", async (req, res) => {
+  const { name } = req.params;
+  const { ip } = req.body;
+  if (!/^[\w\-]+$/.test(name)) return res.status(400).json({ error: "Nome ipset non valido" });
+  if (!ip || !/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
+  const result = await runCmd(`sudo ipset add ${name} ${ip}`);
+  res.json({ ok: result.ok, error: result.ok ? void 0 : result.stderr });
+});
+app.post("/api/ipset/:name/remove", async (req, res) => {
+  const { name } = req.params;
+  const { ip } = req.body;
+  if (!/^[\w\-]+$/.test(name)) return res.status(400).json({ error: "Nome ipset non valido" });
+  if (!ip || !/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
+  const result = await runCmd(`sudo ipset del ${name} ${ip}`);
+  res.json({ ok: result.ok, error: result.ok ? void 0 : result.stderr });
+});
+app.get("/api/iptables", async (_req, res) => {
+  try {
+    const { stdout } = await runCmd("sudo iptables -L -n --line-numbers -v 2>/dev/null");
+    const chains = [];
+    let current = null;
+    for (const line of stdout.split("\n")) {
+      const chainMatch = line.match(/^Chain (\S+) \(policy (\S+)/);
+      if (chainMatch) {
+        if (current) chains.push(current);
+        current = { name: chainMatch[1], policy: chainMatch[2], rules: [] };
+      } else if (current && line.trim() && !line.startsWith("num")) {
+        current.rules.push(line.trim());
+      }
+    }
+    if (current) chains.push(current);
+    res.json(chains);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.get("/api/grep", async (req, res) => {
   const q = String(req.query.q ?? "").trim();
   const logType = String(req.query.type ?? "nginx_access");
