@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Save, Trash2, Wifi, Search } from "lucide-react";
+import { Plus, Save, Trash2, Wifi, Search, RefreshCw } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
@@ -111,6 +111,8 @@ export default function Firewall() {
           <TabsTrigger value="useragent">User-Agent</TabsTrigger>
           <TabsTrigger value="ip">IP Whitelist</TabsTrigger>
           <TabsTrigger value="exclusion">IP Exclusion</TabsTrigger>
+          <TabsTrigger value="iptables">IPTables Banned</TabsTrigger>
+          <TabsTrigger value="ipset">IPSet</TabsTrigger>
         </TabsList>
         <TabsContent value="countries"><CountriesTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="asn"><AsnTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
@@ -118,6 +120,8 @@ export default function Firewall() {
         <TabsContent value="useragent"><UserAgentTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="ip"><IpWhitelistTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="exclusion"><ExclusionIpTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
+        <TabsContent value="iptables"><IpTablesSearchTab /></TabsContent>
+        <TabsContent value="ipset"><IpSetViewTab /></TabsContent>
       </Tabs>
     </div>
   );
@@ -620,6 +624,172 @@ function ExclusionIpTab({ refVps, saveTarget, totalCount }: TabProps) {
             <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── IPTables Banned IPs ────────────────────────────────────────────────────────
+
+function IpTablesSearchTab() {
+  const { data: vpsList } = useVpsList();
+  const { data: healthMap } = useVpsHealth();
+  const [selectedVps, setSelectedVps] = useState("all");
+  const [search, setSearch] = useState("");
+
+  const onlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
+  const targetIds = selectedVps === "all" ? onlineVps.map(v => v.id) : [selectedVps];
+
+  const { data: results, isLoading, refetch } = useQuery<any[]>({
+    queryKey: ["firewall-iptables", selectedVps],
+    queryFn: async () => {
+      const r = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: targetIds, path: "/api/iptables" });
+      return r.json();
+    },
+    enabled: targetIds.length > 0,
+    refetchInterval: 60000,
+  });
+
+  const bannedEntries: Array<{ vpsName: string; chain: string; rule: string }> = [];
+  (results || []).filter((r: any) => r.success).forEach((r: any) => {
+    (r.data || []).forEach((chain: any) => {
+      chain.rules.filter((rule: string) =>
+        rule.toLowerCase().includes("drop") || rule.toLowerCase().includes("reject")
+      ).forEach((rule: string) => {
+        bannedEntries.push({ vpsName: r.vpsName, chain: chain.name, rule });
+      });
+    });
+  });
+
+  const filtered = search
+    ? bannedEntries.filter(e => e.rule.includes(search) || e.vpsName.toLowerCase().includes(search.toLowerCase()))
+    : bannedEntries;
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <CardTitle>IP Bannati — IPTables</CardTitle>
+            <CardDescription>Regole DROP/REJECT da tutti i VPS selezionati</CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <VpsSelector value={selectedVps} onChange={setSelectedVps} />
+            <Button size="sm" variant="outline" onClick={() => refetch()}><RefreshCw className="w-4 h-4" /></Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca IP, VPS o chain..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 font-mono" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {bannedEntries.length} risultati</p>}
+        {isLoading ? <LoadingState message="Caricamento regole..." /> : (
+          <div className="border rounded-md">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>VPS</TableHead>
+                  <TableHead>Chain</TableHead>
+                  <TableHead>Regola</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.length === 0 ? (
+                  <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessuna regola DROP/REJECT trovata"}</TableCell></TableRow>
+                ) : filtered.map((entry, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="text-sm font-medium">{entry.vpsName}</TableCell>
+                    <TableCell><Badge variant="outline" className="font-mono text-xs">{entry.chain}</Badge></TableCell>
+                    <TableCell className="font-mono text-xs text-red-400">{entry.rule}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── IPSet View ─────────────────────────────────────────────────────────────────
+
+function IpSetViewTab() {
+  const { data: vpsList } = useVpsList();
+  const { data: healthMap } = useVpsHealth();
+  const [selectedVps, setSelectedVps] = useState("all");
+  const [search, setSearch] = useState("");
+
+  const onlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
+  const targetIds = selectedVps === "all" ? onlineVps.map(v => v.id) : [selectedVps];
+
+  const { data: results, isLoading, refetch } = useQuery<any[]>({
+    queryKey: ["firewall-ipset", selectedVps],
+    queryFn: async () => {
+      const r = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: targetIds, path: "/api/ipset" });
+      return r.json();
+    },
+    enabled: targetIds.length > 0,
+    refetchInterval: 60000,
+  });
+
+  const byVps = (results || []).filter((r: any) => r.success);
+  const filtered = search
+    ? byVps.map((r: any) => ({ ...r, data: (r.data || []).filter((s: any) => s.name.toLowerCase().includes(search.toLowerCase())) })).filter((r: any) => r.data.length > 0)
+    : byVps;
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <CardTitle>IPSet</CardTitle>
+            <CardDescription>Visualizza ipset configurati per VPS</CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <VpsSelector value={selectedVps} onChange={setSelectedVps} />
+            <Button size="sm" variant="outline" onClick={() => refetch()}><RefreshCw className="w-4 h-4" /></Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca nome ipset..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 font-mono" />
+        </div>
+        {isLoading ? <LoadingState message="Caricamento ipset..." /> : filtered.length === 0 ? (
+          <p className="text-center text-muted-foreground py-8">Nessun VPS online o nessun ipset trovato</p>
+        ) : (
+          filtered.map((r: any) => (
+            <div key={r.vpsId} className="space-y-2">
+              <p className="text-sm font-semibold">{r.vpsName}</p>
+              <div className="border rounded-md">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Nome</TableHead>
+                      <TableHead>Tipo</TableHead>
+                      <TableHead>Entries</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(r.data || []).length === 0 ? (
+                      <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground text-sm">Nessun ipset</TableCell></TableRow>
+                    ) : (r.data || []).map((s: any) => (
+                      <TableRow key={s.name}>
+                        <TableCell className="font-mono text-sm">{s.name}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{s.type}</TableCell>
+                        <TableCell><Badge variant="outline">{s.count}</Badge></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          ))
+        )}
       </CardContent>
     </Card>
   );
