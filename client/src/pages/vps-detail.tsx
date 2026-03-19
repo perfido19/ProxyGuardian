@@ -77,6 +77,8 @@ export default function VpsDetail() {
   const [selectedIpset, setSelectedIpset] = useState("");
   const [ipsetSearch, setIpsetSearch] = useState("");
   const [newIp, setNewIp] = useState("");
+  const [showAddRule, setShowAddRule] = useState<string | null>(null);
+  const [ruleForm, setRuleForm] = useState({ target: "DROP", protocol: "all", source: "", dport: "", position: "append" });
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedLogSearch(logSearch), 400);
@@ -268,6 +270,56 @@ export default function VpsDetail() {
       toast({ title: "Jail aggiornata" });
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteIptableRuleMutation = useMutation({
+    mutationFn: async ({ chain, linenum }: { chain: string; linenum: string }) => {
+      const r = await apiRequest("DELETE", proxy(`/api/iptables/${chain}/${linenum}`));
+      return r.json();
+    },
+    onSuccess: () => { refetchIptables(); toast({ title: "Regola eliminata" }); },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const addIptableRuleMutation = useMutation({
+    mutationFn: async ({ chain, ...body }: { chain: string; target: string; protocol: string; source: string; dport: string; position: string }) => {
+      const r = await apiRequest("POST", proxy(`/api/iptables/${chain}/rule`), body);
+      return r.json();
+    },
+    onSuccess: () => {
+      refetchIptables();
+      setShowAddRule(null);
+      setRuleForm({ target: "DROP", protocol: "all", source: "", dport: "", position: "append" });
+      toast({ title: "Regola aggiunta" });
+    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const changeIptablePolicyMutation = useMutation({
+    mutationFn: async ({ chain, policy }: { chain: string; policy: string }) => {
+      const r = await apiRequest("POST", proxy(`/api/iptables/${chain}/policy`), { policy });
+      return r.json();
+    },
+    onSuccess: () => { refetchIptables(); toast({ title: "Policy aggiornata" }); },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const flushIptableChainMutation = useMutation({
+    mutationFn: async (chain: string) => {
+      const r = await apiRequest("POST", proxy(`/api/iptables/${chain}/flush`), {});
+      return r.json();
+    },
+    onSuccess: () => { refetchIptables(); toast({ title: "Chain svuotata" }); },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const saveIptablesMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", proxy("/api/iptables-save"), {});
+      return r.json();
+    },
+    onSuccess: () => toast({ title: "Regole salvate su disco" }),
+    onError: (e: any) => toast({ title: "Errore salvataggio", description: e.message, variant: "destructive" }),
   });
 
   if (!vpsList) return <LoadingState message="Caricamento..." />;
@@ -811,34 +863,140 @@ export default function VpsDetail() {
           {/* IPTables */}
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div>
                   <CardTitle className="flex items-center gap-2"><Network className="w-4 h-4" />IPTables</CardTitle>
                   <CardDescription>{iptables?.length || 0} chain</CardDescription>
                 </div>
-                <Button size="sm" variant="outline" onClick={() => refetchIptables()}>
-                  <RefreshCw className="w-4 h-4" />
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={() => saveIptablesMutation.mutate()} disabled={saveIptablesMutation.isPending}>
+                    <Save className="w-4 h-4 mr-1" />Salva regole
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => refetchIptables()}>
+                    <RefreshCw className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               {!iptables?.length ? (
                 <p className="text-center text-muted-foreground py-8">Nessuna regola trovata</p>
               ) : (
                 iptables.map(chain => (
-                  <div key={chain.name}>
-                    <div className="flex items-center gap-2 mb-1">
+                  <div key={chain.name} className="space-y-2">
+                    {/* Chain header */}
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-sm font-mono">{chain.name}</span>
                       <Badge variant="outline" className="text-xs">policy: {chain.policy}</Badge>
                       <span className="text-xs text-muted-foreground">{chain.rules.length} regole</span>
+                      <div className="ml-auto flex items-center gap-1">
+                        <Select onValueChange={policy => changeIptablePolicyMutation.mutate({ chain: chain.name, policy })}>
+                          <SelectTrigger className="h-7 text-xs w-28">
+                            <SelectValue placeholder="Policy..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="ACCEPT">ACCEPT</SelectItem>
+                            <SelectItem value="DROP">DROP</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowAddRule(showAddRule === chain.name ? null : chain.name)}>
+                          <Plus className="w-3 h-3 mr-1" />Aggiungi
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs text-destructive hover:text-destructive"
+                          onClick={() => { if (confirm(`Svuotare la chain ${chain.name}?`)) flushIptableChainMutation.mutate(chain.name); }}
+                          disabled={flushIptableChainMutation.isPending}
+                        >
+                          <Trash2 className="w-3 h-3 mr-1" />Flush
+                        </Button>
+                      </div>
                     </div>
-                    {chain.rules.length > 0 && (
-                      <div className="bg-muted rounded-md p-2 font-mono text-xs overflow-x-auto space-y-0.5 max-h-48 overflow-y-auto">
-                        {chain.rules.map((rule, i) => (
-                          <div key={i} className={rule.toLowerCase().includes("drop") || rule.toLowerCase().includes("reject") ? "text-red-400" : "text-muted-foreground"}>
-                            {rule}
+
+                    {/* Add rule form */}
+                    {showAddRule === chain.name && (
+                      <div className="border rounded-md p-3 space-y-2 bg-muted/30">
+                        <p className="text-xs font-medium">Nuova regola in {chain.name}</p>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <div>
+                            <label className="text-xs text-muted-foreground">Target</label>
+                            <Select value={ruleForm.target} onValueChange={v => setRuleForm(f => ({ ...f, target: v }))}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="ACCEPT">ACCEPT</SelectItem>
+                                <SelectItem value="DROP">DROP</SelectItem>
+                                <SelectItem value="REJECT">REJECT</SelectItem>
+                                <SelectItem value="LOG">LOG</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
-                        ))}
+                          <div>
+                            <label className="text-xs text-muted-foreground">Protocollo</label>
+                            <Select value={ruleForm.protocol} onValueChange={v => setRuleForm(f => ({ ...f, protocol: v }))}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="all">all</SelectItem>
+                                <SelectItem value="tcp">tcp</SelectItem>
+                                <SelectItem value="udp">udp</SelectItem>
+                                <SelectItem value="icmp">icmp</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <label className="text-xs text-muted-foreground">Source IP</label>
+                            <Input className="h-8 text-xs font-mono" placeholder="es. 1.2.3.4/24" value={ruleForm.source} onChange={e => setRuleForm(f => ({ ...f, source: e.target.value }))} />
+                          </div>
+                          <div>
+                            <label className="text-xs text-muted-foreground">Porta dest.</label>
+                            <Input className="h-8 text-xs font-mono" placeholder="es. 80" value={ruleForm.dport} onChange={e => setRuleForm(f => ({ ...f, dport: e.target.value }))} disabled={ruleForm.protocol === "all" || ruleForm.protocol === "icmp"} />
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Select value={ruleForm.position} onValueChange={v => setRuleForm(f => ({ ...f, position: v }))}>
+                            <SelectTrigger className="h-7 text-xs w-36"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="append">Append (-A)</SelectItem>
+                              <SelectItem value="insert">Insert (-I)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Button size="sm" className="h-7 text-xs" onClick={() => addIptableRuleMutation.mutate({ chain: chain.name, ...ruleForm })} disabled={addIptableRuleMutation.isPending}>
+                            <Plus className="w-3 h-3 mr-1" />Aggiungi
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowAddRule(null)}>Annulla</Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Rules list */}
+                    {chain.rules.length > 0 && (
+                      <div className="border rounded-md overflow-hidden">
+                        <Table>
+                          <TableBody>
+                            {chain.rules.map((rule, i) => {
+                              const linenum = rule.match(/^(\d+)/)?.[1];
+                              const isDrop = rule.toLowerCase().includes("drop") || rule.toLowerCase().includes("reject");
+                              return (
+                                <TableRow key={i}>
+                                  <TableCell className={`font-mono text-xs ${isDrop ? "text-red-400" : "text-muted-foreground"}`}>{rule}</TableCell>
+                                  <TableCell className="text-right w-12">
+                                    {linenum && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-6 px-2 text-destructive hover:text-destructive"
+                                        onClick={() => deleteIptableRuleMutation.mutate({ chain: chain.name, linenum })}
+                                        disabled={deleteIptableRuleMutation.isPending}
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </Button>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
                       </div>
                     )}
                   </div>

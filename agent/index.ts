@@ -344,6 +344,53 @@ app.get("/api/iptables", async (_req, res) => {
   }
 });
 
+app.delete("/api/iptables/:chain/:linenum", async (req, res) => {
+  const { chain, linenum } = req.params;
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(chain)) return res.status(400).json({ error: "Chain non valida" });
+  if (!/^\d+$/.test(linenum)) return res.status(400).json({ error: "Numero riga non valido" });
+  const result = await runCmd(`sudo iptables -D ${chain} ${linenum}`);
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post("/api/iptables/:chain/rule", async (req, res) => {
+  const { chain } = req.params;
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(chain)) return res.status(400).json({ error: "Chain non valida" });
+  const { target, protocol, source, dport, position } = req.body;
+  if (!target || !/^(ACCEPT|DROP|REJECT|LOG)$/.test(target)) return res.status(400).json({ error: "Target non valido" });
+  const flag = position === "insert" ? "-I" : "-A";
+  const parts: string[] = [flag, chain];
+  if (protocol && /^(tcp|udp|icmp|all)$/.test(protocol)) parts.push("-p", protocol);
+  if (source && /^[\d./]+$/.test(source)) parts.push("-s", source);
+  if (dport && /^\d+$/.test(dport) && protocol && protocol !== "icmp" && protocol !== "all") parts.push("--dport", dport);
+  parts.push("-j", target);
+  const result = await runCmd(`sudo iptables ${parts.join(" ")}`);
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post("/api/iptables/:chain/policy", async (req, res) => {
+  const { chain } = req.params;
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(chain)) return res.status(400).json({ error: "Chain non valida" });
+  const { policy } = req.body;
+  if (!policy || !/^(ACCEPT|DROP)$/.test(policy)) return res.status(400).json({ error: "Policy deve essere ACCEPT o DROP" });
+  const result = await runCmd(`sudo iptables -P ${chain} ${policy}`);
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post("/api/iptables/:chain/flush", async (req, res) => {
+  const { chain } = req.params;
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(chain)) return res.status(400).json({ error: "Chain non valida" });
+  const result = await runCmd(`sudo iptables -F ${chain}`);
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post("/api/iptables-save", async (_req, res) => {
+  let result = await runCmd("sudo netfilter-persistent save 2>/dev/null");
+  if (!result.ok) {
+    result = await runCmd("sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null 2>&1");
+  }
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
 // ─── Grep / search ────────────────────────────────────────────────────────────
 
 app.get("/api/grep", async (req, res) => {
