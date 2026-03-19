@@ -46,16 +46,11 @@ async function runCmd(cmd: string): Promise<{ stdout: string; stderr: string; ok
 }
 
 async function getServiceStatus(name: string) {
-  const { stdout, ok } = await runCmd(`sudo systemctl status ${name} --no-pager -l`);
-  const active = /Active:\s+active/.test(stdout);
-  const pidMatch = stdout.match(/Main PID:\s+(\d+)/);
-  const uptimeMatch = stdout.match(/Active:.*?since.*?;\s+(.+?)(\n|$)/);
+  const { stdout } = await runCmd(`systemctl is-active ${name} 2>/dev/null`);
+  const state = stdout.trim().toLowerCase();
   return {
     name,
-    status: ok && active ? "running" : "stopped",
-    pid: pidMatch ? parseInt(pidMatch[1]) : undefined,
-    uptime: uptimeMatch ? uptimeMatch[1].trim() : undefined,
-    raw: stdout,
+    status: state === "active" ? "running" : "stopped",
   };
 }
 
@@ -102,17 +97,16 @@ app.post("/api/services/:name/action", async (req, res) => {
 
 app.get("/api/banned-ips", async (_req, res) => {
   try {
-    const { stdout: jailList } = await runCmd("sudo fail2ban-client status | grep 'Jail list' | cut -d: -f2");
-    const jails = jailList.split(",").map(j => j.trim()).filter(Boolean);
+    const { stdout: jailList } = await runCmd("sudo fail2ban-client status 2>/dev/null | grep -i 'jail list' | cut -d: -f2");
+    const jails = jailList.split(",").map((j: string) => j.trim()).filter(Boolean);
     const bannedIps: object[] = [];
     for (const jail of jails) {
-      const { stdout } = await runCmd(`sudo fail2ban-client status ${jail}`);
-      const match = stdout.match(/Banned IP list:\s*([\d\.\s,]+)/);
-      if (match) {
-        const ips = match[1].split(/[\s,]+/).filter(ip => /^\d+\.\d+\.\d+\.\d+$/.test(ip));
-        for (const ip of ips) {
-          bannedIps.push({ ip, jail, banTime: new Date().toISOString() });
-        }
+      const { stdout } = await runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`);
+      // Match "Banned IP list:" line and extract all IPv4 addresses from it (handles any whitespace/comma separator)
+      const listLine = stdout.split("\n").find(l => /banned ip list/i.test(l)) ?? "";
+      const ips = listLine.match(/\d+\.\d+\.\d+\.\d+/g) ?? [];
+      for (const ip of ips) {
+        bannedIps.push({ ip, jail, banTime: new Date().toISOString() });
       }
     }
     res.json(bannedIps);
@@ -151,15 +145,17 @@ app.post("/api/unban-all", async (_req, res) => {
 
 app.get("/api/stats", async (_req, res) => {
   try {
-    const connections = await runCmd("ss -tn state established 'dport = :8880' 2>/dev/null | wc -l");
-    const activeConnections = Math.max(0, (parseInt(connections.stdout) || 1) - 1);
+    // Count connections to port 8880 — grep avoids header-line ambiguity
+    const { stdout: connOut } = await runCmd("ss -tn 2>/dev/null | grep -c ':8880' || echo 0");
+    const activeConnections = parseInt(connOut.trim()) || 0;
 
-    const { stdout: jailList } = await runCmd("sudo fail2ban-client status 2>/dev/null | grep 'Jail list' | cut -d: -f2 || echo ''");
+    // Sum currently-banned across all fail2ban jails
+    const { stdout: jailList } = await runCmd("sudo fail2ban-client status 2>/dev/null | grep -i 'jail list' | cut -d: -f2 || echo ''");
     const jails = jailList.split(",").map((j: string) => j.trim()).filter(Boolean);
     let totalBans24h = 0;
     for (const jail of jails) {
       const { stdout } = await runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`);
-      const match = stdout.match(/Currently banned:\s*(\d+)/);
+      const match = stdout.match(/Currently banned:\s*(\d+)/i);
       if (match) totalBans24h += parseInt(match[1]);
     }
 
