@@ -17,7 +17,7 @@ import {
   ArrowLeft, RefreshCw, Server, Shield, Activity,
   HardDrive, Cpu, MemoryStick, CheckCircle, XCircle,
   Play, Square, RotateCw, ShieldOff, Wifi, WifiOff,
-  FileText, Settings, Save, AlertTriangle, Search, Plus, Trash2, Network,
+  FileText, Settings, Save, AlertTriangle, Search, Plus, Trash2, Network, Radio, ArrowUpCircle,
 } from "lucide-react";
 
 interface ServiceStatus { name: string; status: string; pid?: number; uptime?: string; }
@@ -33,6 +33,8 @@ interface Jail { name: string; enabled: boolean; banTime: number; maxRetry: numb
 interface IpSetMeta { name: string; type: string; count: number; }
 interface IpSetDetail extends IpSetMeta { members: string[]; }
 interface IpTablesChain { name: string; policy: string; rules: string[]; }
+interface NetbirdPeer { name: string; ip: string; latency: string; connected: boolean; }
+interface NetbirdStatus { running: boolean; connected: boolean; ip: string | null; peers: NetbirdPeer[]; }
 
 const REFETCH = 60000;
 
@@ -322,6 +324,26 @@ export default function VpsDetail() {
     onError: (e: any) => toast({ title: "Errore salvataggio", description: e.message, variant: "destructive" }),
   });
 
+  const { data: netbirdStatus, refetch: refetchNetbird } = useQuery<NetbirdStatus>({
+    queryKey: [`vps-${id}-netbird-status`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/netbird/status")); return r.json(); },
+    enabled: !!vps,
+    refetchInterval: REFETCH,
+  });
+
+  const netbirdActionMutation = useMutation({
+    mutationFn: async (action: string) => {
+      const r = await apiRequest("POST", proxy(`/api/netbird/${action}`), {});
+      return r.json();
+    },
+    onSuccess: (_, action) => {
+      setTimeout(() => refetchNetbird(), action === "update" ? 5000 : 3000);
+      const labels: Record<string, string> = { restart: "riavviato", start: "avviato", stop: "fermato", update: "aggiornato" };
+      toast({ title: `NetBird ${labels[action] ?? action}` });
+    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
   if (!vpsList) return <LoadingState message="Caricamento..." />;
   if (!vps) {
     return (
@@ -359,7 +381,7 @@ export default function VpsDetail() {
           </div>
           <p className="text-sm text-muted-foreground font-mono">{vps.host}:{vps.port}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchSystem(); refetchBanned(); refetchLogs(); refetchJails(); refetchIpsets(); refetchIpsetDetail(); refetchIptables(); }}>
+        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchSystem(); refetchBanned(); refetchLogs(); refetchJails(); refetchIpsets(); refetchIpsetDetail(); refetchIptables(); refetchNetbird(); }}>
           <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
         </Button>
       </div>
@@ -408,7 +430,8 @@ export default function VpsDetail() {
           <TabsTrigger value="fail2ban">Fail2ban Jail</TabsTrigger>
           <TabsTrigger value="configs">Configurazioni</TabsTrigger>
           <TabsTrigger value="logs">Log</TabsTrigger>
-          <TabsTrigger value="ipset">IPSet / IPTables</TabsTrigger>
+          <TabsTrigger value="ipset">IPTables</TabsTrigger>
+          <TabsTrigger value="netbird">NetBird</TabsTrigger>
         </TabsList>
 
         {/* ── Servizi ── */}
@@ -422,7 +445,7 @@ export default function VpsDetail() {
             </Button>
           </div>
           {servicesLoading ? <LoadingState message="Caricamento servizi..." /> : (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               {(services || []).map(svc => (
                 <Card key={svc.name}>
                   <CardHeader className="pb-3">
@@ -451,6 +474,31 @@ export default function VpsDetail() {
                   </CardContent>
                 </Card>
               ))}
+              {/* NetBird card */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">netbird</CardTitle>
+                    <Badge className={netbirdStatus?.running ? "bg-green-600 text-white" : "bg-destructive text-white"}>
+                      {netbirdStatus?.running ? "running" : "stopped"}
+                    </Badge>
+                  </div>
+                  {netbirdStatus?.ip && <CardDescription className="text-xs font-mono">{netbirdStatus.ip}</CardDescription>}
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-2 flex-wrap">
+                    <Button size="sm" variant="outline" onClick={() => netbirdActionMutation.mutate("stop")} disabled={netbirdActionMutation.isPending}>
+                      <Square className="w-3 h-3 mr-1" />Stop
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => netbirdActionMutation.mutate("restart")} disabled={netbirdActionMutation.isPending}>
+                      <RotateCw className="w-3 h-3 mr-1" />Restart
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => netbirdActionMutation.mutate("update")} disabled={netbirdActionMutation.isPending}>
+                      <ArrowUpCircle className="w-3 h-3 mr-1" />Update
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           )}
         </TabsContent>
@@ -1005,6 +1053,88 @@ export default function VpsDetail() {
             </CardContent>
           </Card>
 
+        </TabsContent>
+
+        {/* ── NetBird ── */}
+        <TabsContent value="netbird" className="pt-4 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2"><Radio className="w-4 h-4" />Servizio</div>
+                <Badge className={netbirdStatus?.running ? "bg-green-600 text-white" : "bg-destructive text-white"}>
+                  {netbirdStatus?.running ? "Running" : "Stopped"}
+                </Badge>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2"><Wifi className="w-4 h-4" />Connessione</div>
+                <Badge className={netbirdStatus?.connected ? "bg-green-600 text-white" : "bg-destructive text-white"}>
+                  {netbirdStatus?.connected ? "Connected" : "Disconnected"}
+                </Badge>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2"><Network className="w-4 h-4" />IP NetBird</div>
+                <p className="font-mono font-semibold">{netbirdStatus?.ip ?? "—"}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="text-base">Peers</CardTitle>
+                  <CardDescription>{netbirdStatus?.peers?.length ?? 0} peer connessi</CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => netbirdActionMutation.mutate("restart")} disabled={netbirdActionMutation.isPending}>
+                    <RotateCw className="w-4 h-4 mr-1" />Reconnect
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => netbirdActionMutation.mutate("update")} disabled={netbirdActionMutation.isPending}>
+                    <ArrowUpCircle className="w-4 h-4 mr-1" />Update
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => refetchNetbird()}>
+                    <RefreshCw className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {!netbirdStatus?.peers?.length ? (
+                <p className="text-center text-muted-foreground py-8">Nessun peer trovato</p>
+              ) : (
+                <div className="border rounded-md">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Nome</TableHead>
+                        <TableHead>IP</TableHead>
+                        <TableHead>Latenza</TableHead>
+                        <TableHead>Stato</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {netbirdStatus.peers.map((peer, i) => (
+                        <TableRow key={i}>
+                          <TableCell className="font-medium text-sm">{peer.name}</TableCell>
+                          <TableCell className="font-mono text-sm">{peer.ip}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{peer.latency}</TableCell>
+                          <TableCell>
+                            <Badge className={peer.connected ? "bg-green-600 text-white" : "bg-destructive text-white"}>
+                              {peer.connected ? "Connected" : "Disconnected"}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>
