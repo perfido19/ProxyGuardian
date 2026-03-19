@@ -1,6 +1,11 @@
 {
   "version": 1,
   "skills": {
+    "claude-md-management": {
+      "source": "giuseppe-trisciuoglio/developer-kit",
+      "sourceType": "github",
+      "computedHash": "59f0078c8012bf749b88c00f40a6464b5888408d83862c0ec12fe3da37fa4a53"
+    },
     "frontend-design": {
       "source": "anthropics/skills",
       "sourceType": "github",

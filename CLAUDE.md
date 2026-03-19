@@ -14,7 +14,7 @@ Full-stack dashboard per la gestione di infrastrutture proxy (nginx, fail2ban, M
 | Auth | Cookie session + ruoli RBAC (admin / operator / viewer) |
 | Validazione | Zod (schemi in `shared/schema.ts`) |
 | Build agent | ESBuild → `agent/agent-bundle.js` |
-| Deploy dashboard | PM2 su VPS `185.229.236.50` in `/root/proxy-dashboard/` |
+| Deploy dashboard | PM2 su VPS dashboard in `/root/proxy-dashboard/` |
 
 ## Struttura Reale del Progetto
 ```
