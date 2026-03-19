@@ -82,7 +82,7 @@ function AppLayout() {
         <div className="flex flex-col flex-1 overflow-hidden">
           <Header />
           <main className="flex-1 overflow-auto p-8 bg-background">
-            <div className="mx-auto max-w-7xl"><Router /></div>
+            <Router />
           </main>
         </div>
       </div>
