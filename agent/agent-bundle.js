@@ -22730,11 +22730,19 @@ var LOG_PATHS = {
 app.get("/api/logs/:logType", async (req, res) => {
   const { logType } = req.params;
   const lines = Math.min(parseInt(req.query.lines) || 100, 500);
+  const grepRaw = String(req.query.grep ?? "").trim();
   const logPath = LOG_PATHS[logType];
   if (!logPath) return res.status(400).json({ error: "Unknown log type" });
   try {
     await (0, import_promises.access)(logPath, import_fs.constants.R_OK);
-    const { stdout } = await runCmd(`tail -n ${lines} ${logPath}`);
+    let cmd;
+    if (grepRaw.length >= 2) {
+      const safe = grepRaw.replace(/[`$\\|;&<>'"!\n\r]/g, "").slice(0, 200);
+      cmd = `grep -i -m ${lines} "${safe}" "${logPath}" 2>/dev/null`;
+    } else {
+      cmd = `tail -n ${lines} "${logPath}"`;
+    }
+    const { stdout } = await runCmd(cmd);
     const entries = stdout.split("\n").filter(Boolean).map((line, i) => ({
       id: i,
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
