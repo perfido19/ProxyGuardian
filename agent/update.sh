@@ -61,7 +61,10 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/nginx
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/ipset *
-$AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables -L -n --line-numbers -v
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables *
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
 SUDOEOF
 chmod 440 "$SUDOERS_FILE"
 ok "Sudoers aggiornati"
