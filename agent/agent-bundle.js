@@ -22602,9 +22602,9 @@ app.use("/api", requireApiKey);
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", hostname: process.env.HOSTNAME ?? "unknown", ts: Date.now() });
 });
-async function runCmd(cmd) {
+async function runCmd(cmd, timeout = 1e4) {
   try {
-    const { stdout, stderr } = await execAsync(cmd, { timeout: 1e4 });
+    const { stdout, stderr } = await execAsync(cmd, { timeout });
     return { stdout: stdout.trim(), stderr: stderr.trim(), ok: true };
   } catch (err) {
     return { stdout: err.stdout?.trim() ?? "", stderr: err.stderr?.trim() ?? err.message, ok: false };
@@ -22936,6 +22936,42 @@ app.post("/api/netbird/update", async (_req, res) => {
   const status = await runCmd("systemctl is-active netbird 2>/dev/null");
   res.json({ ok: result.ok, output: result.stdout || result.stderr, running: status.stdout.trim() === "active" });
 });
+app.get("/api/netbird/status", async (_req, res) => {
+  try {
+    const [serviceResult, statusResult] = await Promise.all([
+      runCmd("systemctl is-active netbird 2>/dev/null"),
+      runCmd("netbird status 2>/dev/null")
+    ]);
+    const running = serviceResult.stdout.trim() === "active";
+    const output = statusResult.stdout;
+    const ipMatch = output.match(/NetBird IP:\s*([\d.]+)(?:\/\d+)?/);
+    const ip = ipMatch ? ipMatch[1] : null;
+    const managementMatch = output.match(/Management:\s*(\w+)/);
+    const connected = managementMatch ? managementMatch[1] === "Connected" : false;
+    const peers = [];
+    const peerSectionMatch = output.match(/^Peers:\n([\s\S]*)/m);
+    if (peerSectionMatch) {
+      const entries = peerSectionMatch[1].split(/\n(?= \S)/);
+      for (const entry of entries) {
+        const nameMatch = entry.match(/^ (.+)/);
+        const peerIpMatch = entry.match(/NetBird IP:\s*([\d.]+)/);
+        const latencyMatch = entry.match(/Latency:\s*(\S+)/);
+        const statusMatch = entry.match(/Status:\s*(\w+)/);
+        if (nameMatch && peerIpMatch) {
+          peers.push({
+            name: nameMatch[1].trim(),
+            ip: peerIpMatch[1],
+            latency: latencyMatch ? latencyMatch[1] : "?",
+            connected: statusMatch ? statusMatch[1] === "Connected" : false
+          });
+        }
+      }
+    }
+    res.json({ running, connected, ip, peers });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.get("/api/grep", async (req, res) => {
   const q = String(req.query.q ?? "").trim();
   const logType = String(req.query.type ?? "nginx_access");
@@ -23049,6 +23085,104 @@ app.post("/api/fail2ban/jails/:name", async (req, res) => {
   if (config.findTime !== void 0) cmds.push(`sudo fail2ban-client set ${name} findtime ${config.findTime}`);
   for (const cmd of cmds) await runCmd(cmd);
   res.json({ ok: true, message: `Jail ${name} updated` });
+});
+var asnStatsCache = null;
+var ASN_CACHE_TTL = 5 * 60 * 1e3;
+app.get("/api/asn/stats", async (_req, res) => {
+  try {
+    if (asnStatsCache && Date.now() - asnStatsCache.ts < ASN_CACHE_TTL) {
+      return res.json(asnStatsCache.data);
+    }
+    const [statsResult, prefixResult] = await Promise.all([
+      runCmd("python3 /usr/local/bin/asn-log-stats.py --top 50 2>/dev/null", 15e3),
+      runCmd("ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0")
+    ]);
+    let top = [];
+    if (statsResult.ok && statsResult.stdout) {
+      try {
+        top = JSON.parse(statsResult.stdout);
+      } catch {
+      }
+    }
+    const totalPrefixes = parseInt(prefixResult.stdout.trim()) || 0;
+    const data = { updatedAt: (/* @__PURE__ */ new Date()).toISOString(), totalPrefixes, top };
+    asnStatsCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get("/api/asn/status", async (_req, res) => {
+  try {
+    const [ipsetRestore, whitelistWatcher, prefixes, lastLog] = await Promise.all([
+      runCmd("systemctl is-active ipset-restore 2>/dev/null"),
+      runCmd("systemctl is-active whitelist-watcher 2>/dev/null"),
+      runCmd("ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0"),
+      runCmd("tail -1 /var/log/update-asn-block.log 2>/dev/null || echo ''")
+    ]);
+    res.json({
+      ipsetRestore: ipsetRestore.stdout.trim(),
+      whitelistWatcher: whitelistWatcher.stdout.trim(),
+      totalPrefixes: parseInt(prefixes.stdout.trim()) || 0,
+      lastUpdate: lastLog.stdout.trim()
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get("/api/asn/whitelist", async (_req, res) => {
+  try {
+    const { stdout } = await runCmd("cat /etc/asn-whitelist-nets.txt 2>/dev/null || echo ''");
+    const lines = stdout.split("\n").map((line) => {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) return null;
+      const commentIdx = t.indexOf("#");
+      const value = commentIdx >= 0 ? t.slice(0, commentIdx).trim() : t;
+      const comment = commentIdx >= 0 ? t.slice(commentIdx + 1).trim() : "";
+      if (!value) return null;
+      const type = /^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(value) || /^[0-9a-f:]+\/\d+$/i.test(value) ? "cidr" : "domain";
+      return { value, comment, type };
+    }).filter(Boolean);
+    res.json(lines);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/asn/whitelist", async (req, res) => {
+  const { value, comment } = req.body;
+  if (!value || typeof value !== "string") return res.status(400).json({ error: "value required" });
+  if (!/^[\w.\-:/]+$/.test(value.trim())) return res.status(400).json({ error: "Valore non valido" });
+  const safe = value.trim();
+  const line = comment ? `${safe} # ${String(comment).replace(/[\n\r]/g, "").slice(0, 200)}` : safe;
+  const result = await runCmd(`echo ${JSON.stringify(line)} >> /etc/asn-whitelist-nets.txt`);
+  res.json({ success: result.ok, error: result.ok ? void 0 : result.stderr });
+});
+app.delete("/api/asn/whitelist", async (req, res) => {
+  const { value } = req.body;
+  if (!value || typeof value !== "string") return res.status(400).json({ error: "value required" });
+  if (!/^[\w.\-:/]+$/.test(value.trim())) return res.status(400).json({ error: "Valore non valido" });
+  const escaped = value.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\//g, "\\/");
+  const result = await runCmd(`sed -i '/^${escaped}[[:space:]#]/d' /etc/asn-whitelist-nets.txt`);
+  res.json({ success: result.ok, error: result.ok ? void 0 : result.stderr });
+});
+app.post("/api/asn/update-lists", async (_req, res) => {
+  const result = await runCmd("bash /usr/local/bin/update-lists.sh 2>&1", 6e4);
+  res.json({ success: result.ok, output: result.stdout || result.stderr });
+});
+app.post("/api/asn/update-set", async (_req, res) => {
+  const result = await runCmd("bash /usr/local/bin/update-asn-block.sh 2>&1", 12e4);
+  asnStatsCache = null;
+  res.json({ success: result.ok, output: result.stdout || result.stderr });
+});
+app.post("/api/asn/test-ip", async (req, res) => {
+  const { ip } = req.body;
+  if (!ip || !/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
+  const result = await runCmd(`sudo ipset test blocked_asn ${ip} 2>&1`);
+  res.json({ blocked: result.ok });
+});
+app.get("/api/asn/log", async (_req, res) => {
+  const { stdout } = await runCmd("tail -50 /var/log/update-asn-block.log 2>/dev/null || echo ''");
+  res.json({ lines: stdout.split("\n").filter(Boolean) });
 });
 app.listen(PORT, BIND, () => {
   console.log(`[ProxyGuardian Agent] Listening on ${BIND}:${PORT}`);
