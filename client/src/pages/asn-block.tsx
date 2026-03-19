@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { LoadingState } from "@/components/loading-state";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Trash2, Save, Search, RefreshCw, CheckCircle, XCircle } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Plus, Trash2, Search, RefreshCw, CheckCircle, XCircle } from "lucide-react";
 
 interface AsnEntry { asn: string; description?: string; }
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
@@ -32,15 +33,17 @@ export default function AsnBlock() {
   const { toast } = useToast();
   const { data: vpsList } = useVpsList();
   const { data: healthMap } = useVpsHealth();
+  const [selectedVps, setSelectedVps] = useState("all");
   const [search, setSearch] = useState("");
   const [newAsn, setNewAsn] = useState("");
   const [newDesc, setNewDesc] = useState("");
 
-  const onlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
+  const allOnlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
+  const onlineVps = selectedVps === "all" ? allOnlineVps : allOnlineVps.filter(v => v.id === selectedVps);
 
   // Legge block_asn.conf da tutti i VPS online
   const { data: bulkResults, isLoading, refetch } = useQuery<BulkResult[]>({
-    queryKey: ["asn-block-all"],
+    queryKey: ["asn-block-all", selectedVps],
     queryFn: async () => {
       const r = await apiRequest("POST", "/api/vps/bulk/get", {
         vpsIds: onlineVps.map(v => v.id),
@@ -90,7 +93,8 @@ export default function AsnBlock() {
     },
     onSuccess: (_, vars) => {
       refetch();
-      toast({ title: vars.remove ? `ASN ${vars.asn} rimosso da tutti i VPS` : `ASN ${vars.asn} aggiunto a tutti i VPS` });
+      const target = selectedVps === "all" ? "tutti i VPS" : onlineVps[0]?.name ?? "VPS selezionato";
+      toast({ title: vars.remove ? `ASN ${vars.asn} rimosso da ${target}` : `ASN ${vars.asn} aggiunto a ${target}` });
       if (!vars.remove) { setNewAsn(""); setNewDesc(""); }
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
@@ -110,16 +114,27 @@ export default function AsnBlock() {
             Blocco Autonomous System Numbers su tutti i VPS — lettura e scrittura aggregata
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
-          <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
-        </Button>
+        <div className="flex items-center gap-2">
+          <Select value={selectedVps} onValueChange={setSelectedVps}>
+            <SelectTrigger className="w-44 h-8 text-sm">
+              <SelectValue placeholder="Tutti i VPS" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Tutti i VPS</SelectItem>
+              {(vpsList || []).map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
+            <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
+          </Button>
+        </div>
       </div>
 
       {/* Aggiungi nuovo ASN */}
       <Card>
         <CardHeader>
           <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground">Aggiungi ASN</CardTitle>
-          <CardDescription>Aggiunge il blocco su tutti i VPS online simultaneamente</CardDescription>
+          <CardDescription>{selectedVps === "all" ? "Aggiunge il blocco su tutti i VPS online simultaneamente" : `Aggiunge il blocco solo su ${onlineVps[0]?.name ?? "VPS selezionato"}`}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex gap-2 flex-wrap">
@@ -137,7 +152,7 @@ export default function AsnBlock() {
               className="flex-1"
             />
             <Button onClick={addAsn} disabled={!newAsn || saveAllMutation.isPending}>
-              <Plus className="w-4 h-4 mr-1" />Aggiungi su tutti i VPS
+              <Plus className="w-4 h-4 mr-1" />{selectedVps === "all" ? "Aggiungi su tutti i VPS" : "Aggiungi"}
             </Button>
           </div>
         </CardContent>
@@ -150,7 +165,7 @@ export default function AsnBlock() {
             <div>
               <CardTitle>ASN Bloccati</CardTitle>
               <CardDescription>
-                {allAsns.length} ASN univoci — {onlineVps.length} VPS online
+                {allAsns.length} ASN univoci — {selectedVps === "all" ? `${onlineVps.length} VPS online` : onlineVps[0]?.name ?? "VPS selezionato"}
               </CardDescription>
             </div>
           </div>

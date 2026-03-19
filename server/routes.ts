@@ -1,5 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { totalmem, freemem, cpus } from "os";
+import { execSync } from "child_process";
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, type UserRole } from "./auth";
@@ -173,6 +175,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.updateFail2banConfig(type, req.body.content);
       res.json({ success: true });
     } catch { res.status(500).json({ error: "Errore" }); }
+  });
+
+  // Dashboard host health
+  app.get("/api/dashboard/system", requireAuth, (_req, res) => {
+    try {
+      const memTotal = totalmem();
+      const memFree = freemem();
+      const memUsedPct = Math.round(((memTotal - memFree) / memTotal) * 100);
+      let disk = { used: "—", total: "—", percent: "—" };
+      let load = { "1m": 0, "5m": 0, "15m": 0 };
+      try {
+        const df = execSync("df -h / 2>/dev/null", { timeout: 3000 }).toString().trim().split("\n");
+        if (df.length >= 2) { const p = df[1].trim().split(/\s+/); disk = { used: p[2], total: p[1], percent: p[4] }; }
+      } catch {}
+      try {
+        const la = execSync("cat /proc/loadavg 2>/dev/null", { timeout: 1000 }).toString().trim().split(" ");
+        load = { "1m": parseFloat(la[0]) || 0, "5m": parseFloat(la[1]) || 0, "15m": parseFloat(la[2]) || 0 };
+      } catch {}
+      res.json({ memory: { totalMb: Math.round(memTotal / 1024 / 1024), usedPct: memUsedPct }, disk, load, cpuCount: cpus().length });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   return createServer(app);

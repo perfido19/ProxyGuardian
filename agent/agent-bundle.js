@@ -22914,6 +22914,24 @@ app.post("/api/iptables-save", async (_req, res) => {
   }
   res.json({ ok: result.ok, error: result.ok ? void 0 : result.stderr });
 });
+app.get("/api/netbird", async (_req, res) => {
+  try {
+    const [serviceResult, connResult] = await Promise.all([
+      runCmd("systemctl is-active netbird 2>/dev/null"),
+      runCmd("nc -z -w3 main.netbird.cloud 8880 2>/dev/null && echo ok || echo fail")
+    ]);
+    res.json({
+      running: serviceResult.stdout.trim() === "active",
+      connected: connResult.stdout.trim() === "ok"
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/netbird/restart", async (_req, res) => {
+  const result = await runCmd("sudo systemctl restart netbird");
+  res.json({ ok: result.ok, error: result.ok ? void 0 : result.stderr });
+});
 app.get("/api/grep", async (req, res) => {
   const q = String(req.query.q ?? "").trim();
   const logType = String(req.query.type ?? "nginx_access");
