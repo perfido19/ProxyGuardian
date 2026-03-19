@@ -9,9 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LoadingState } from "@/components/loading-state";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff, Search } from "lucide-react";
+import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff, Search, Radio } from "lucide-react";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
+interface NetbirdStatus { running: boolean; connected: boolean; }
 
 const SERVICES = ["nginx", "fail2ban", "mariadb"];
 
@@ -20,6 +21,17 @@ function useBulkServices() {
     queryKey: ["bulk-services-page"],
     queryFn: async () => {
       const r = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: "all", path: "/api/services" });
+      return r.json();
+    },
+    refetchInterval: 60000,
+  });
+}
+
+function useBulkNetbird() {
+  return useQuery<BulkResult[]>({
+    queryKey: ["bulk-netbird"],
+    queryFn: async () => {
+      const r = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: "all", path: "/api/netbird" });
       return r.json();
     },
     refetchInterval: 60000,
@@ -40,6 +52,7 @@ export default function Services() {
   const { data: vpsList, isLoading } = useVpsList();
   const { data: healthMap, refetch: refetchHealth } = useVpsHealth();
   const { data: bulkServices, refetch: refetchServices } = useBulkServices();
+  const { data: bulkNetbird, refetch: refetchNetbird } = useBulkNetbird();
 
   const bulkActionMutation = useMutation({
     mutationFn: async ({ service, action, vpsIds }: { service: string; action: string; vpsIds: string[] | "all" }) => {
@@ -57,7 +70,7 @@ export default function Services() {
         description: `${ok}/${results.length} VPS aggiornati`,
         variant: ok === results.length ? "default" : "destructive",
       });
-      setTimeout(() => { refetchServices(); refetchHealth(); }, 2000);
+      setTimeout(() => { refetchServices(); refetchHealth(); refetchNetbird(); }, 2000);
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
@@ -72,6 +85,20 @@ export default function Services() {
       toast({ title: "Azione eseguita" });
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const netbirdRestartMutation = useMutation({
+    mutationFn: async (vpsId: string) => {
+      const r = await apiRequest("POST", `/api/vps/${vpsId}/proxy/api/netbird/restart`, {});
+      return r.json();
+    },
+    onSuccess: () => { setTimeout(() => refetchNetbird(), 3000); toast({ title: "NetBird riavviato" }); },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const netbirdMap: Record<string, NetbirdStatus> = {};
+  (bulkNetbird || []).forEach(r => {
+    if (r.success && r.data) netbirdMap[r.vpsId] = r.data;
   });
 
   const isPending = bulkActionMutation.isPending || singleActionMutation.isPending;
@@ -169,6 +196,7 @@ export default function Services() {
                     {SERVICES.map(s => (
                       <th key={s} className="text-center p-3 text-xs font-heading uppercase tracking-wide text-muted-foreground">{s}</th>
                     ))}
+                    <th className="text-center p-3 text-xs font-heading uppercase tracking-wide text-muted-foreground">NetBird</th>
                     <th className="text-right p-3 text-xs font-heading uppercase tracking-wide text-muted-foreground">Azioni</th>
                   </tr>
                 </thead>
@@ -176,6 +204,7 @@ export default function Services() {
                   {list.map(vps => {
                     const online = healthMap?.[vps.id] ?? false;
                     const svcs = servicesMap[vps.id];
+                    const nb = netbirdMap[vps.id];
                     return (
                       <tr key={vps.id} className="border-b border-border/50 hover:bg-muted/30">
                         <td className="p-3">
@@ -192,6 +221,28 @@ export default function Services() {
                             <StatusDot running={svcs ? (svcs[s] ?? null) : null} />
                           </td>
                         ))}
+                        <td className="p-3 text-center">
+                          {!nb ? (
+                            <span className="w-2 h-2 rounded-full bg-muted-foreground/30 inline-block" />
+                          ) : (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <div className="flex items-center gap-1 text-xs">
+                                <StatusDot running={nb.running} />
+                                <span className="text-muted-foreground">svc</span>
+                              </div>
+                              <div className="flex items-center gap-1 text-xs">
+                                {nb.connected
+                                  ? <Radio className="w-3 h-3 text-green-500" />
+                                  : <Radio className="w-3 h-3 text-red-500" />}
+                                <span className="text-muted-foreground">:8880</span>
+                              </div>
+                              <Button size="sm" variant="ghost" className="h-5 px-1 text-xs" disabled={!online || netbirdRestartMutation.isPending}
+                                onClick={() => netbirdRestartMutation.mutate(vps.id)} title="Restart NetBird">
+                                <RotateCw className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          )}
+                        </td>
                         <td className="p-3 text-right">
                           <div className="flex items-center justify-end gap-1">
                             {SERVICES.map(s => (

@@ -1,4 +1,4 @@
-import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Users, Network, Search, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Users, Network, Search, ShieldCheck, Globe } from "lucide-react";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter } from "@/components/ui/sidebar";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -7,6 +7,7 @@ const menuItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Servizi", url: "/servizi", icon: Server },
   { title: "Firewall", url: "/firewall", icon: Shield },
+  { title: "ASN Block", url: "/asn-block", icon: Globe },
   { title: "Fail2ban", url: "/fail2ban", icon: AlertTriangle },
   { title: "Log", url: "/log", icon: FileText },
   { title: "Ricerca", url: "/ricerca", icon: Search },

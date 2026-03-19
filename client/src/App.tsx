@@ -15,6 +15,7 @@ import Logs from "@/pages/logs";
 import Ricerca from "@/pages/ricerca";
 import UserManagement from "@/pages/user-management";
 import VpsManager from "@/pages/vps-manager";
+import AsnBlock from "@/pages/asn-block";
 import VpsDetail from "@/pages/vps-detail";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
@@ -61,6 +62,7 @@ function Router() {
       <Route path="/" component={Dashboard} />
       <Route path="/servizi" component={Services} />
       <Route path="/firewall" component={Firewall} />
+      <Route path="/asn-block" component={AsnBlock} />
       <Route path="/fail2ban" component={Fail2banManagement} />
       <Route path="/log" component={Logs} />
       <Route path="/ricerca" component={Ricerca} />
