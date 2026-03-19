@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LoadingState } from "@/components/loading-state";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff, Search, Radio } from "lucide-react";
+import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff, Search, Radio, Zap } from "lucide-react";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
 interface NetbirdStatus { running: boolean; connected: boolean; }
@@ -70,7 +70,7 @@ export default function Services() {
         description: `${ok}/${results.length} VPS aggiornati`,
         variant: ok === results.length ? "default" : "destructive",
       });
-      setTimeout(() => { refetchServices(); refetchHealth(); refetchNetbird(); }, 2000);
+      setTimeout(() => { refetchServices(); refetchHealth(); refetchNetbird(); }, 3000);
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
@@ -171,6 +171,18 @@ export default function Services() {
                 )}
               </div>
             ))}
+            <div className="flex items-center gap-1.5 border border-border rounded-md p-1.5">
+              <span className="text-sm font-mono font-semibold w-20">netbird</span>
+              <Button size="sm" variant="outline" disabled={netbirdRestartMutation.isPending}
+                onClick={async () => {
+                  const ids = (vpsList || []).filter(v => healthMap?.[v.id]).map(v => v.id);
+                  await Promise.all(ids.map(id => apiRequest("POST", `/api/vps/${id}/proxy/api/netbird/restart`, {})));
+                  setTimeout(() => refetchNetbird(), 3000);
+                  toast({ title: "NetBird riavviato su tutti i VPS" });
+                }}>
+                <RotateCw className="w-3 h-3 mr-1" />Restart
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

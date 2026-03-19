@@ -112,7 +112,6 @@ export default function Firewall() {
           <TabsTrigger value="ip">IP Whitelist</TabsTrigger>
           <TabsTrigger value="exclusion">IP Exclusion</TabsTrigger>
           <TabsTrigger value="iptables">IPTables Banned</TabsTrigger>
-          <TabsTrigger value="ipset">IPSet</TabsTrigger>
         </TabsList>
         <TabsContent value="countries"><CountriesTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="asn"><AsnTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
@@ -121,7 +120,6 @@ export default function Firewall() {
         <TabsContent value="ip"><IpWhitelistTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="exclusion"><ExclusionIpTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="iptables"><IpTablesSearchTab /></TabsContent>
-        <TabsContent value="ipset"><IpSetViewTab /></TabsContent>
       </Tabs>
     </div>
   );

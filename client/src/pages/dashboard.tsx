@@ -11,6 +11,7 @@ import { LoadingState } from "@/components/loading-state";
 import {
   Server, Wifi, WifiOff, Shield, Activity, RefreshCw,
   AlertTriangle, CheckCircle, XCircle, Search, ChevronRight,
+  Radio, Cpu, MemoryStick, HardDrive,
 } from "lucide-react";
 
 interface BulkResult {
@@ -45,6 +46,29 @@ function useBulkServices() {
   });
 }
 
+function useBulkNetbird() {
+  return useQuery<BulkResult[]>({
+    queryKey: ["bulk-netbird-dashboard"],
+    queryFn: async () => {
+      const res = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: "all", path: "/api/netbird" });
+      return res.json();
+    },
+    refetchInterval: 60000,
+    retry: false,
+  });
+}
+
+function useDashboardSystem() {
+  return useQuery<{ memory: { totalMb: number; usedPct: number }; disk: { used: string; total: string; percent: string }; load: { "1m": number; "5m": number; "15m": number }; cpuCount: number }>({
+    queryKey: ["dashboard-system"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/dashboard/system");
+      return res.json();
+    },
+    refetchInterval: 30000,
+  });
+}
+
 function ServiceBadge({ name, running }: { name: string; running: boolean }) {
   return (
     <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-mono ${running ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
@@ -62,12 +86,11 @@ export default function Dashboard() {
   const { data: healthMap, refetch: refetchHealth } = useVpsHealth();
   const { data: bulkStats, refetch: refetchStats } = useBulkStats();
   const { data: bulkServices, refetch: refetchServices } = useBulkServices();
+  const { data: bulkNetbird, refetch: refetchNetbird } = useBulkNetbird();
+  const { data: dashSystem, refetch: refetchSystem } = useDashboardSystem();
 
   const handleRefresh = () => {
-    refetchVps();
-    refetchHealth();
-    refetchStats();
-    refetchServices();
+    refetchVps(); refetchHealth(); refetchStats(); refetchServices(); refetchNetbird(); refetchSystem();
   };
 
   if (vpsLoading) return <LoadingState message="Caricamento VPS..." />;
@@ -77,8 +100,10 @@ export default function Dashboard() {
   // Build lookup maps
   const statsMap: Record<string, any> = {};
   const servicesMap: Record<string, any[]> = {};
+  const netbirdMap: Record<string, { running: boolean; connected: boolean }> = {};
   (bulkStats || []).forEach(r => { if (r.success && r.data) statsMap[r.vpsId] = r.data; });
   (bulkServices || []).forEach(r => { if (r.success && r.data) servicesMap[r.vpsId] = r.data; });
+  (bulkNetbird || []).forEach(r => { if (r.success && r.data) netbirdMap[r.vpsId] = r.data; });
 
   // Filter & search
   const filtered = list.filter(vps => {
@@ -133,11 +158,43 @@ export default function Dashboard() {
         </Card>
         <Card className="border-card-border">
           <CardContent className="pt-4">
-            <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Activity className="w-3.5 h-3.5" />Connessioni</div>
+            <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Activity className="w-3.5 h-3.5" />Connessioni :8880</div>
             <p className="text-2xl font-heading font-bold">{totalConnections}</p>
           </CardContent>
         </Card>
       </div>
+
+      {/* Dashboard host health */}
+      {dashSystem && (
+        <Card className="border-card-border">
+          <CardContent className="pt-4">
+            <p className="text-xs font-heading uppercase tracking-wide text-muted-foreground mb-3">Dashboard Host</p>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="flex items-center gap-2">
+                <MemoryStick className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">RAM</p>
+                  <p className="text-sm font-semibold">{dashSystem.memory.usedPct}% <span className="text-xs text-muted-foreground font-normal">/ {dashSystem.memory.totalMb} MB</span></p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <HardDrive className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Disco</p>
+                  <p className="text-sm font-semibold">{dashSystem.disk.percent} <span className="text-xs text-muted-foreground font-normal">{dashSystem.disk.used}/{dashSystem.disk.total}</span></p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Load avg</p>
+                  <p className="text-sm font-semibold">{dashSystem.load["1m"]} <span className="text-xs text-muted-foreground font-normal">{dashSystem.load["5m"]} · {dashSystem.load["15m"]}</span></p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filters & search */}
       <div className="flex flex-wrap items-center gap-3">
@@ -188,6 +245,7 @@ export default function Dashboard() {
             const nginx = services.find(s => s.name === "nginx");
             const fail2ban = services.find(s => s.name === "fail2ban");
             const mariadb = services.find(s => s.name === "mariadb");
+            const nb = netbirdMap[vps.id];
 
             return (
               <Link key={vps.id} href={`/vps/${vps.id}`}>
@@ -218,6 +276,11 @@ export default function Dashboard() {
                         {nginx && <ServiceBadge name="nginx" running={nginx.status === "running"} />}
                         {fail2ban && <ServiceBadge name="fail2ban" running={fail2ban.status === "running"} />}
                         {mariadb && <ServiceBadge name="mariadb" running={mariadb.status === "running"} />}
+                        {nb !== undefined && (
+                          <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-mono ${nb.connected ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
+                            <Radio className="w-3 h-3" />netbird
+                          </span>
+                        )}
                       </div>
                     ) : online ? (
                       <div className="flex flex-wrap gap-1.5">
