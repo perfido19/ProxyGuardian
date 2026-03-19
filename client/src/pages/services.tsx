@@ -245,36 +245,12 @@ export default function Services() {
                           </td>
                         ))}
                         <td className="p-3 text-center">
-                          {!nb ? (
-                            <span className="w-2 h-2 rounded-full bg-muted-foreground/30 inline-block" />
-                          ) : (
-                            <div className="flex flex-col items-center gap-0.5">
-                              <div className="flex items-center gap-1.5 text-xs">
-                                <StatusDot running={nb.running} />
-                                {nb.connected
-                                  ? <Radio className="w-3 h-3 text-green-500" />
-                                  : <Radio className="w-3 h-3 text-red-500" />}
-                              </div>
-                              <div className="flex items-center gap-0.5 mt-0.5">
-                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" disabled={!online || netbirdActionMutation.isPending}
-                                  onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "start" })} title="Start NetBird">
-                                  <Play className="w-2.5 h-2.5" />
-                                </Button>
-                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" disabled={!online || netbirdActionMutation.isPending}
-                                  onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "restart" })} title="Restart NetBird">
-                                  <RotateCw className="w-2.5 h-2.5" />
-                                </Button>
-                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" disabled={!online || netbirdActionMutation.isPending}
-                                  onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "stop" })} title="Stop NetBird">
-                                  <Square className="w-2.5 h-2.5" />
-                                </Button>
-                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" disabled={!online || netbirdActionMutation.isPending}
-                                  onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "update" })} title="Update NetBird">
-                                  <ArrowUpCircle className="w-2.5 h-2.5" />
-                                </Button>
-                              </div>
-                            </div>
-                          )}
+                          <div className="flex items-center justify-center gap-1">
+                            <StatusDot running={nb ? nb.running : null} />
+                            {nb && (
+                              <Radio className={`w-3 h-3 ${nb.connected ? "text-green-500" : "text-red-500"}`} />
+                            )}
+                          </div>
                         </td>
                         <td className="p-3 text-right">
                           <div className="flex items-center justify-end gap-1">
@@ -286,6 +262,28 @@ export default function Services() {
                                 <span className="ml-1 text-xs">{s}</span>
                               </Button>
                             ))}
+                            <span className="w-px h-4 bg-border mx-0.5" />
+                            <Button size="sm" variant="ghost" disabled={!online || isPending}
+                              onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "start" })}
+                              title="Start NetBird">
+                              <Play className="w-3 h-3" />
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={!online || isPending}
+                              onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "restart" })}
+                              title="Restart NetBird">
+                              <RotateCw className="w-3 h-3" />
+                              <span className="ml-1 text-xs">netbird</span>
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={!online || isPending}
+                              onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "stop" })}
+                              title="Stop NetBird">
+                              <Square className="w-3 h-3" />
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={!online || isPending}
+                              onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "update" })}
+                              title="Update NetBird">
+                              <ArrowUpCircle className="w-3 h-3" />
+                            </Button>
                           </div>
                         </td>
                       </tr>
