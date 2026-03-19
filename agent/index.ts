@@ -184,11 +184,19 @@ const LOG_PATHS: Record<string, string> = {
 app.get("/api/logs/:logType", async (req, res) => {
   const { logType } = req.params;
   const lines = Math.min(parseInt(req.query.lines as string) || 100, 500);
+  const grepRaw = String(req.query.grep ?? "").trim();
   const logPath = LOG_PATHS[logType];
   if (!logPath) return res.status(400).json({ error: "Unknown log type" });
   try {
     await access(logPath, constants.R_OK);
-    const { stdout } = await runCmd(`tail -n ${lines} ${logPath}`);
+    let cmd: string;
+    if (grepRaw.length >= 2) {
+      const safe = grepRaw.replace(/[`$\\|;&<>'"!\n\r]/g, "").slice(0, 200);
+      cmd = `grep -i -m ${lines} "${safe}" "${logPath}" 2>/dev/null`;
+    } else {
+      cmd = `tail -n ${lines} "${logPath}"`;
+    }
+    const { stdout } = await runCmd(cmd);
     const entries = stdout.split("\n").filter(Boolean).map((line, i) => ({
       id: i,
       timestamp: new Date().toISOString(),

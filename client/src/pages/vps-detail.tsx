@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -6,6 +6,7 @@ import { useVpsList } from "@/hooks/use-vps";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -16,7 +17,7 @@ import {
   ArrowLeft, RefreshCw, Server, Shield, Activity,
   HardDrive, Cpu, MemoryStick, CheckCircle, XCircle,
   Play, Square, RotateCw, ShieldOff, Wifi, WifiOff,
-  FileText, Settings, Save, AlertTriangle,
+  FileText, Settings, Save, AlertTriangle, Search,
 } from "lucide-react";
 
 interface ServiceStatus { name: string; status: string; pid?: number; uptime?: string; }
@@ -67,6 +68,14 @@ export default function VpsDetail() {
   const [configContent, setConfigContent] = useState<string | null>(null);
   const [logType, setLogType] = useState("nginx_access");
   const [editingJail, setEditingJail] = useState<Jail | null>(null);
+  const [ipSearch, setIpSearch] = useState("");
+  const [logSearch, setLogSearch] = useState("");
+  const [debouncedLogSearch, setDebouncedLogSearch] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedLogSearch(logSearch), 400);
+    return () => clearTimeout(t);
+  }, [logSearch]);
 
   const proxy = (path: string) => `/api/vps/${id}/proxy${path}`;
 
@@ -92,8 +101,13 @@ export default function VpsDetail() {
   });
 
   const { data: logs, isLoading: logsLoading, refetch: refetchLogs } = useQuery<LogEntry[]>({
-    queryKey: [`vps-${id}-logs-${logType}`],
-    queryFn: async () => { const r = await apiRequest("GET", proxy(`/api/logs/${logType}?lines=200`)); return r.json(); },
+    queryKey: [`vps-${id}-logs-${logType}-${debouncedLogSearch}`],
+    queryFn: async () => {
+      const params = new URLSearchParams({ lines: "200" });
+      if (debouncedLogSearch) params.set("grep", debouncedLogSearch);
+      const r = await apiRequest("GET", proxy(`/api/logs/${logType}?${params}`));
+      return r.json();
+    },
     enabled: !!vps,
     refetchInterval: REFETCH,
   });
@@ -142,6 +156,20 @@ export default function VpsDetail() {
     onSuccess: (data: any) => {
       refetchBanned();
       toast({ title: "Tutti gli IP sbloccati", description: `${data.unbannedCount} IP sbloccati` });
+    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const unbanFilteredMutation = useMutation({
+    mutationFn: async (ips: BannedIp[]) => {
+      for (const item of ips) {
+        await apiRequest("POST", proxy("/api/unban"), { ip: item.ip, jail: item.jail });
+      }
+      return { unbannedCount: ips.length };
+    },
+    onSuccess: (data) => {
+      refetchBanned();
+      toast({ title: "IP sbloccati", description: `${data.unbannedCount} IP sbloccati` });
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
@@ -202,6 +230,10 @@ export default function VpsDetail() {
       </div>
     );
   }
+
+  const filteredBannedIps = (bannedIps || []).filter(item =>
+    !ipSearch || item.ip.includes(ipSearch) || item.jail.toLowerCase().includes(ipSearch.toLowerCase())
+  );
 
   const memPct = systemInfo ? Math.round((systemInfo.memory.used / systemInfo.memory.total) * 100) : 0;
   const online = vps.lastStatus === "online";
@@ -328,15 +360,39 @@ export default function VpsDetail() {
                     <CardDescription>{bannedIps?.length || 0} IP bannati attualmente</CardDescription>
                   </div>
                   {(bannedIps?.length ?? 0) > 0 && (
-                    <Button size="sm" variant="destructive" onClick={() => unbanAllMutation.mutate()} disabled={unbanAllMutation.isPending}>
-                      <ShieldOff className="w-4 h-4 mr-1" />Sblocca tutti
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => ipSearch ? unbanFilteredMutation.mutate(filteredBannedIps) : unbanAllMutation.mutate()}
+                      disabled={ipSearch ? unbanFilteredMutation.isPending : unbanAllMutation.isPending}
+                    >
+                      <ShieldOff className="w-4 h-4 mr-1" />
+                      {ipSearch ? `Sblocca filtrati (${filteredBannedIps.length})` : "Sblocca tutti"}
                     </Button>
                   )}
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
+                {(bannedIps?.length ?? 0) > 0 && (
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Cerca IP..."
+                      value={ipSearch}
+                      onChange={e => setIpSearch(e.target.value)}
+                      className="pl-8"
+                    />
+                    {ipSearch && (
+                      <span className="absolute right-3 top-2.5 text-xs text-muted-foreground">
+                        {filteredBannedIps.length} / {bannedIps?.length}
+                      </span>
+                    )}
+                  </div>
+                )}
                 {!bannedIps?.length ? (
                   <p className="text-center text-muted-foreground py-8">Nessun IP bannato</p>
+                ) : filteredBannedIps.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">Nessun risultato per "{ipSearch}"</p>
                 ) : (
                   <div className="border rounded-md">
                     <Table>
@@ -349,7 +405,7 @@ export default function VpsDetail() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {bannedIps.map((item, i) => (
+                        {filteredBannedIps.map((item, i) => (
                           <TableRow key={i}>
                             <TableCell className="font-mono text-sm">{item.ip}</TableCell>
                             <TableCell><Badge variant="outline">{item.jail}</Badge></TableCell>
@@ -529,7 +585,7 @@ export default function VpsDetail() {
               <div className="flex items-center justify-between gap-4 flex-wrap">
                 <CardTitle className="flex items-center gap-2"><Activity className="w-4 h-4" />Log</CardTitle>
                 <div className="flex items-center gap-2">
-                  <Select value={logType} onValueChange={v => setLogType(v)}>
+                  <Select value={logType} onValueChange={v => { setLogType(v); setLogSearch(""); }}>
                     <SelectTrigger className="w-44">
                       <SelectValue />
                     </SelectTrigger>
@@ -545,7 +601,16 @@ export default function VpsDetail() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Cerca nei log..."
+                  value={logSearch}
+                  onChange={e => setLogSearch(e.target.value)}
+                  className="pl-8"
+                />
+              </div>
               {logsLoading ? <LoadingState message="Caricamento log..." /> : (
                 <div className="bg-muted rounded-md p-3 font-mono text-xs h-[32rem] overflow-y-auto space-y-0.5">
                   {(logs || []).map((entry, i) => (
