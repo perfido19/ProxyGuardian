@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
 import { useVpsList, useVpsHealth, useCreateVps, useUpdateVps, useDeleteVps, type VpsConfig } from "@/hooks/use-vps";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,19 +11,23 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Plus, Pencil, Trash2, Server, Wifi, WifiOff, RefreshCw, ExternalLink } from "lucide-react";
+import { Plus, Pencil, Trash2, Server, Wifi, WifiOff, RefreshCw, ExternalLink, Copy, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
+const INSTALL_CMD = "curl -fsSL https://raw.githubusercontent.com/perfido19/ProxyGuardian/main/agent/install.sh | sudo bash";
+
 export default function VpsManager() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const { data: vpsList, isLoading } = useVpsList();
   const { data: healthMap, refetch: refetchHealth } = useVpsHealth();
   const createVps = useCreateVps();
   const updateVps = useUpdateVps();
   const deleteVps = useDeleteVps();
 
+  const [copied, setCopied] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -154,15 +159,29 @@ export default function VpsManager() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader><CardTitle className="text-sm">Come aggiungere un VPS</CardTitle></CardHeader>
-        <CardContent className="text-sm text-muted-foreground space-y-1">
-          <p>1. Copia <code className="bg-muted px-1 rounded font-mono text-xs">agent/</code> sul VPS remoto</p>
-          <p>2. Esegui: <code className="bg-muted px-1 rounded font-mono text-xs">bash install-agent.sh</code></p>
-          <p>3. Lo script mostra IP NetBird e API Key generata</p>
-          <p>4. Inseriscili qui e clicca "Verifica connessione"</p>
-        </CardContent>
-      </Card>
+      {user?.role === "admin" && (
+        <Card className="border-card-border">
+          <CardHeader>
+            <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground">Installa Agent su nuovo VPS</CardTitle>
+            <CardDescription>Esegui questo comando sul VPS remoto come root. Lo script installa l'agent, genera l'API Key e mostra l'IP NetBird da inserire qui.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-muted px-3 py-2 rounded font-mono text-xs break-all">{INSTALL_CMD}</code>
+              <Button size="sm" variant="outline" className="shrink-0"
+                onClick={() => { navigator.clipboard.writeText(INSTALL_CMD); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>
+                {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+              </Button>
+            </div>
+            <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
+              <li>Esegui il comando sul VPS remoto</li>
+              <li>Lo script mostra l'IP NetBird (100.x.x.x) e l'API Key generata</li>
+              <li>Clicca <strong>"Aggiungi VPS"</strong> e inserisci i valori</li>
+              <li>Clicca "Verifica connessione" per confermare</li>
+            </ol>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Dialog crea */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LoadingState } from "@/components/loading-state";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff, Search, Radio, Zap } from "lucide-react";
+import { CheckCircle, XCircle, RotateCw, Play, Square, RefreshCw, Wifi, WifiOff, Search, Radio, ArrowUpCircle } from "lucide-react";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
 interface NetbirdStatus { running: boolean; connected: boolean; }
@@ -87,12 +87,16 @@ export default function Services() {
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
-  const netbirdRestartMutation = useMutation({
-    mutationFn: async (vpsId: string) => {
-      const r = await apiRequest("POST", `/api/vps/${vpsId}/proxy/api/netbird/restart`, {});
+  const netbirdActionMutation = useMutation({
+    mutationFn: async ({ vpsId, action }: { vpsId: string; action: string }) => {
+      const r = await apiRequest("POST", `/api/vps/${vpsId}/proxy/api/netbird/${action}`, {});
       return r.json();
     },
-    onSuccess: () => { setTimeout(() => refetchNetbird(), 3000); toast({ title: "NetBird riavviato" }); },
+    onSuccess: (_, vars) => {
+      setTimeout(() => refetchNetbird(), vars.action === "update" ? 5000 : 3000);
+      const labels: Record<string, string> = { restart: "riavviato", start: "avviato", stop: "fermato", update: "aggiornato" };
+      toast({ title: `NetBird ${labels[vars.action] ?? vars.action}` });
+    },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
@@ -101,7 +105,7 @@ export default function Services() {
     if (r.success && r.data) netbirdMap[r.vpsId] = r.data;
   });
 
-  const isPending = bulkActionMutation.isPending || singleActionMutation.isPending;
+  const isPending = bulkActionMutation.isPending || singleActionMutation.isPending || netbirdActionMutation.isPending;
 
   if (isLoading) return <LoadingState message="Caricamento..." />;
 
@@ -171,17 +175,24 @@ export default function Services() {
                 )}
               </div>
             ))}
-            <div className="flex items-center gap-1.5 border border-border rounded-md p-1.5">
+            <div className="flex items-center gap-1.5 border border-border rounded-md p-1.5 flex-wrap">
               <span className="text-sm font-mono font-semibold w-20">netbird</span>
-              <Button size="sm" variant="outline" disabled={netbirdRestartMutation.isPending}
-                onClick={async () => {
-                  const ids = (vpsList || []).filter(v => healthMap?.[v.id]).map(v => v.id);
-                  await Promise.all(ids.map(id => apiRequest("POST", `/api/vps/${id}/proxy/api/netbird/restart`, {})));
-                  setTimeout(() => refetchNetbird(), 3000);
-                  toast({ title: "NetBird riavviato su tutti i VPS" });
-                }}>
-                <RotateCw className="w-3 h-3 mr-1" />Restart
-              </Button>
+              {(["restart", "start", "stop", "update"] as const).map(action => (
+                <Button key={action} size="sm" variant="outline" disabled={netbirdActionMutation.isPending}
+                  onClick={async () => {
+                    const ids = (vpsList || []).filter(v => healthMap?.[v.id]).map(v => v.id);
+                    await Promise.all(ids.map(id => apiRequest("POST", `/api/vps/${id}/proxy/api/netbird/${action}`, {})));
+                    setTimeout(() => refetchNetbird(), action === "update" ? 5000 : 3000);
+                    const labels: Record<string, string> = { restart: "riavviato", start: "avviato", stop: "fermato", update: "aggiornato" };
+                    toast({ title: `NetBird ${labels[action]} su tutti i VPS` });
+                  }}>
+                  {action === "restart" && <RotateCw className="w-3 h-3 mr-1" />}
+                  {action === "start" && <Play className="w-3 h-3 mr-1" />}
+                  {action === "stop" && <Square className="w-3 h-3 mr-1" />}
+                  {action === "update" && <ArrowUpCircle className="w-3 h-3 mr-1" />}
+                  {action.charAt(0).toUpperCase() + action.slice(1)}
+                </Button>
+              ))}
             </div>
           </div>
         </CardContent>
@@ -238,20 +249,30 @@ export default function Services() {
                             <span className="w-2 h-2 rounded-full bg-muted-foreground/30 inline-block" />
                           ) : (
                             <div className="flex flex-col items-center gap-0.5">
-                              <div className="flex items-center gap-1 text-xs">
+                              <div className="flex items-center gap-1.5 text-xs">
                                 <StatusDot running={nb.running} />
-                                <span className="text-muted-foreground">svc</span>
-                              </div>
-                              <div className="flex items-center gap-1 text-xs">
                                 {nb.connected
                                   ? <Radio className="w-3 h-3 text-green-500" />
                                   : <Radio className="w-3 h-3 text-red-500" />}
-                                <span className="text-muted-foreground">:8880</span>
                               </div>
-                              <Button size="sm" variant="ghost" className="h-5 px-1 text-xs" disabled={!online || netbirdRestartMutation.isPending}
-                                onClick={() => netbirdRestartMutation.mutate(vps.id)} title="Restart NetBird">
-                                <RotateCw className="w-3 h-3" />
-                              </Button>
+                              <div className="flex items-center gap-0.5 mt-0.5">
+                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" disabled={!online || netbirdActionMutation.isPending}
+                                  onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "start" })} title="Start NetBird">
+                                  <Play className="w-2.5 h-2.5" />
+                                </Button>
+                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" disabled={!online || netbirdActionMutation.isPending}
+                                  onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "restart" })} title="Restart NetBird">
+                                  <RotateCw className="w-2.5 h-2.5" />
+                                </Button>
+                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" disabled={!online || netbirdActionMutation.isPending}
+                                  onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "stop" })} title="Stop NetBird">
+                                  <Square className="w-2.5 h-2.5" />
+                                </Button>
+                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" disabled={!online || netbirdActionMutation.isPending}
+                                  onClick={() => netbirdActionMutation.mutate({ vpsId: vps.id, action: "update" })} title="Update NetBird">
+                                  <ArrowUpCircle className="w-2.5 h-2.5" />
+                                </Button>
+                              </div>
                             </div>
                           )}
                         </td>

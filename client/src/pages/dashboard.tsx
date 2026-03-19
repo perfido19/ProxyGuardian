@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LoadingState } from "@/components/loading-state";
 import {
-  Server, Wifi, WifiOff, Shield, Activity, RefreshCw,
+  Server, Wifi, WifiOff, RefreshCw,
   AlertTriangle, CheckCircle, XCircle, Search, ChevronRight,
   Radio, Cpu, MemoryStick, HardDrive,
 } from "lucide-react";
@@ -120,8 +120,6 @@ export default function Dashboard() {
   // Summary counts
   const totalOnline = list.filter(v => healthMap?.[v.id]).length;
   const totalOffline = list.length - totalOnline;
-  const totalBans = Object.values(statsMap).reduce((sum, s) => sum + (s?.totalBans24h || 0), 0);
-  const totalConnections = Object.values(statsMap).reduce((sum, s) => sum + (s?.activeConnections || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -137,7 +135,7 @@ export default function Dashboard() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4 max-w-xs">
         <Card className="border-card-border">
           <CardContent className="pt-4">
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Wifi className="w-3.5 h-3.5 text-green-500" />Online</div>
@@ -148,18 +146,6 @@ export default function Dashboard() {
           <CardContent className="pt-4">
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><WifiOff className="w-3.5 h-3.5 text-red-500" />Offline</div>
             <p className="text-2xl font-heading font-bold text-red-500">{totalOffline}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-card-border">
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Shield className="w-3.5 h-3.5" />Ban attivi</div>
-            <p className="text-2xl font-heading font-bold">{totalBans}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-card-border">
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Activity className="w-3.5 h-3.5" />Connessioni :8880</div>
-            <p className="text-2xl font-heading font-bold">{totalConnections}</p>
           </CardContent>
         </Card>
       </div>
