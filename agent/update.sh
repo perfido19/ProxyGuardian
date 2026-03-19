@@ -68,7 +68,7 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables *
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
-$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get install -y netbird
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/netbird update
 SUDOEOF
 chmod 440 "$SUDOERS_FILE"
 ok "Sudoers aggiornati"
