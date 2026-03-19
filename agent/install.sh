@@ -92,6 +92,8 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart mariadb
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/nginx
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/ipset *
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables -L -n --line-numbers -v
 SUDOEOF
 chmod 440 /etc/sudoers.d/proxy-guardian-agent
 ok "Sudoers configurati"
