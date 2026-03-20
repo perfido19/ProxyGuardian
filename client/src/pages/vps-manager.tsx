@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Plus, Pencil, Trash2, Server, Wifi, WifiOff, RefreshCw, ExternalLink, Copy, Check, Download } from "lucide-react";
+import { Plus, Pencil, Trash2, Server, Wifi, WifiOff, RefreshCw, ExternalLink, Copy, Check, Download, Upload, HardDrive } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -35,6 +35,8 @@ export default function VpsManager() {
   const [selected, setSelected] = useState<VpsConfig | null>(null);
   const [checkingHealth, setCheckingHealth] = useState<string | null>(null);
   const [updatingAgent, setUpdatingAgent] = useState<string | null>(null); // vpsId | "all"
+  const [backingUp, setBackingUp] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [form, setForm] = useState({ name: "", host: "", port: "3001", apiKey: "", tags: "" });
   const [editForm, setEditForm] = useState({ name: "", host: "", port: "3001", apiKey: "", tags: "", enabled: true });
 
@@ -129,6 +131,46 @@ export default function VpsManager() {
     } catch {
       toast({ title: "Errore", description: "Errore durante l'aggiornamento", variant: "destructive" });
     } finally { setUpdatingAgent(null); }
+  };
+
+  const handleBackup = async () => {
+    setBackingUp(true);
+    try {
+      const res = await apiRequest("GET", "/api/admin/backup");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const today = new Date().toISOString().slice(0, 10);
+      a.href = url; a.download = `pg-backup-${today}.json`;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+      toast({ title: "Backup scaricato", description: `pg-backup-${today}.json` });
+    } catch { toast({ title: "Errore backup", variant: "destructive" }); }
+    finally { setBackingUp(false); }
+  };
+
+  const handleRestore = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string);
+        if (data.version !== 1) { toast({ title: "File non valido", description: "Versione backup non supportata", variant: "destructive" }); return; }
+        setRestoring(true);
+        const res = await apiRequest("POST", "/api/admin/restore", data);
+        const result = await res.json();
+        if (result.ok) {
+          toast({ title: "Ripristino completato", description: "Il server si sta riavviando..." });
+          setTimeout(() => window.location.reload(), 5000);
+        } else {
+          toast({ title: "Errore ripristino", description: result.error, variant: "destructive" });
+          setRestoring(false);
+        }
+      } catch { toast({ title: "Errore", description: "File JSON non valido", variant: "destructive" }); setRestoring(false); }
+    };
+    reader.readAsText(file);
   };
 
   const getStatusBadge = (vps: VpsConfig) => {
@@ -259,6 +301,40 @@ export default function VpsManager() {
               <li>Clicca <strong>"Aggiungi VPS"</strong> e inserisci i valori</li>
               <li>Clicca "Verifica connessione" per confermare</li>
             </ol>
+          </CardContent>
+        </Card>
+      )}
+
+      {user?.role === "admin" && (
+        <Card className="border-card-border">
+          <CardHeader>
+            <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground flex items-center gap-2">
+              <HardDrive className="w-4 h-4" />Backup & Ripristino
+            </CardTitle>
+            <CardDescription>
+              Esporta la configurazione completa (VPS, utenti, ASN fleet) o ripristinala su un nuovo host.
+              Il ripristino sovrascrive i dati attuali e riavvia il server.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-3">
+              <Button variant="outline" onClick={handleBackup} disabled={backingUp}>
+                {backingUp ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                Scarica Backup
+              </Button>
+              <label>
+                <Button variant="outline" asChild disabled={restoring}>
+                  <span className={restoring ? "pointer-events-none opacity-50" : "cursor-pointer"}>
+                    {restoring ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                    {restoring ? "Ripristino in corso..." : "Ripristina da Backup"}
+                  </span>
+                </Button>
+                <input type="file" accept=".json" className="hidden" onChange={handleRestore} disabled={restoring} />
+              </label>
+            </div>
+            <p className="text-xs text-muted-foreground mt-3">
+              Contiene: VPS + API Keys, utenti, blocklist/whitelist ASN. Non include sessioni attive.
+            </p>
           </CardContent>
         </Card>
       )}
