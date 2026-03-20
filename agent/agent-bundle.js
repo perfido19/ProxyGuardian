@@ -22586,12 +22586,12 @@ var import_path = __toESM(require("path"), 1);
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
 var app = (0, import_express.default)();
 app.use(import_express.default.json());
-var AGENT_API_KEY = process.env.AGENT_API_KEY ?? "";
-var PORT = parseInt(process.env.AGENT_PORT ?? "3001", 10);
-var BIND = process.env.AGENT_BIND ?? "0.0.0.0";
+var AGENT_API_KEY = process.env.AGENT_API_KEY || "";
+var PORT = parseInt(process.env.AGENT_PORT || "3001", 10);
+var BIND = process.env.AGENT_BIND || "0.0.0.0";
 function requireApiKey(req, res, next) {
   const auth = req.headers["authorization"];
-  const key = auth?.startsWith("Bearer ") ? auth.slice(7) : req.headers["x-api-key"];
+  const key = auth && auth.startsWith("Bearer ") ? auth.slice(7) : req.headers["x-api-key"];
   if (!AGENT_API_KEY || key !== AGENT_API_KEY) {
     res.status(401).json({ error: "Unauthorized" });
     return;
@@ -22600,14 +22600,14 @@ function requireApiKey(req, res, next) {
 }
 app.use("/api", requireApiKey);
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", hostname: process.env.HOSTNAME ?? "unknown", ts: Date.now() });
+  res.json({ status: "ok", hostname: process.env.HOSTNAME || "unknown", ts: Date.now() });
 });
 async function runCmd(cmd, timeout = 1e4) {
   try {
     const { stdout, stderr } = await execAsync(cmd, { timeout });
     return { stdout: stdout.trim(), stderr: stderr.trim(), ok: true };
   } catch (err) {
-    return { stdout: err.stdout?.trim() ?? "", stderr: err.stderr?.trim() ?? err.message, ok: false };
+    return { stdout: err.stdout ? err.stdout.trim() : "", stderr: err.stderr ? err.stderr.trim() : err.message, ok: false };
   }
 }
 async function getServiceStatus(name) {
@@ -22659,8 +22659,8 @@ app.get("/api/banned-ips", async (_req, res) => {
     const bannedIps = [];
     for (const jail of jails) {
       const { stdout } = await runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`);
-      const listLine = stdout.split("\n").find((l) => /banned ip list/i.test(l)) ?? "";
-      const ips = listLine.match(/\d+\.\d+\.\d+\.\d+/g) ?? [];
+      const listLine = stdout.split("\n").find((l) => /banned ip list/i.test(l)) || "";
+      const ips = listLine.match(/\d+\.\d+\.\d+\.\d+/g) || [];
       for (const ip of ips) {
         bannedIps.push({ ip, jail, banTime: (/* @__PURE__ */ new Date()).toISOString() });
       }
@@ -22720,7 +22720,7 @@ var LOG_PATHS = {
 app.get("/api/logs/:logType", async (req, res) => {
   const { logType } = req.params;
   const lines = Math.min(parseInt(req.query.lines) || 100, 500);
-  const grepRaw = String(req.query.grep ?? "").trim();
+  const grepRaw = String(req.query.grep || "").trim();
   const logPath = LOG_PATHS[logType];
   if (!logPath) return res.status(400).json({ error: "Unknown log type" });
   try {
@@ -22973,8 +22973,8 @@ app.get("/api/netbird/status", async (_req, res) => {
   }
 });
 app.get("/api/grep", async (req, res) => {
-  const q = String(req.query.q ?? "").trim();
-  const logType = String(req.query.type ?? "nginx_access");
+  const q = String(req.query.q || "").trim();
+  const logType = String(req.query.type || "nginx_access");
   const lines = Math.min(parseInt(req.query.lines) || 500, 500);
   if (q.length < 2) return res.status(400).json({ error: "Query troppo breve (min 2 caratteri)" });
   const safe = q.replace(/[`$\\|;&<>'"!\n\r]/g, "").slice(0, 200);
@@ -23050,7 +23050,7 @@ app.get("/api/system", async (_req, res) => {
     memory: { total: memTotal, used: memUsed, free: memFree },
     disk: { total: diskTotal, used: diskUsed, free: diskFree, percent: diskPercent },
     load: { "1m": loadValues[0], "5m": loadValues[1], "15m": loadValues[2] },
-    hostname: process.env.HOSTNAME ?? "unknown"
+    hostname: process.env.HOSTNAME || "unknown"
   });
 });
 app.get("/api/fail2ban/jails", async (_req, res) => {
