@@ -4,8 +4,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx index.ts",
-    "build": "esbuild index.ts --platform=node --bundle --format=cjs --outfile=agent-bundle.js",
+    "build": "esbuild index.ts --platform=node --target=node12 --bundle --format=cjs --outfile=agent-bundle.js",
     "start": "node agent-bundle.js"
+  },
+  "engines": {
+    "node": ">=12.0.0"
   },
   "dependencies": {
     "express": "^4.21.2"
