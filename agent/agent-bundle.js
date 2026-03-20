@@ -22586,6 +22586,7 @@ var import_path = __toESM(require("path"), 1);
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
 var app = (0, import_express.default)();
 app.use(import_express.default.json());
+var AGENT_VERSION = "1.2.0";
 var AGENT_API_KEY = process.env.AGENT_API_KEY || "";
 var PORT = parseInt(process.env.AGENT_PORT || "3001", 10);
 var BIND = process.env.AGENT_BIND || "0.0.0.0";
@@ -22600,7 +22601,7 @@ function requireApiKey(req, res, next) {
 }
 app.use("/api", requireApiKey);
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", hostname: process.env.HOSTNAME || "unknown", ts: Date.now() });
+  res.json({ status: "ok", hostname: process.env.HOSTNAME || "unknown", ts: Date.now(), version: AGENT_VERSION });
 });
 async function runCmd(cmd, timeout = 1e4) {
   try {
@@ -23274,6 +23275,27 @@ app.post("/api/asn/test-ip", async (req, res) => {
 app.get("/api/asn/log", async (_req, res) => {
   const { stdout } = await runCmd("tail -50 /var/log/update-asn-block.log 2>/dev/null || echo ''");
   res.json({ lines: stdout.split("\n").filter(Boolean) });
+});
+app.post("/api/agent/update", import_express.default.raw({ type: "*/*", limit: "10mb" }), async (req, res) => {
+  var bundle = req.body;
+  if (!Buffer.isBuffer(bundle) || bundle.length < 1e3) {
+    return res.status(400).json({ error: "Bundle non valido o troppo piccolo" });
+  }
+  var dest = process.argv[1];
+  try {
+    await (0, import_promises.writeFile)(dest, bundle);
+    res.json({ ok: true, version: AGENT_VERSION, message: "Bundle aggiornato, riavvio in corso..." });
+    setTimeout(function() {
+      var child = (0, import_child_process.spawn)("sudo", ["systemctl", "restart", "proxy-guardian-agent"], {
+        detached: true,
+        stdio: "ignore"
+      });
+      child.unref();
+    }, 500);
+  } catch (err) {
+    var e = err;
+    res.status(500).json({ error: e.message });
+  }
 });
 app.listen(PORT, BIND, () => {
   console.log(`[ProxyGuardian Agent] Listening on ${BIND}:${PORT}`);
