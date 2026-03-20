@@ -110,6 +110,7 @@ export default function Firewall() {
           <TabsTrigger value="asn">ASN</TabsTrigger>
           <TabsTrigger value="isp">ISP</TabsTrigger>
           <TabsTrigger value="useragent">User-Agent</TabsTrigger>
+          <TabsTrigger value="baduseragent">Bad User-Agent</TabsTrigger>
           <TabsTrigger value="ip">IP Whitelist</TabsTrigger>
           <TabsTrigger value="exclusion">IP Exclusion</TabsTrigger>
           <TabsTrigger value="iptables">IPTables Banned</TabsTrigger>
@@ -119,6 +120,7 @@ export default function Firewall() {
         <TabsContent value="asn"><AsnTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="isp"><IspTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="useragent"><UserAgentTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
+        <TabsContent value="baduseragent"><BadUserAgentTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="ip"><IpWhitelistTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="exclusion"><ExclusionIpTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="iptables"><IpTablesSearchTab /></TabsContent>
@@ -524,80 +526,120 @@ function UserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
   if (isLoading) return <LoadingState message="Caricamento..." />;
 
   return (
-    <div className="mt-4 space-y-4">
-      <Card>
-        <CardHeader><CardTitle>Blacklist User-Agent (ISP map)</CardTitle><CardDescription>Blocca ISP per pattern regex — file: useragent.rules</CardDescription></CardHeader>
-        <CardContent className="space-y-4">
-          <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <Input placeholder="Pattern (es. bot|crawler)" className="md:col-span-2" value={newPattern} onChange={e => setNewPattern(e.target.value)} onKeyDown={e => e.key === "Enter" && addPattern()} />
-            <Button onClick={addPattern}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
-          </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Cerca pattern..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
-          </div>
-          {search && <p className="text-xs text-muted-foreground">{filtered.length} / {patterns.length} risultati</p>}
-          <div className="border rounded-md">
-            <Table>
-              <TableHeader><TableRow><TableHead>Pattern</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {filtered.length === 0 ? (
-                  <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun pattern configurato"}</TableCell></TableRow>
-                ) : filtered.map(pattern => (
-                  <TableRow key={pattern}>
-                    <TableCell className="font-mono text-sm">{pattern}</TableCell>
-                    <TableCell><Badge variant="destructive">Bloccato</Badge></TableCell>
-                    <TableCell className="text-right"><Button variant="ghost" size="icon" onClick={() => { setPatterns(patterns.filter(p => p !== pattern)); setHasChanges(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-          <div className="flex justify-end">
-            <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
-              <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-      <BadUserAgentsCard refVps={refVps} saveTarget={saveTarget} />
-    </div>
+    <Card className="mt-4">
+      <CardHeader><CardTitle>Blacklist User-Agent</CardTitle><CardDescription>Blocca ISP per pattern regex — file: useragent.rules</CardDescription></CardHeader>
+      <CardContent className="space-y-4">
+        <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <Input placeholder="Pattern (es. bot|crawler)" className="md:col-span-2" value={newPattern} onChange={e => setNewPattern(e.target.value)} onKeyDown={e => e.key === "Enter" && addPattern()} />
+          <Button onClick={addPattern}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca pattern..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {patterns.length} risultati</p>}
+        <div className="border rounded-md">
+          <Table>
+            <TableHeader><TableRow><TableHead>Pattern</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun pattern configurato"}</TableCell></TableRow>
+              ) : filtered.map(pattern => (
+                <TableRow key={pattern}>
+                  <TableCell className="font-mono text-sm">{pattern}</TableCell>
+                  <TableCell><Badge variant="destructive">Bloccato</Badge></TableCell>
+                  <TableCell className="text-right"><Button variant="ghost" size="icon" onClick={() => { setPatterns(patterns.filter(p => p !== pattern)); setHasChanges(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <div className="flex justify-end">
+          <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
+            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
-function BadUserAgentsCard({ refVps, saveTarget }: { refVps: Vps; saveTarget: string }) {
-  const [content, setContent] = useState("");
+// ── Bad User-Agent ─────────────────────────────────────────────────────────────
+
+function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
+  const [patterns, setPatterns] = useState<string[]>([]);
+  const [newPattern, setNewPattern] = useState("");
+  const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
   const saveMutation = useSaveConfig("block_baduseragents.conf", saveTarget);
 
-  const { data, isLoading } = useQuery<{ content: string }>({
+  const { data: configData, isLoading } = useQuery<{ content: string }>({
     queryKey: ["proxy-config-block_baduseragents", refVps?.id],
     queryFn: async () => { const r = await apiRequest("GET", `/api/vps/${refVps!.id}/proxy/api/config/block_baduseragents.conf`); return r.json(); },
     enabled: !!refVps,
   });
 
   useEffect(() => {
-    if (data) { setContent(data.content); setHasChanges(false); }
-  }, [data]);
+    if (configData) {
+      const parsed = configData.content.split("\n").map(line => {
+        const t = line.trim();
+        if (t.startsWith("#") || !t) return null;
+        const m = t.match(/^~?\*?(.+?)\s+\S+;/);
+        return m ? m[1].trim() : null;
+      }).filter(Boolean) as string[];
+      setPatterns(parsed); setHasChanges(false);
+    }
+  }, [configData]);
 
-  if (isLoading) return <LoadingState message="Caricamento bad user agents..." />;
+  const addPattern = () => {
+    if (newPattern && !patterns.includes(newPattern)) {
+      setPatterns([...patterns, newPattern]); setNewPattern(""); setHasChanges(true);
+    }
+  };
+
+  const handleSave = () => {
+    const content = patterns.map(p => `~*${p} 1;`).join("\n") + "\n";
+    saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
+  };
+
+  const filtered = search ? patterns.filter(p => p.toLowerCase().includes(search.toLowerCase())) : patterns;
+
+  if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
+  if (isLoading) return <LoadingState message="Caricamento..." />;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Bad User Agents</CardTitle>
-        <CardDescription>Editor raw — file: block_baduseragents.conf</CardDescription>
-      </CardHeader>
+    <Card className="mt-4">
+      <CardHeader><CardTitle>Bad User-Agent</CardTitle><CardDescription>Blocca specifici user agent — file: block_baduseragents.conf</CardDescription></CardHeader>
       <CardContent className="space-y-4">
-        <Textarea
-          value={content}
-          onChange={e => { setContent(e.target.value); setHasChanges(true); }}
-          className="font-mono text-sm min-h-64"
-          placeholder="# Incolla il contenuto di /etc/nginx/block_baduseragents.conf"
-        />
+        <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <Input placeholder="Pattern (es. python-requests|curl)" className="md:col-span-2" value={newPattern} onChange={e => setNewPattern(e.target.value)} onKeyDown={e => e.key === "Enter" && addPattern()} />
+          <Button onClick={addPattern}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca pattern..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {patterns.length} risultati</p>}
+        <div className="border rounded-md">
+          <Table>
+            <TableHeader><TableRow><TableHead>Pattern</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun pattern configurato"}</TableCell></TableRow>
+              ) : filtered.map(pattern => (
+                <TableRow key={pattern}>
+                  <TableCell className="font-mono text-sm">{pattern}</TableCell>
+                  <TableCell><Badge variant="destructive">Bloccato</Badge></TableCell>
+                  <TableCell className="text-right"><Button variant="ghost" size="icon" onClick={() => { setPatterns(patterns.filter(p => p !== pattern)); setHasChanges(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
         <div className="flex justify-end">
-          <Button onClick={() => saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) })} disabled={!hasChanges || saveMutation.isPending}>
+          <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
             <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
