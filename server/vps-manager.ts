@@ -114,7 +114,12 @@ export async function agentGet(vps: VpsConfig, path: string): Promise<any> {
 
 export async function agentPost(vps: VpsConfig, path: string, body: any): Promise<any> {
   const res = await agentFetch(vps, path, { method: "POST", body: JSON.stringify(body) });
-  if (!res.ok) { const text = await res.text(); throw new Error(`Agent ${vps.name}: ${res.status} - ${text}`); }
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text;
+    try { const parsed = JSON.parse(text); msg = parsed.error || parsed.message || text; } catch {}
+    throw new Error(`${vps.name}: ${msg}`);
+  }
   return res.json();
 }
 

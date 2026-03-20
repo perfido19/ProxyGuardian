@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Save, Trash2, Wifi, Search, RefreshCw, ShieldAlert, ShieldCheck, ShieldOff, Eye, FileText, Download } from "lucide-react";
+import { Plus, Save, Trash2, Wifi, Search, RefreshCw, ShieldAlert, ShieldCheck, ShieldOff, Eye, FileText, Download, CheckCircle2, AlertTriangle } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -221,6 +221,7 @@ function AsnTab({ refVps }: TabProps) {
   const [newAsn, setNewAsn] = useState(""); const [newDesc, setNewDesc] = useState("");
   const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<BulkResult[]>([]);
 
   const { data: fleetData } = useQuery<{ content: string }>({
     queryKey: ["fleet-asn-blocklist"],
@@ -233,9 +234,16 @@ function AsnTab({ refVps }: TabProps) {
       return r.json();
     },
     onSuccess: (data) => {
-      const ok = (data.syncResults || []).filter((r: BulkResult) => r.success).length;
-      const tot = (data.syncResults || []).length;
-      toast({ title: "Fleet ASN salvato", description: `Sincronizzato su ${ok}/${tot} VPS + repo` });
+      const results: BulkResult[] = data.syncResults || [];
+      setSyncStatus(results);
+      const ok = results.filter(r => r.success).length;
+      const tot = results.length;
+      const failed = results.filter(r => !r.success);
+      if (failed.length > 0) {
+        toast({ title: `Salvato con errori: ${ok}/${tot} VPS`, description: failed.map(r => `${r.vpsName}: ${r.error}`).join(" • "), variant: "destructive" });
+      } else {
+        toast({ title: "Fleet ASN salvato", description: `Sincronizzato su ${ok}/${tot} VPS + repo` });
+      }
       setHasChanges(false);
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
@@ -353,6 +361,22 @@ function AsnTab({ refVps }: TabProps) {
               <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Sincronizzazione..." : "Salva su repo + tutti i VPS"}
             </Button>
           </div>
+          {syncStatus.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1 border-t">
+              {syncStatus.map(r => (
+                <span
+                  key={r.vpsId}
+                  title={r.success ? `${r.vpsName}: OK` : `${r.vpsName}: ${r.error}`}
+                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border cursor-default ${r.success ? "border-green-600/40 text-green-600" : "border-yellow-500/40 text-yellow-600"}`}
+                >
+                  {r.success
+                    ? <CheckCircle2 className="w-3 h-3" />
+                    : <AlertTriangle className="w-3 h-3" />}
+                  {r.vpsName}
+                </span>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
       <AsnWhitelistCard />
