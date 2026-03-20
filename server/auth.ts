@@ -3,7 +3,7 @@ import * as crypto from "crypto";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type UserRole = "admin" | "operator" | "viewer";
+export type UserRole = "admin" | "operator";
 
 export interface User {
   id: string;
@@ -13,6 +13,7 @@ export interface User {
   enabled: boolean;
   createdAt: string;
   lastLogin?: string;
+  assignedVps?: string[]; // undefined = tutti i VPS (admin); array = VPS assegnati (operator)
 }
 
 export type SafeUser = Omit<User, "passwordHash">;
@@ -62,7 +63,6 @@ export function validateCredentials(username: string, password: string): SafeUse
   if (!user) return null;
   if (user.passwordHash !== hashPassword(password)) return null;
 
-  // Aggiorna lastLogin
   user.lastLogin = new Date().toISOString();
   return toSafeUser(user);
 }
@@ -79,7 +79,8 @@ export function getUserById(id: string): SafeUser | null {
 export function createUser(
   username: string,
   password: string,
-  role: UserRole
+  role: UserRole,
+  assignedVps?: string[]
 ): SafeUser {
   const existing = Array.from(users.values()).find(u => u.username === username);
   if (existing) throw new Error("Username già in uso");
@@ -91,6 +92,7 @@ export function createUser(
     role,
     enabled: true,
     createdAt: new Date().toISOString(),
+    assignedVps: role === "operator" ? (assignedVps ?? []) : undefined,
   };
   users.set(user.id, user);
   return toSafeUser(user);
@@ -98,7 +100,7 @@ export function createUser(
 
 export function updateUser(
   id: string,
-  updates: { password?: string; role?: UserRole; enabled?: boolean }
+  updates: { password?: string; role?: UserRole; enabled?: boolean; assignedVps?: string[] }
 ): SafeUser {
   const user = users.get(id);
   if (!user) throw new Error("Utente non trovato");
@@ -108,9 +110,14 @@ export function updateUser(
   }
   if (updates.role !== undefined) {
     user.role = updates.role;
+    // Se passa da operator ad admin, rimuovi assignedVps
+    if (updates.role === "admin") user.assignedVps = undefined;
   }
   if (updates.enabled !== undefined) {
     user.enabled = updates.enabled;
+  }
+  if (updates.assignedVps !== undefined && user.role === "operator") {
+    user.assignedVps = updates.assignedVps;
   }
 
   return toSafeUser(user);
@@ -120,13 +127,20 @@ export function deleteUser(id: string): void {
   const user = users.get(id);
   if (!user) throw new Error("Utente non trovato");
 
-  // Impedisci di eliminare l'ultimo admin
   if (user.role === "admin") {
     const admins = Array.from(users.values()).filter(u => u.role === "admin" && u.enabled);
     if (admins.length <= 1) throw new Error("Impossibile eliminare l'unico admin");
   }
 
   users.delete(id);
+}
+
+/** Restituisce gli ID VPS a cui l'utente ha accesso. undefined = tutti. */
+export function getUserAllowedVps(userId: string): string[] | undefined {
+  const user = users.get(userId);
+  if (!user) return [];
+  if (user.role === "admin") return undefined; // tutti
+  return user.assignedVps ?? [];
 }
 
 // ─── Session type augmentation ────────────────────────────────────────────────
@@ -173,7 +187,13 @@ export function requireRole(...roles: UserRole[]) {
   };
 }
 
-// Shorthand: solo admin e operator possono modificare
+/** Controlla che l'utente (operator) abbia accesso al VPS specificato. */
+export function requireVpsAccess(vpsId: string, userId: string): boolean {
+  const allowed = getUserAllowedVps(userId);
+  if (allowed === undefined) return true; // admin: accesso totale
+  return allowed.includes(vpsId);
+}
+
+// Shorthand
 export const requireOperator = requireRole("admin", "operator");
-// Solo admin
 export const requireAdmin = requireRole("admin");

@@ -2,12 +2,14 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth, type AuthUser } from "@/hooks/use-auth";
+import { useVpsList } from "@/hooks/use-vps";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -22,26 +24,59 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Plus, Pencil, Trash2, Users } from "lucide-react";
+import { Plus, Pencil, Trash2, Users, Server } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 
-type UserRole = "admin" | "operator" | "viewer";
+type UserRole = "admin" | "operator";
 
 const roleLabels: Record<UserRole, string> = {
   admin: "Admin",
   operator: "Operator",
-  viewer: "Viewer",
 };
 
-const roleBadgeVariant: Record<UserRole, "default" | "secondary" | "outline"> = {
+const roleBadgeVariant: Record<UserRole, "default" | "secondary"> = {
   admin: "default",
   operator: "secondary",
-  viewer: "outline",
 };
+
+function VpsAssignPicker({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const { data: vpsList } = useVpsList();
+  const list = vpsList || [];
+
+  const toggle = (id: string) => {
+    onChange(selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
+  };
+
+  if (list.length === 0) return <p className="text-xs text-muted-foreground">Nessun VPS disponibile</p>;
+
+  return (
+    <div className="space-y-2 max-h-40 overflow-y-auto border rounded-md p-2">
+      {list.map(v => (
+        <div key={v.id} className="flex items-center gap-2">
+          <Checkbox
+            id={`vps-${v.id}`}
+            checked={selected.includes(v.id)}
+            onCheckedChange={() => toggle(v.id)}
+          />
+          <label htmlFor={`vps-${v.id}`} className="text-sm font-mono cursor-pointer select-none">
+            {v.name}
+          </label>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function UserManagement() {
   const { user: currentUser } = useAuth();
+  const { data: vpsList } = useVpsList();
   const { toast } = useToast();
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -49,29 +84,29 @@ export default function UserManagement() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<AuthUser | null>(null);
 
-  // Form state creazione
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [newRole, setNewRole] = useState<UserRole>("viewer");
+  const [newRole, setNewRole] = useState<UserRole>("operator");
+  const [newAssignedVps, setNewAssignedVps] = useState<string[]>([]);
 
-  // Form state modifica
   const [editPassword, setEditPassword] = useState("");
-  const [editRole, setEditRole] = useState<UserRole>("viewer");
+  const [editRole, setEditRole] = useState<UserRole>("operator");
   const [editEnabled, setEditEnabled] = useState(true);
+  const [editAssignedVps, setEditAssignedVps] = useState<string[]>([]);
 
   const { data: users, isLoading } = useQuery<AuthUser[]>({
     queryKey: ["/api/users"],
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: { username: string; password: string; role: UserRole }) => {
+    mutationFn: async (data: { username: string; password: string; role: UserRole; assignedVps?: string[] }) => {
       const res = await apiRequest("POST", "/api/users", data);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
       setCreateDialogOpen(false);
-      setNewUsername(""); setNewPassword(""); setNewRole("viewer");
+      setNewUsername(""); setNewPassword(""); setNewRole("operator"); setNewAssignedVps([]);
       toast({ title: "Utente creato", description: "Nuovo utente aggiunto con successo" });
     },
     onError: (e: any) => {
@@ -80,7 +115,7 @@ export default function UserManagement() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, ...data }: { id: string; password?: string; role?: UserRole; enabled?: boolean }) => {
+    mutationFn: async ({ id, ...data }: { id: string; password?: string; role?: UserRole; enabled?: boolean; assignedVps?: string[] }) => {
       const res = await apiRequest("PUT", `/api/users/${id}`, data);
       return res.json();
     },
@@ -114,6 +149,7 @@ export default function UserManagement() {
     setEditRole(user.role);
     setEditEnabled(user.enabled);
     setEditPassword("");
+    setEditAssignedVps(user.assignedVps ?? []);
     setEditDialogOpen(true);
   };
 
@@ -124,7 +160,12 @@ export default function UserManagement() {
 
   const handleCreate = () => {
     if (!newUsername || !newPassword) return;
-    createMutation.mutate({ username: newUsername, password: newPassword, role: newRole });
+    createMutation.mutate({
+      username: newUsername,
+      password: newPassword,
+      role: newRole,
+      ...(newRole === "operator" ? { assignedVps: newAssignedVps } : {}),
+    });
   };
 
   const handleEdit = () => {
@@ -134,8 +175,11 @@ export default function UserManagement() {
       ...(editPassword ? { password: editPassword } : {}),
       role: editRole,
       enabled: editEnabled,
+      ...(editRole === "operator" ? { assignedVps: editAssignedVps } : {}),
     });
   };
+
+  const vpsNameMap = new Map((vpsList || []).map(v => [v.id, v.name]));
 
   if (isLoading) return <LoadingState message="Caricamento utenti..." />;
 
@@ -158,7 +202,7 @@ export default function UserManagement() {
               </CardTitle>
               <CardDescription>{displayUsers.length} utenti configurati</CardDescription>
             </div>
-            <Button onClick={() => setCreateDialogOpen(true)} data-testid="button-create-user">
+            <Button onClick={() => setCreateDialogOpen(true)}>
               <Plus className="w-4 h-4 mr-1" />
               Nuovo Utente
             </Button>
@@ -171,6 +215,7 @@ export default function UserManagement() {
                 <TableRow>
                   <TableHead>Username</TableHead>
                   <TableHead>Ruolo</TableHead>
+                  <TableHead>VPS Assegnati</TableHead>
                   <TableHead>Stato</TableHead>
                   <TableHead>Ultimo Accesso</TableHead>
                   <TableHead className="text-right">Azioni</TableHead>
@@ -178,7 +223,7 @@ export default function UserManagement() {
               </TableHeader>
               <TableBody>
                 {displayUsers.map((u) => (
-                  <TableRow key={u.id} data-testid={`row-user-${u.username}`}>
+                  <TableRow key={u.id}>
                     <TableCell className="font-mono font-medium">
                       {u.username}
                       {u.id === currentUser?.id && (
@@ -191,23 +236,32 @@ export default function UserManagement() {
                       </Badge>
                     </TableCell>
                     <TableCell>
+                      {u.role === "admin" ? (
+                        <span className="text-xs text-muted-foreground">Tutti</span>
+                      ) : u.assignedVps && u.assignedVps.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {u.assignedVps.map(id => (
+                            <Badge key={id} variant="outline" className="text-xs font-mono">
+                              <Server className="w-2.5 h-2.5 mr-1" />
+                              {vpsNameMap.get(id) ?? id}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Nessuno</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
                       <Badge variant={u.enabled ? "default" : "secondary"}>
                         {u.enabled ? "Attivo" : "Disabilitato"}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {u.lastLogin
-                        ? new Date(u.lastLogin).toLocaleString("it-IT")
-                        : "Mai"}
+                      {u.lastLogin ? new Date(u.lastLogin).toLocaleString("it-IT") : "Mai"}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => handleEditOpen(u)}
-                          data-testid={`button-edit-user-${u.username}`}
-                        >
+                        <Button variant="outline" size="icon" onClick={() => handleEditOpen(u)}>
                           <Pencil className="w-4 h-4" />
                         </Button>
                         <Button
@@ -215,7 +269,6 @@ export default function UserManagement() {
                           size="icon"
                           onClick={() => handleDeleteOpen(u)}
                           disabled={u.id === currentUser?.id}
-                          data-testid={`button-delete-user-${u.username}`}
                         >
                           <Trash2 className="w-4 h-4 text-destructive" />
                         </Button>
@@ -233,9 +286,8 @@ export default function UserManagement() {
       <Card>
         <CardHeader><CardTitle className="text-sm">Permessi per Ruolo</CardTitle></CardHeader>
         <CardContent className="text-sm text-muted-foreground space-y-2">
-          <p><Badge variant="default" className="mr-2">Admin</Badge>Accesso completo: lettura, scrittura, gestione utenti</p>
-          <p><Badge variant="secondary" className="mr-2">Operator</Badge>Lettura + azioni su servizi, ban/unban, modifica configurazioni</p>
-          <p><Badge variant="outline" className="mr-2">Viewer</Badge>Solo lettura: dashboard, log, statistiche</p>
+          <p><Badge variant="default" className="mr-2">Admin</Badge>Accesso completo a tutti i VPS: lettura, scrittura, configurazioni, gestione utenti</p>
+          <p><Badge variant="secondary" className="mr-2">Operator</Badge>Accesso solo ai VPS assegnati — lettura, azioni su servizi, ban/unban. Configurazioni in sola lettura.</p>
         </CardContent>
       </Card>
 
@@ -253,7 +305,6 @@ export default function UserManagement() {
                 value={newUsername}
                 onChange={(e) => setNewUsername(e.target.value)}
                 placeholder="es. mario.rossi"
-                data-testid="input-new-username"
               />
             </div>
             <div className="space-y-2">
@@ -263,29 +314,33 @@ export default function UserManagement() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Minimo 6 caratteri"
-                data-testid="input-new-password"
               />
             </div>
             <div className="space-y-2">
               <Label>Ruolo</Label>
               <Select value={newRole} onValueChange={(v) => setNewRole(v as UserRole)}>
-                <SelectTrigger data-testid="select-new-role">
+                <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="admin">Admin</SelectItem>
                   <SelectItem value="operator">Operator</SelectItem>
-                  <SelectItem value="viewer">Viewer</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            {newRole === "operator" && (
+              <div className="space-y-2">
+                <Label>VPS Assegnati</Label>
+                <VpsAssignPicker selected={newAssignedVps} onChange={setNewAssignedVps} />
+                <p className="text-xs text-muted-foreground">L'operator vedrà solo i VPS selezionati</p>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Annulla</Button>
             <Button
               onClick={handleCreate}
               disabled={!newUsername || !newPassword || createMutation.isPending}
-              data-testid="button-confirm-create-user"
             >
               {createMutation.isPending ? "Creazione..." : "Crea Utente"}
             </Button>
@@ -298,7 +353,7 @@ export default function UserManagement() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Modifica: {selectedUser?.username}</DialogTitle>
-            <DialogDescription>Aggiorna ruolo, password o stato dell'utente</DialogDescription>
+            <DialogDescription>Aggiorna ruolo, password, stato e VPS assegnati</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
@@ -308,39 +363,39 @@ export default function UserManagement() {
                 value={editPassword}
                 onChange={(e) => setEditPassword(e.target.value)}
                 placeholder="Lascia vuoto per non cambiare"
-                data-testid="input-edit-password"
               />
             </div>
             <div className="space-y-2">
               <Label>Ruolo</Label>
               <Select value={editRole} onValueChange={(v) => setEditRole(v as UserRole)}>
-                <SelectTrigger data-testid="select-edit-role">
+                <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="admin">Admin</SelectItem>
                   <SelectItem value="operator">Operator</SelectItem>
-                  <SelectItem value="viewer">Viewer</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            {editRole === "operator" && (
+              <div className="space-y-2">
+                <Label>VPS Assegnati</Label>
+                <VpsAssignPicker selected={editAssignedVps} onChange={setEditAssignedVps} />
+                <p className="text-xs text-muted-foreground">L'operator vedrà solo i VPS selezionati</p>
+              </div>
+            )}
             <div className="flex items-center justify-between">
               <Label>Account abilitato</Label>
               <Switch
                 checked={editEnabled}
                 onCheckedChange={setEditEnabled}
                 disabled={selectedUser?.id === currentUser?.id}
-                data-testid="switch-edit-enabled"
               />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditDialogOpen(false)}>Annulla</Button>
-            <Button
-              onClick={handleEdit}
-              disabled={updateMutation.isPending}
-              data-testid="button-confirm-edit-user"
-            >
+            <Button onClick={handleEdit} disabled={updateMutation.isPending}>
               {updateMutation.isPending ? "Salvataggio..." : "Salva Modifiche"}
             </Button>
           </DialogFooter>
@@ -361,7 +416,6 @@ export default function UserManagement() {
             <AlertDialogAction
               onClick={() => selectedUser && deleteMutation.mutate(selectedUser.id)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              data-testid="button-confirm-delete-user"
             >
               Elimina
             </AlertDialogAction>
