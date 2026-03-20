@@ -101,6 +101,8 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/netbird update
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent
 SUDOEOF
 chmod 440 /etc/sudoers.d/proxy-guardian-agent
 ok "Sudoers configurati"
@@ -110,6 +112,20 @@ usermod -aG adm "$AGENT_USER" 2>/dev/null || true
 chmod 644 /var/log/nginx/*.log 2>/dev/null || true
 chmod 644 /var/log/fail2ban.log 2>/dev/null || true
 [ -d /etc/nginx ] && chmod o+r /etc/nginx/*.conf /etc/nginx/conf.d/*.conf 2>/dev/null || true
+
+# ── ModSecurity audit log ────────────────────────────────────────────────────
+NGINX_USER=$(grep -oP '^user\s+\K\S+(?=;)' /etc/nginx/nginx.conf 2>/dev/null || echo "www-data")
+mkdir -p /opt/log
+touch /opt/log/modsec_audit.log
+chown "${NGINX_USER}:${AGENT_USER}" /opt/log/modsec_audit.log
+chmod 664 /opt/log/modsec_audit.log
+chown "${NGINX_USER}:${AGENT_USER}" /opt/log
+chmod 775 /opt/log
+# Forza SecAuditLogType Serial (Concurrent senza StorageDir non scrive nulla)
+if [ -f /etc/nginx/conf/modsecurity.conf ]; then
+  sed -i 's/SecAuditLogType Concurrent/SecAuditLogType Serial/' /etc/nginx/conf/modsecurity.conf
+  ok "ModSecurity: SecAuditLogType impostato a Serial"
+fi
 
 # ── Scarica agent bundle ─────────────────────────────────────────────────────
 mkdir -p "$AGENT_DIR"

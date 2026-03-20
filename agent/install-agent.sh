@@ -42,10 +42,24 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl start fail2ban
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl stop fail2ban
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart fail2ban
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent
 SUDOEOF
 chmod 440 /etc/sudoers.d/proxy-guardian-agent
 usermod -aG adm "$AGENT_USER" 2>/dev/null || true
 chmod 664 /etc/nginx/*.conf /etc/fail2ban/jail.local /etc/fail2ban/fail2ban.local 2>/dev/null || true
+
+# ── ModSecurity audit log ────────────────────────────────────────────────────
+NGINX_USER=$(grep -oP '^user\s+\K\S+(?=;)' /etc/nginx/nginx.conf 2>/dev/null || echo "www-data")
+mkdir -p /opt/log
+touch /opt/log/modsec_audit.log
+chown "${NGINX_USER}:${AGENT_USER}" /opt/log/modsec_audit.log
+chmod 664 /opt/log/modsec_audit.log
+chown "${NGINX_USER}:${AGENT_USER}" /opt/log
+chmod 775 /opt/log
+if [ -f /etc/nginx/conf/modsecurity.conf ]; then
+  sed -i 's/SecAuditLogType Concurrent/SecAuditLogType Serial/' /etc/nginx/conf/modsecurity.conf
+fi
 
 # Copia file
 mkdir -p "$AGENT_DIR"
