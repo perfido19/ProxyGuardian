@@ -22757,7 +22757,9 @@ var CONFIG_PATHS = {
   "ip_whitelist.conf": "/etc/nginx/ip_whitelist.conf",
   "exclusion_ip.conf": "/etc/nginx/exclusion_ip.conf",
   "modsecurity.conf": "/etc/nginx/conf/modsecurity.conf",
-  "crs-setup.conf": "/etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf"
+  "crs-setup.conf": "/etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf",
+  "block_baduseragents.conf": "/etc/nginx/block_baduseragents.conf",
+  "asn-whitelist.txt": "/etc/asn-whitelist-nets.txt"
 };
 app.get("/api/config/:filename", async (req, res) => {
   const filePath = CONFIG_PATHS[req.params.filename];
