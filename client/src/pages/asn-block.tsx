@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LoadingState } from "@/components/loading-state";
 import { useToast } from "@/hooks/use-toast";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 import {
   Plus, Trash2, Search, RefreshCw, CheckCircle, XCircle,
   Shield, Activity, Settings, FileText, AlertTriangle, Play, Database,
@@ -53,22 +53,69 @@ function ServiceBadge({ state }: { state: string }) {
   );
 }
 
-const COUNTRY_COLORS = ["#dc2626", "#ea580c", "#d97706", "#ca8a04", "#65a30d"];
+// ─── Map helpers ──────────────────────────────────────────────────────────────
 
-function countryColor(index: number, total: number) {
-  const pct = index / Math.max(total - 1, 1);
-  if (pct < 0.25) return COUNTRY_COLORS[0];
-  if (pct < 0.5) return COUNTRY_COLORS[1];
-  if (pct < 0.75) return COUNTRY_COLORS[2];
-  return COUNTRY_COLORS[4];
+const GEO_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
+
+// ISO Alpha-2 → ISO Numeric (for topojson geo.id matching)
+const ISO2_NUMERIC: Record<string, string> = {
+  AF:"004",AX:"248",AL:"008",DZ:"012",AS:"016",AD:"020",AO:"024",AI:"660",AQ:"010",AG:"028",
+  AR:"032",AM:"051",AW:"533",AU:"036",AT:"040",AZ:"031",BS:"044",BH:"048",BD:"050",BB:"052",
+  BY:"112",BE:"056",BZ:"084",BJ:"204",BM:"060",BT:"064",BO:"068",BQ:"535",BA:"070",BW:"072",
+  BV:"074",BR:"076",IO:"086",BN:"096",BG:"100",BF:"854",BI:"108",CV:"132",KH:"116",CM:"120",
+  CA:"124",KY:"136",CF:"140",TD:"148",CL:"152",CN:"156",CX:"162",CC:"166",CO:"170",KM:"174",
+  CG:"178",CD:"180",CK:"184",CR:"188",CI:"384",HR:"191",CU:"192",CW:"531",CY:"196",CZ:"203",
+  DK:"208",DJ:"262",DM:"212",DO:"214",EC:"218",EG:"818",SV:"222",GQ:"226",ER:"232",EE:"233",
+  SZ:"748",ET:"231",FK:"238",FO:"234",FJ:"242",FI:"246",FR:"250",GF:"254",PF:"258",TF:"260",
+  GA:"266",GM:"270",GE:"268",DE:"276",GH:"288",GI:"292",GR:"300",GL:"304",GD:"308",GP:"312",
+  GU:"316",GT:"320",GG:"831",GN:"324",GW:"624",GY:"328",HT:"332",HM:"334",VA:"336",HN:"340",
+  HK:"344",HU:"348",IS:"352",IN:"356",ID:"360",IR:"364",IQ:"368",IE:"372",IM:"833",IL:"376",
+  IT:"380",JM:"388",JP:"392",JE:"832",JO:"400",KZ:"398",KE:"404",KI:"296",KP:"408",KR:"410",
+  KW:"414",KG:"417",LA:"418",LV:"428",LB:"422",LS:"426",LR:"430",LY:"434",LI:"438",LT:"440",
+  LU:"442",MO:"446",MG:"450",MW:"454",MY:"458",MV:"462",ML:"466",MT:"470",MH:"584",MQ:"474",
+  MR:"478",MU:"480",YT:"175",MX:"484",FM:"583",MD:"498",MC:"492",MN:"496",ME:"499",MS:"500",
+  MA:"504",MZ:"508",MM:"104",NA:"516",NR:"520",NP:"524",NL:"528",NC:"540",NZ:"554",NI:"558",
+  NE:"562",NG:"566",NU:"570",NF:"574",MK:"807",MP:"580",NO:"578",OM:"512",PK:"586",PW:"585",
+  PS:"275",PA:"591",PG:"598",PY:"600",PE:"604",PH:"608",PN:"612",PL:"616",PT:"620",PR:"630",
+  QA:"634",RE:"638",RO:"642",RU:"643",RW:"646",BL:"652",SH:"654",KN:"659",LC:"662",MF:"663",
+  PM:"666",VC:"670",WS:"882",SM:"674",ST:"678",SA:"682",SN:"686",RS:"688",SC:"690",SL:"694",
+  SG:"702",SX:"534",SK:"703",SI:"705",SB:"090",SO:"706",ZA:"710",GS:"239",SS:"728",ES:"724",
+  LK:"144",SD:"729",SR:"740",SJ:"744",SE:"752",CH:"756",SY:"760",TW:"158",TJ:"762",TZ:"834",
+  TH:"764",TL:"626",TG:"768",TK:"772",TO:"776",TT:"780",TN:"788",TR:"792",TM:"795",TC:"796",
+  TV:"798",UG:"800",UA:"804",AE:"784",GB:"826",US:"840",UM:"581",UY:"858",UZ:"860",VU:"548",
+  VE:"862",VN:"704",VG:"092",VI:"850",WF:"876",EH:"732",YE:"887",ZM:"894",ZW:"716",
+};
+
+function flagEmoji(code: string): string {
+  if (!code || code.length !== 2) return "🌐";
+  const base = 127397;
+  return String.fromCodePoint(...code.toUpperCase().split("").map(c => base + c.charCodeAt(0)));
+}
+
+function fmtBytes(b: number): string {
+  if (b >= 1e9) return (b / 1e9).toFixed(1) + " GB";
+  if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
+  if (b >= 1e3) return (b / 1e3).toFixed(1) + " KB";
+  return b + " B";
+}
+
+function mapColor(packets: number, maxPackets: number): string {
+  const pct = packets / Math.max(maxPackets, 1);
+  if (pct < 0.05) return "#334155";
+  if (pct < 0.2)  return "#b45309";
+  if (pct < 0.5)  return "#ea580c";
+  if (pct < 0.8)  return "#dc2626";
+  return "#991b1b";
 }
 
 // ─── Panoramica Tab ───────────────────────────────────────────────────────────
 
 function TabPanoramica({ vpsId }: { vpsId: string }) {
   const proxy = (path: string) => `/api/vps/${vpsId}/proxy${path}`;
+  const [asnPage, setAsnPage] = useState(0);
+  const [tooltip, setTooltip] = useState<{ name: string; packets: number; pct: number; flag: string } | null>(null);
 
-  const { data: status, isLoading: statusLoading, refetch: refetchStatus } = useQuery<AsnStatus>({
+  const { data: status, isLoading: statusLoading } = useQuery<AsnStatus>({
     queryKey: [`asn-status-${vpsId}`],
     queryFn: async () => { const r = await apiRequest("GET", proxy("/api/asn/status")); return r.json(); },
     refetchInterval: 60000,
@@ -80,21 +127,26 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
     refetchInterval: 300000,
   });
 
-  const countryMap = new Map<string, { country: string; packets: number }>();
+  // Build numeric ISO → country packet aggregation for map coloring
+  const countryPackets = new Map<string, { country: string; code2: string; packets: number }>();
   (stats?.top || []).forEach(s => {
-    const prev = countryMap.get(s.countryCode) || { country: s.country, packets: 0 };
-    countryMap.set(s.countryCode, { country: s.country, packets: prev.packets + s.packets });
+    const num = ISO2_NUMERIC[s.countryCode];
+    if (!num) return;
+    const prev = countryPackets.get(num) || { country: s.country, code2: s.countryCode, packets: 0 };
+    countryPackets.set(num, { ...prev, packets: prev.packets + s.packets });
   });
-  const topCountries = Array.from(countryMap.entries())
-    .map(([code, v]) => ({ code, ...v }))
-    .sort((a, b) => b.packets - a.packets)
-    .slice(0, 15);
+  const totalMapPackets = Array.from(countryPackets.values()).reduce((a, b) => a + b.packets, 0) || 1;
+  const maxCountryPackets = Math.max(...Array.from(countryPackets.values()).map(v => v.packets), 1);
 
-  const maxPackets = stats?.top?.[0]?.packets || 1;
+  const topAsn = stats?.top || [];
+  const maxPackets = topAsn[0]?.packets || 1;
+  const PAGE_SIZE = 10;
+  const pageCount = Math.ceil(Math.min(topAsn.length, 50) / PAGE_SIZE);
+  const pagedAsn = topAsn.slice(asnPage * PAGE_SIZE, (asnPage + 1) * PAGE_SIZE);
 
   return (
     <div className="space-y-4">
-      {/* Status cards */}
+      {/* Row 1: 4 status cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-4">
@@ -126,88 +178,136 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
         </Card>
       </div>
 
-      {/* Top ASN + Country chart */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-        {/* Top paesi */}
-        <Card>
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground">Top Paesi</CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => { refetchStats(); queryClient.invalidateQueries({ queryKey: [`asn-stats-${vpsId}`] }); }}>
-                <RefreshCw className="w-3.5 h-3.5" />
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? <LoadingState message="Caricamento..." /> : topCountries.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8 text-sm">Nessun dato disponibile</p>
-            ) : (
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={topCountries} layout="vertical" margin={{ left: 8, right: 8 }}>
-                  <XAxis type="number" hide />
-                  <YAxis type="category" dataKey="code" width={32} tick={{ fontSize: 11 }} />
-                  <Tooltip
-                    formatter={(v: number) => [v.toLocaleString(), "Pacchetti"]}
-                    labelFormatter={(l) => topCountries.find(c => c.code === l)?.country ?? l}
-                  />
-                  <Bar dataKey="packets" radius={[0, 3, 3, 0]}>
-                    {topCountries.map((_, i) => (
-                      <Cell key={i} fill={countryColor(i, topCountries.length)} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Top ASN */}
-        <Card>
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground">Top ASN</CardTitle>
-              {stats?.updatedAt && (
-                <span className="text-xs text-muted-foreground">{new Date(stats.updatedAt).toLocaleTimeString("it-IT")}</span>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
-            {statsLoading ? <LoadingState message="Caricamento..." /> : !stats?.top?.length ? (
-              <p className="text-center text-muted-foreground py-8 text-sm">Nessun dato disponibile</p>
-            ) : (
-              <div className="max-h-64 overflow-y-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-8">#</TableHead>
-                      <TableHead>ASN / Org</TableHead>
-                      <TableHead>Paese</TableHead>
-                      <TableHead className="text-right">Pacchetti</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {stats.top.slice(0, 20).map((s, i) => (
-                      <TableRow key={s.asn}>
-                        <TableCell className="text-xs text-muted-foreground">{i + 1}</TableCell>
-                        <TableCell>
-                          <p className="font-mono text-xs font-semibold">{s.asn}</p>
-                          <p className="text-xs text-muted-foreground truncate max-w-36">{s.org}</p>
-                          <div className="mt-1 h-1 rounded bg-muted overflow-hidden">
-                            <div className="h-full bg-orange-500 rounded" style={{ width: `${Math.round((s.packets / maxPackets) * 100)}%` }} />
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-xs">{s.country}</TableCell>
-                        <TableCell className="text-right text-xs font-mono">{s.packets.toLocaleString()}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+      {/* Row 2: World map */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground">Traffico Bloccato per Paese</CardTitle>
+            <Button variant="ghost" size="sm" onClick={() => refetchStats()}>
+              <RefreshCw className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0 relative">
+          {statsLoading ? (
+            <div className="h-[420px] flex items-center justify-center"><LoadingState message="Caricamento..." /></div>
+          ) : (
+            <>
+              <div className="relative" style={{ height: 420 }}>
+                {tooltip && (
+                  <div className="absolute top-3 left-3 z-10 bg-background/90 border rounded px-3 py-2 text-xs shadow pointer-events-none">
+                    <span className="text-base mr-1">{tooltip.flag}</span>
+                    <span className="font-semibold">{tooltip.name}</span>
+                    <br />
+                    <span className="text-muted-foreground">{tooltip.packets.toLocaleString()} pacchetti · {tooltip.pct.toFixed(1)}%</span>
+                  </div>
+                )}
+                <ComposableMap projectionConfig={{ scale: 140 }} style={{ width: "100%", height: "100%" }}>
+                  <Geographies geography={GEO_URL}>
+                    {({ geographies }) =>
+                      geographies.map(geo => {
+                        const d = countryPackets.get(String(geo.id));
+                        const fill = d ? mapColor(d.packets, maxCountryPackets) : "#1e293b";
+                        return (
+                          <Geography
+                            key={geo.rsmKey}
+                            geography={geo}
+                            fill={fill}
+                            stroke="#0f172a"
+                            strokeWidth={0.5}
+                            style={{
+                              default: { outline: "none" },
+                              hover: { outline: "none", fill: d ? "#f97316" : "#334155", cursor: d ? "pointer" : "default" },
+                              pressed: { outline: "none" },
+                            }}
+                            onMouseEnter={() => {
+                              if (d) {
+                                setTooltip({
+                                  name: d.country,
+                                  packets: d.packets,
+                                  pct: (d.packets / totalMapPackets) * 100,
+                                  flag: flagEmoji(d.code2),
+                                });
+                              }
+                            }}
+                            onMouseLeave={() => setTooltip(null)}
+                          />
+                        );
+                      })
+                    }
+                  </Geographies>
+                </ComposableMap>
               </div>
+              <div className="flex items-center gap-2 px-4 pb-3 text-xs text-muted-foreground">
+                <span>Basso</span>
+                {["#334155","#b45309","#ea580c","#dc2626","#991b1b"].map(c => (
+                  <div key={c} className="w-6 h-2 rounded-sm" style={{ background: c }} />
+                ))}
+                <span>Alto</span>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Row 3: Top ASN table full width with pagination */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground">Top ASN</CardTitle>
+            {stats?.updatedAt && (
+              <span className="text-xs text-muted-foreground">{new Date(stats.updatedAt).toLocaleTimeString("it-IT")}</span>
             )}
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {statsLoading ? <LoadingState message="Caricamento..." /> : !topAsn.length ? (
+            <p className="text-center text-muted-foreground py-8 text-sm">Nessun dato disponibile</p>
+          ) : (
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8">#</TableHead>
+                    <TableHead>ASN</TableHead>
+                    <TableHead>Organizzazione</TableHead>
+                    <TableHead>Paese</TableHead>
+                    <TableHead className="text-right">Pacchetti</TableHead>
+                    <TableHead className="text-right">Bytes</TableHead>
+                    <TableHead className="w-28"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pagedAsn.map((s, i) => (
+                    <TableRow key={s.asn}>
+                      <TableCell className="text-xs text-muted-foreground">{asnPage * PAGE_SIZE + i + 1}</TableCell>
+                      <TableCell className="font-mono text-xs font-semibold">{s.asn}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground max-w-xs truncate">{s.org}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">{flagEmoji(s.countryCode)} {s.country}</TableCell>
+                      <TableCell className="text-right text-xs font-mono">{s.packets.toLocaleString()}</TableCell>
+                      <TableCell className="text-right text-xs font-mono">{fmtBytes(s.bytes)}</TableCell>
+                      <TableCell>
+                        <div className="h-1.5 rounded bg-muted overflow-hidden">
+                          <div className="h-full bg-orange-500 rounded" style={{ width: `${Math.round((s.packets / maxPackets) * 100)}%` }} />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {pageCount > 1 && (
+                <div className="flex items-center justify-between px-4 py-2 border-t text-xs text-muted-foreground">
+                  <span>Pagina {asnPage + 1} di {pageCount}</span>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" disabled={asnPage === 0} onClick={() => setAsnPage(p => p - 1)}>‹ Prec</Button>
+                    <Button variant="ghost" size="sm" disabled={asnPage >= pageCount - 1} onClick={() => setAsnPage(p => p + 1)}>Succ ›</Button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
