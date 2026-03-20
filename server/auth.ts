@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import * as crypto from "crypto";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { join } from "path";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,9 +20,40 @@ export interface User {
 
 export type SafeUser = Omit<User, "passwordHash">;
 
+// ─── Persistenza su disco ─────────────────────────────────────────────────────
+
+const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), "data");
+const USERS_FILE = join(DATA_DIR, "users.json");
+
+function ensureDataDir() {
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+}
+
+function loadUsers(): Map<string, User> {
+  ensureDataDir();
+  try {
+    if (existsSync(USERS_FILE)) {
+      const arr: User[] = JSON.parse(readFileSync(USERS_FILE, "utf-8"));
+      return new Map(arr.map(u => [u.id, u]));
+    }
+  } catch (e) {
+    console.error("[Auth] Failed to load users.json:", e);
+  }
+  return new Map();
+}
+
+function saveUsers() {
+  ensureDataDir();
+  try {
+    writeFileSync(USERS_FILE, JSON.stringify(Array.from(users.values()), null, 2), "utf-8");
+  } catch (e) {
+    console.error("[Auth] Failed to save users.json:", e);
+  }
+}
+
 // ─── In-memory user store ─────────────────────────────────────────────────────
 
-const users = new Map<string, User>();
+const users = loadUsers();
 
 function hashPassword(password: string): string {
   return crypto.createHash("sha256").update(password + "proxydashboard_salt").digest("hex");
@@ -64,6 +97,7 @@ export function validateCredentials(username: string, password: string): SafeUse
   if (user.passwordHash !== hashPassword(password)) return null;
 
   user.lastLogin = new Date().toISOString();
+  saveUsers();
   return toSafeUser(user);
 }
 
@@ -95,6 +129,7 @@ export function createUser(
     assignedVps: role === "operator" ? (assignedVps ?? []) : undefined,
   };
   users.set(user.id, user);
+  saveUsers();
   return toSafeUser(user);
 }
 
@@ -120,6 +155,7 @@ export function updateUser(
     user.assignedVps = updates.assignedVps;
   }
 
+  saveUsers();
   return toSafeUser(user);
 }
 
@@ -133,6 +169,7 @@ export function deleteUser(id: string): void {
   }
 
   users.delete(id);
+  saveUsers();
 }
 
 /** Restituisce gli ID VPS a cui l'utente ha accesso. undefined = tutti. */
