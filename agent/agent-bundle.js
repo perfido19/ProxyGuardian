@@ -22787,6 +22787,12 @@ app.post("/api/config/:filename", async (req, res) => {
     }
     res.json({ ok: true, message: `${req.params.filename} updated` });
   } catch (err) {
+    if (err.code === "EACCES" || err.code === "EPERM") {
+      const agentUser = process.env.USER || "pgagent";
+      return res.status(403).json({
+        error: `Permessi insufficienti su ${filePath} \u2014 esegui: chown root:${agentUser} ${filePath} && chmod 664 ${filePath}`
+      });
+    }
     res.status(500).json({ error: err.message });
   }
 });
