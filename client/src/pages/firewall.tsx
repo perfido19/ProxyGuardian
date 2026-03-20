@@ -241,30 +241,36 @@ function AsnTab({ refVps }: TabProps) {
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
+  // Formato AsnBlock: "AS12345 # Descrizione"
+  function parseAsnList(content: string): Array<{ asn: string; description?: string }> {
+    return content.split("\n").map(line => {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) return null;
+      const commentIdx = t.indexOf("#");
+      const asn = (commentIdx >= 0 ? t.slice(0, commentIdx) : t).trim().toUpperCase();
+      if (!/^AS\d+$/.test(asn)) return null;
+      const description = commentIdx >= 0 ? t.slice(commentIdx + 1).trim() : undefined;
+      return { asn, description };
+    }).filter(Boolean) as Array<{ asn: string; description?: string }>;
+  }
+
+  function serializeAsnList(list: Array<{ asn: string; description?: string }>): string {
+    return list.map(({ asn, description }) => description ? `${asn} # ${description}` : asn).join("\n") + "\n";
+  }
+
   useEffect(() => {
-    if (fleetData) {
-      const parsed = fleetData.content.split("\n").map(line => {
-        const t = line.trim();
-        if (t.startsWith("#") || !t || !/^\S+\s+\S+;/.test(t)) return null;
-        const parts = t.split(/\s+/); const asn = parts[0];
-        const comment = t.includes("#") ? t.split("#").slice(1).join("#").trim() : undefined;
-        return { asn, description: comment };
-      }).filter(Boolean) as Array<{ asn: string; description?: string }>;
-      setAsns(parsed); setHasChanges(false);
-    }
+    if (fleetData) { setAsns(parseAsnList(fleetData.content)); setHasChanges(false); }
   }, [fleetData]);
 
   const addAsn = () => {
-    if (newAsn && !asns.find(a => a.asn === newAsn)) {
-      setAsns([...asns, { asn: newAsn, description: newDesc || undefined }]);
+    const normalized = newAsn.trim().toUpperCase().startsWith("AS") ? newAsn.trim().toUpperCase() : `AS${newAsn.trim()}`;
+    if (normalized && !asns.find(a => a.asn === normalized)) {
+      setAsns([...asns, { asn: normalized, description: newDesc || undefined }]);
       setNewAsn(""); setNewDesc(""); setHasChanges(true);
     }
   };
 
-  const handleSave = () => {
-    const content = asns.map(({ asn, description }) => `${asn} 1;${description ? ` # ${description}` : ""}`).join("\n") + "\n";
-    saveMutation.mutate(content);
-  };
+  const handleSave = () => { saveMutation.mutate(serializeAsnList(asns)); };
 
   const handleImportFromVps = async () => {
     if (!refVps) return;
@@ -272,17 +278,20 @@ function AsnTab({ refVps }: TabProps) {
       const r = await apiRequest("GET", `/api/fleet/asn/blocklist/import/${refVps.id}`);
       const data = await r.json();
       if (data.content) {
-        const parsed = data.content.split("\n").map((line: string) => {
-          const t = line.trim();
-          if (t.startsWith("#") || !t || !/^\S+\s+\S+;/.test(t)) return null;
-          const parts = t.split(/\s+/); const asn = parts[0];
-          const comment = t.includes("#") ? t.split("#").slice(1).join("#").trim() : undefined;
-          return { asn, description: comment };
-        }).filter(Boolean) as Array<{ asn: string; description?: string }>;
+        const parsed = parseAsnList(data.content);
         setAsns(parsed); setHasChanges(true);
         toast({ title: "Importato", description: `${parsed.length} ASN da ${refVps.name}` });
       }
     } catch (e: any) { toast({ title: "Errore", description: e.message, variant: "destructive" }); }
+  };
+
+  const handleSyncGithub = async () => {
+    try {
+      const r = await apiRequest("POST", "/api/fleet/asn/sync-github");
+      const data = await r.json();
+      const ok = (data.results || []).filter((r: BulkResult) => r.success).length;
+      toast({ title: "Sync GitHub completato", description: `${ok}/${(data.results || []).length} VPS aggiornati da AsnBlock repo` });
+    } catch (e: any) { toast({ title: "Errore sync", description: e.message, variant: "destructive" }); }
   };
 
   const filtered = search
@@ -296,18 +305,23 @@ function AsnTab({ refVps }: TabProps) {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>Fleet Blacklist ASN</CardTitle>
-              <CardDescription>Blocca ASN su tutti i VPS • salvato nella repo e sincronizzato automaticamente</CardDescription>
+              <CardDescription>Blocco iptables/ipset via AsnBlock • salvato nella repo • "Sync da AsnBlock repo" scarica la lista da GitHub</CardDescription>
             </div>
-            {refVps && (
-              <Button variant="outline" size="sm" onClick={handleImportFromVps}>
-                <Download className="w-4 h-4 mr-1" />Importa da {refVps.name}
+            <div className="flex gap-2">
+              {refVps && (
+                <Button variant="outline" size="sm" onClick={handleImportFromVps}>
+                  <Download className="w-4 h-4 mr-1" />Importa da {refVps.name}
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={handleSyncGithub}>
+                <RefreshCw className="w-4 h-4 mr-1" />Sync da AsnBlock repo
               </Button>
-            )}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <Input placeholder="Numero ASN (es. AS15169)" value={newAsn} onChange={e => setNewAsn(e.target.value)} onKeyDown={e => e.key === "Enter" && addAsn()} />
+            <Input placeholder="ASN (es. AS15169 o 15169)" value={newAsn} onChange={e => setNewAsn(e.target.value)} onKeyDown={e => e.key === "Enter" && addAsn()} />
             <Input placeholder="Descrizione (opzionale)" value={newDesc} onChange={e => setNewDesc(e.target.value)} />
             <Button onClick={addAsn}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
           </div>

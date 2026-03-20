@@ -221,6 +221,7 @@ const CONFIG_PATHS: Record<string, string> = {
   "crs-setup.conf": "/etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf",
   "block_baduseragents.conf": "/etc/nginx/block_baduseragents.conf",
   "asn-whitelist.txt": "/etc/asn-whitelist-nets.txt",
+  "asn-blocklist.txt": "/etc/asn-blocklist.txt",
 };
 
 app.get("/api/config/:filename", async (req, res) => {

@@ -205,21 +205,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch {}
   }
 
-  // Block list (block_asn.conf)
+  // Block list (asn-blocklist.txt — AsnBlock format: "AS12345 # Description")
   app.get("/api/fleet/asn/blocklist", requireAuth, (_req, res) => {
-    res.json({ content: readFleetFile("block_asn.conf") });
+    res.json({ content: readFleetFile("asn-blocklist.txt") });
   });
 
   app.post("/api/fleet/asn/blocklist", requireAuth, requireAdmin, async (req, res) => {
     const { content } = req.body;
     if (typeof content !== "string") return res.status(400).json({ error: "content required" });
-    writeFleetFile("block_asn.conf", content);
-    const syncResults = await bulkPost("all", "/api/config/block_asn.conf", { content });
-    const reloadResults = await bulkPost("all", "/api/nginx/reload", {});
-    res.json({ ok: true, syncResults, reloadResults });
+    writeFleetFile("asn-blocklist.txt", content);
+    // Push file to all VPS, then trigger update-asn-block.sh
+    const syncResults = await bulkPost("all", "/api/config/asn-blocklist.txt", { content });
+    const applyResults = await bulkPost("all", "/api/asn/update-set", {});
+    res.json({ ok: true, syncResults, applyResults });
   });
 
-  // Whitelist (asn-whitelist.txt)
+  // Whitelist (asn-whitelist.txt — inotify watcher triggers update automatically)
   app.get("/api/fleet/asn/whitelist", requireAuth, (_req, res) => {
     res.json({ content: readFleetFile("asn-whitelist.txt") });
   });
@@ -228,6 +229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const { content } = req.body;
     if (typeof content !== "string") return res.status(400).json({ error: "content required" });
     writeFleetFile("asn-whitelist.txt", content);
+    // Writing triggers inotify watcher → update-asn-block.sh automatically
     const syncResults = await bulkPost("all", "/api/config/asn-whitelist.txt", { content });
     res.json({ ok: true, syncResults });
   });
@@ -237,9 +239,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const vps = getVpsById(req.params.vpsId);
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
     try {
-      const data = await agentGet(vps, "/api/config/block_asn.conf");
+      const data = await agentGet(vps, "/api/config/asn-blocklist.txt");
       res.json({ content: data.content || "" });
     } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // Sync da AsnBlock GitHub repo su tutti i VPS
+  app.post("/api/fleet/asn/sync-github", requireAuth, requireAdmin, async (_req, res) => {
+    const results = await bulkPost("all", "/api/asn/update-lists", {});
+    res.json({ ok: true, results });
   });
 
   // Locali
