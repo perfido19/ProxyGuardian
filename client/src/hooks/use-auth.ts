@@ -4,10 +4,11 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 export interface AuthUser {
   id: string;
   username: string;
-  role: "admin" | "operator" | "viewer";
+  role: "admin" | "operator";
   enabled: boolean;
   createdAt: string;
   lastLogin?: string;
+  assignedVps?: string[]; // solo operator; undefined = tutti (admin)
 }
 
 export function useAuth() {

@@ -4,9 +4,20 @@ import { totalmem, freemem, cpus } from "os";
 import { execSync } from "child_process";
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
-import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, type UserRole } from "./auth";
+import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
 import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, agentGet, agentPost, bulkGet, bulkPost } from "./vps-manager";
 import session from "express-session";
+
+// Percorsi proxy che un operator può modificare (POST)
+const OPERATOR_WRITE_PATHS = [
+  /^\/api\/services\/[^/]+\/action$/,
+  /^\/api\/unban$/,
+  /^\/api\/unban-all$/,
+];
+
+function isOperatorAllowedPost(path: string): boolean {
+  return OPERATOR_WRITE_PATHS.some(r => r.test(path));
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.use(session({
@@ -36,7 +47,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Users
   app.get("/api/users", requireAuth, requireAdmin, (_req, res) => res.json(getAllUsers()));
   app.post("/api/users", requireAuth, requireAdmin, (req, res) => {
-    try { res.status(201).json(createUser(req.body.username, req.body.password, req.body.role as UserRole)); }
+    try {
+      const { username, password, role, assignedVps } = req.body;
+      res.status(201).json(createUser(username, password, role as UserRole, assignedVps));
+    }
     catch (e: any) { res.status(400).json({ error: e.message }); }
   });
   app.put("/api/users/:id", requireAuth, requireAdmin, (req, res) => {
@@ -49,7 +63,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // VPS CRUD
-  app.get("/api/vps", requireAuth, (_req, res) => res.json(getAllVps()));
+  app.get("/api/vps", requireAuth, (req, res) => {
+    const all = getAllVps();
+    const allowed = getUserAllowedVps(req.session.userId!);
+    if (allowed === undefined) return res.json(all); // admin: tutti
+    res.json(all.filter(v => allowed.includes(v.id)));
+  });
   app.post("/api/vps", requireAuth, requireAdmin, (req, res) => {
     try {
       const { name, host, port, apiKey, tags } = req.body;
@@ -65,27 +84,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try { deleteVps(req.params.id); res.json({ success: true }); }
     catch (e: any) { res.status(400).json({ error: e.message }); }
   });
-  app.get("/api/vps/health/all", requireAuth, async (_req, res) => {
-    res.json(Object.fromEntries(await checkAllVpsHealth()));
+  app.get("/api/vps/health/all", requireAuth, async (req, res) => {
+    const healthMap = Object.fromEntries(await checkAllVpsHealth());
+    const allowed = getUserAllowedVps(req.session.userId!);
+    if (allowed === undefined) return res.json(healthMap);
+    const filtered = Object.fromEntries(Object.entries(healthMap).filter(([id]) => allowed.includes(id)));
+    res.json(filtered);
   });
   app.get("/api/vps/:id/health", requireAuth, async (req, res) => {
     const vps = getVpsById(req.params.id);
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    if (!requireVpsAccess(req.params.id, req.session.userId!)) return res.status(403).json({ error: "Accesso negato" });
     const online = await checkVpsHealth(vps);
     res.json({ online, lastSeen: vps.lastSeen });
   });
 
   // Proxy singolo VPS
   app.get("/api/vps/:id/proxy/*", requireAuth, async (req, res) => {
+    if (!requireVpsAccess(req.params.id, req.session.userId!)) return res.status(403).json({ error: "Accesso negato" });
     const vps = getVpsById(req.params.id);
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
     try { res.json(await agentGet(vps, "/" + (req.params as any)[0])); }
     catch (e: any) { res.status(502).json({ error: e.message }); }
   });
   app.post("/api/vps/:id/proxy/*", requireAuth, requireOperator, async (req, res) => {
+    if (!requireVpsAccess(req.params.id, req.session.userId!)) return res.status(403).json({ error: "Accesso negato" });
+    const proxyPath = "/" + (req.params as any)[0];
+    // Operator: solo servizi e ban/unban. Admin: tutto.
+    if (req.session.userRole === "operator" && !isOperatorAllowedPost(proxyPath)) {
+      return res.status(403).json({ error: "Permessi insufficienti: solo admin può modificare le configurazioni" });
+    }
     const vps = getVpsById(req.params.id);
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
-    try { res.json(await agentPost(vps, "/" + (req.params as any)[0], req.body)); }
+    try { res.json(await agentPost(vps, proxyPath, req.body)); }
     catch (e: any) { res.status(502).json({ error: e.message }); }
   });
 
@@ -93,12 +124,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/vps/bulk/get", requireAuth, async (req, res) => {
     const { vpsIds, path } = req.body;
     if (!vpsIds || !path) return res.status(400).json({ error: "vpsIds e path richiesti" });
-    res.json(await bulkGet(vpsIds, path));
+    // Filtra VPS accessibili per operator
+    const allowed = getUserAllowedVps(req.session.userId!);
+    const allVps = getAllVps().map(v => v.id);
+    const ids: string[] = vpsIds === "all"
+      ? (allowed === undefined ? allVps : allVps.filter(id => allowed.includes(id)))
+      : (Array.isArray(vpsIds) ? vpsIds.filter(id => allowed === undefined || allowed.includes(id)) : []);
+    res.json(await bulkGet(ids, path));
   });
   app.post("/api/vps/bulk/post", requireAuth, requireOperator, async (req, res) => {
     const { vpsIds, path, body } = req.body;
     if (!vpsIds || !path) return res.status(400).json({ error: "vpsIds e path richiesti" });
-    res.json(await bulkPost(vpsIds, path, body || {}));
+    if (req.session.userRole === "operator" && !isOperatorAllowedPost(path)) {
+      return res.status(403).json({ error: "Permessi insufficienti: solo admin può modificare le configurazioni" });
+    }
+    const allowed = getUserAllowedVps(req.session.userId!);
+    const allVps = getAllVps().map(v => v.id);
+    const ids: string[] = vpsIds === "all"
+      ? (allowed === undefined ? allVps : allVps.filter(id => allowed.includes(id)))
+      : (Array.isArray(vpsIds) ? vpsIds.filter(id => allowed === undefined || allowed.includes(id)) : []);
+    res.json(await bulkPost(ids, path, body || {}));
   });
 
   // Locali
@@ -131,7 +176,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try { const c = await storage.getConfigFile(req.params.filename); if (!c) return res.status(404).json({ error: "Non trovato" }); res.json(c); }
     catch { res.status(500).json({ error: "Errore" }); }
   });
-  app.post("/api/config/update", requireAuth, requireOperator, async (req, res) => {
+  app.post("/api/config/update", requireAuth, requireAdmin, async (req, res) => {
     try {
       const r = updateConfigRequestSchema.safeParse(req.body);
       if (!r.success) return res.status(400).json({ error: "Parametri non validi" });
@@ -140,7 +185,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { res.status(500).json({ error: "Errore" }); }
   });
   app.get("/api/fail2ban/jails", requireAuth, async (_req, res) => { try { res.json(await storage.getJails()); } catch { res.status(500).json({ error: "Errore" }); } });
-  app.post("/api/fail2ban/jails/:name", requireAuth, requireOperator, async (req, res) => {
+  app.post("/api/fail2ban/jails/:name", requireAuth, requireAdmin, async (req, res) => {
     try {
       const r = updateJailRequestSchema.safeParse(req.body);
       if (!r.success) return res.status(400).json({ error: "Parametri non validi" });
@@ -153,7 +198,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try { const f = await storage.getFilter(req.params.name); if (!f) return res.status(404).json({ error: "Non trovato" }); res.json(f); }
     catch { res.status(500).json({ error: "Errore" }); }
   });
-  app.post("/api/fail2ban/filters/:name", requireAuth, requireOperator, async (req, res) => {
+  app.post("/api/fail2ban/filters/:name", requireAuth, requireAdmin, async (req, res) => {
     try {
       const r = updateFilterRequestSchema.safeParse(req.body);
       if (!r.success) return res.status(400).json({ error: "Parametri non validi" });
@@ -168,7 +213,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(await storage.getFail2banConfig(type));
     } catch { res.status(500).json({ error: "Errore" }); }
   });
-  app.post("/api/fail2ban/config/:type", requireAuth, requireOperator, async (req, res) => {
+  app.post("/api/fail2ban/config/:type", requireAuth, requireAdmin, async (req, res) => {
     try {
       const { type } = req.params;
       if (type !== "jail.local" && type !== "fail2ban.local") return res.status(400).json({ error: "Tipo non valido" });
