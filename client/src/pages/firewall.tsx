@@ -338,12 +338,12 @@ function AsnTab({ refVps, totalCount }: TabProps) {
             <Input placeholder="Cerca ASN o descrizione..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
           </div>
           {search && <p className="text-xs text-muted-foreground">{filtered.length} / {asns.length} risultati</p>}
-          <div className="border rounded-md">
-            {(() => {
-              const okCount = syncStatus.length > 0 ? syncStatus.filter(r => r.success).length : totalCount;
-              const totCount = syncStatus.length > 0 ? syncStatus.length : totalCount;
-              const allOk = okCount === totCount;
-              return (
+          {(() => {
+            const okCount = syncStatus.length > 0 ? syncStatus.filter(r => r.success).length : totalCount;
+            const totCount = syncStatus.length > 0 ? syncStatus.length : totalCount;
+            const allOk = okCount === totCount;
+            return (
+              <div className="border rounded-md">
                 <Table>
                   <TableHeader><TableRow><TableHead>ASN</TableHead><TableHead>Descrizione</TableHead><TableHead>Copertura VPS</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
                   <TableBody>
@@ -363,9 +363,9 @@ function AsnTab({ refVps, totalCount }: TabProps) {
                     ))}
                   </TableBody>
                 </Table>
-              );
-            })()}
-          </div>
+              </div>
+            );
+          })()}
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">{asns.length} ASN bloccati</p>
             <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
