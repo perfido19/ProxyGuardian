@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
+import { readFile } from "fs/promises";
 
 export interface VpsConfig {
   id: string;
@@ -147,6 +148,51 @@ export async function bulkPost(vpsIds: string[] | "all", path: string, body: any
   const results = await Promise.allSettled(targets.map(async vps => {
     try { return { vpsId: vps.id, vpsName: vps.name, success: true, data: await agentPost(vps, path, body) }; }
     catch (e: any) { return { vpsId: vps.id, vpsName: vps.name, success: false, error: e.message }; }
+  }));
+  return results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", success: false, error: "rejected" });
+}
+
+export async function agentUpdate(vps: VpsConfig, bundle: Buffer): Promise<{ ok: boolean; message?: string; error?: string }> {
+  const url = `http://${vps.host}:${vps.port}/api/agent/update`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/octet-stream", "x-api-key": vps.apiKey },
+      body: bundle,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      const text = await res.text();
+      return { ok: false, error: `${res.status} - ${text}` };
+    }
+    return res.json();
+  } catch (e: any) {
+    clearTimeout(timer);
+    return { ok: false, error: e.message };
+  }
+}
+
+export async function bulkAgentUpdate(vpsIds: string[] | "all"): Promise<BulkResult[]> {
+  const bundlePath = join(process.cwd(), "agent", "agent-bundle.js");
+  let bundle: Buffer;
+  try {
+    bundle = Buffer.from(await readFile(bundlePath));
+  } catch (e: any) {
+    return [{ vpsId: "all", vpsName: "all", success: false, error: `Bundle non trovato: ${e.message}` }];
+  }
+  const targets = vpsIds === "all"
+    ? Array.from(vpsStore.values()).filter(v => v.enabled)
+    : vpsIds.map(id => vpsStore.get(id)).filter((v): v is VpsConfig => !!v && v.enabled);
+  const results = await Promise.allSettled(targets.map(async vps => {
+    try {
+      const result = await agentUpdate(vps, bundle);
+      return { vpsId: vps.id, vpsName: vps.name, success: result.ok, data: result, error: result.error };
+    } catch (e: any) {
+      return { vpsId: vps.id, vpsName: vps.name, success: false, error: e.message };
+    }
   }));
   return results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", success: false, error: "rejected" });
 }

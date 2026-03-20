@@ -1,5 +1,5 @@
 import express, { Request, Response, NextFunction } from "express";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import { readFile, writeFile, access, readdir } from "fs/promises";
 import { constants } from "fs";
@@ -9,6 +9,8 @@ const execAsync = promisify(exec);
 
 const app = express();
 app.use(express.json());
+
+const AGENT_VERSION = "1.2.0";
 
 const AGENT_API_KEY = process.env.AGENT_API_KEY || "";
 const PORT = parseInt(process.env.AGENT_PORT || "3001", 10);
@@ -31,7 +33,7 @@ app.use("/api", requireApiKey);
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", hostname: process.env.HOSTNAME || "unknown", ts: Date.now() });
+  res.json({ status: "ok", hostname: process.env.HOSTNAME || "unknown", ts: Date.now(), version: AGENT_VERSION });
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -816,6 +818,30 @@ app.post("/api/asn/test-ip", async (req, res) => {
 app.get("/api/asn/log", async (_req, res) => {
   const { stdout } = await runCmd("tail -50 /var/log/update-asn-block.log 2>/dev/null || echo ''");
   res.json({ lines: stdout.split("\n").filter(Boolean) });
+});
+
+// ─── Agent self-update ────────────────────────────────────────────────────────
+
+app.post("/api/agent/update", express.raw({ type: "*/*", limit: "10mb" }), async (req, res) => {
+  var bundle = req.body;
+  if (!Buffer.isBuffer(bundle) || bundle.length < 1000) {
+    return res.status(400).json({ error: "Bundle non valido o troppo piccolo" });
+  }
+  var dest = process.argv[1];
+  try {
+    await writeFile(dest, bundle);
+    res.json({ ok: true, version: AGENT_VERSION, message: "Bundle aggiornato, riavvio in corso..." });
+    setTimeout(function() {
+      var child = spawn("sudo", ["systemctl", "restart", "proxy-guardian-agent"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+    }, 500);
+  } catch (err) {
+    var e = err as any;
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────

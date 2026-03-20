@@ -5,7 +5,9 @@ import { execSync } from "child_process";
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
-import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, agentGet, agentPost, bulkGet, bulkPost } from "./vps-manager";
+import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate } from "./vps-manager";
+import { readFileSync } from "fs";
+import { join } from "path";
 import session from "express-session";
 
 // Percorsi proxy che un operator può modificare (POST)
@@ -97,6 +99,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!requireVpsAccess(req.params.id, req.session.userId!)) return res.status(403).json({ error: "Accesso negato" });
     const online = await checkVpsHealth(vps);
     res.json({ online, lastSeen: vps.lastSeen });
+  });
+
+  // Agent versions
+  app.get("/api/vps/agents/versions", requireAuth, async (req, res) => {
+    const all = getAllVps();
+    const allowed = getUserAllowedVps(req.session.userId!);
+    const targets = allowed === undefined ? all : all.filter(v => allowed.includes(v.id));
+    const results = await Promise.allSettled(targets.map(async vps => {
+      const cfg = getVpsById(vps.id);
+      if (!cfg) return { vpsId: vps.id, vpsName: vps.name, version: null, online: false };
+      try {
+        const data = await agentGet(cfg, "/health");
+        return { vpsId: vps.id, vpsName: vps.name, version: data.version || null, online: true };
+      } catch {
+        return { vpsId: vps.id, vpsName: vps.name, version: null, online: false };
+      }
+    }));
+    res.json(results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "?", vpsName: "?", version: null, online: false }));
+  });
+
+  // Agent update singolo VPS
+  app.post("/api/vps/:id/agent/update", requireAuth, requireAdmin, async (req, res) => {
+    const vps = getVpsById(req.params.id);
+    if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    try {
+      const bundle = Buffer.from(readFileSync(join(process.cwd(), "agent", "agent-bundle.js")));
+      res.json(await agentUpdate(vps, bundle));
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Agent update bulk
+  app.post("/api/vps/bulk/agent/update", requireAuth, requireAdmin, async (_req, res) => {
+    try { res.json(await bulkAgentUpdate("all")); }
+    catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   // Proxy singolo VPS

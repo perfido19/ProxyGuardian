@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useVpsList, useVpsHealth, useCreateVps, useUpdateVps, useDeleteVps, type VpsConfig } from "@/hooks/use-vps";
@@ -11,10 +11,11 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Plus, Pencil, Trash2, Server, Wifi, WifiOff, RefreshCw, ExternalLink, Copy, Check } from "lucide-react";
+import { Plus, Pencil, Trash2, Server, Wifi, WifiOff, RefreshCw, ExternalLink, Copy, Check, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
 
 const INSTALL_CMD = "curl -fsSL https://raw.githubusercontent.com/perfido19/ProxyGuardian/main/agent/install.sh | sudo bash";
 
@@ -33,8 +34,24 @@ export default function VpsManager() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [selected, setSelected] = useState<VpsConfig | null>(null);
   const [checkingHealth, setCheckingHealth] = useState<string | null>(null);
+  const [updatingAgent, setUpdatingAgent] = useState<string | null>(null); // vpsId | "all"
   const [form, setForm] = useState({ name: "", host: "", port: "3001", apiKey: "", tags: "" });
   const [editForm, setEditForm] = useState({ name: "", host: "", port: "3001", apiKey: "", tags: "", enabled: true });
+
+  const { data: agentVersions, refetch: refetchVersions } = useQuery<Array<{ vpsId: string; vpsName: string; version: string | null; online: boolean }>>({
+    queryKey: ["/api/vps/agents/versions"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/vps/agents/versions");
+      return res.json();
+    },
+    staleTime: 30000,
+  });
+
+  const versionMap = useMemo(() => {
+    const m: Record<string, string | null> = {};
+    if (agentVersions) agentVersions.forEach(v => { m[v.vpsId] = v.version; });
+    return m;
+  }, [agentVersions]);
 
   const handleCreate = () => {
     if (!form.name || !form.host || !form.apiKey) return;
@@ -80,6 +97,40 @@ export default function VpsManager() {
     finally { setCheckingHealth(null); }
   };
 
+  const handleUpdateAgent = async (vps: VpsConfig) => {
+    setUpdatingAgent(vps.id);
+    try {
+      const res = await apiRequest("POST", `/api/vps/${vps.id}/agent/update`);
+      const data = await res.json();
+      if (data.ok) {
+        toast({ title: "Agent aggiornato", description: `${vps.name}: riavvio in corso...` });
+        setTimeout(() => refetchVersions(), 4000);
+      } else {
+        toast({ title: "Errore update", description: data.error || "Errore sconosciuto", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Errore", description: "Impossibile contattare il VPS", variant: "destructive" });
+    } finally { setUpdatingAgent(null); }
+  };
+
+  const handleUpdateAllAgents = async () => {
+    setUpdatingAgent("all");
+    try {
+      const res = await apiRequest("POST", "/api/vps/bulk/agent/update");
+      const results: Array<{ vpsName: string; success: boolean; error?: string }> = await res.json();
+      const ok = results.filter(r => r.success).length;
+      const fail = results.filter(r => !r.success).length;
+      toast({
+        title: `Agent aggiornati: ${ok}/${results.length}`,
+        description: fail > 0 ? `${fail} falliti` : "Tutti i VPS stanno riavviando...",
+        variant: fail > 0 ? "destructive" : "default",
+      });
+      setTimeout(() => refetchVersions(), 5000);
+    } catch {
+      toast({ title: "Errore", description: "Errore durante l'aggiornamento", variant: "destructive" });
+    } finally { setUpdatingAgent(null); }
+  };
+
   const getStatusBadge = (vps: VpsConfig) => {
     if (!vps.enabled) return <Badge variant="secondary">Disabilitato</Badge>;
     const health = healthMap?.[vps.id];
@@ -108,6 +159,12 @@ export default function VpsManager() {
             </div>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => refetchHealth()}><RefreshCw className="w-4 h-4 mr-1" />Aggiorna stato</Button>
+              {user?.role === "admin" && (
+                <Button variant="outline" size="sm" onClick={handleUpdateAllAgents} disabled={updatingAgent === "all"}>
+                  {updatingAgent === "all" ? <RefreshCw className="w-4 h-4 mr-1 animate-spin" /> : <Download className="w-4 h-4 mr-1" />}
+                  Aggiorna tutti gli agent
+                </Button>
+              )}
               <Button onClick={() => setCreateOpen(true)} data-testid="button-add-vps"><Plus className="w-4 h-4 mr-1" />Aggiungi VPS</Button>
             </div>
           </div>
@@ -125,7 +182,7 @@ export default function VpsManager() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Nome</TableHead><TableHead>Host (NetBird)</TableHead><TableHead>Porta</TableHead>
-                    <TableHead>Stato</TableHead><TableHead>Tag</TableHead><TableHead>Ultimo contatto</TableHead>
+                    <TableHead>Stato</TableHead><TableHead>Agent</TableHead><TableHead>Tag</TableHead><TableHead>Ultimo contatto</TableHead>
                     <TableHead className="text-right">Azioni</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -136,6 +193,9 @@ export default function VpsManager() {
                       <TableCell className="font-mono text-sm">{vps.host}</TableCell>
                       <TableCell className="font-mono text-sm">{vps.port}</TableCell>
                       <TableCell>{getStatusBadge(vps)}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {versionMap[vps.id] ? <Badge variant="outline" className="text-xs font-mono">v{versionMap[vps.id]}</Badge> : <span className="text-xs text-muted-foreground">—</span>}
+                      </TableCell>
                       <TableCell><div className="flex gap-1 flex-wrap">{vps.tags.map(t => <Badge key={t} variant="outline" className="text-xs">{t}</Badge>)}</div></TableCell>
                       <TableCell className="text-sm text-muted-foreground">{vps.lastSeen ? new Date(vps.lastSeen).toLocaleString("it-IT") : "Mai"}</TableCell>
                       <TableCell className="text-right">
@@ -143,6 +203,11 @@ export default function VpsManager() {
                           <Button variant="ghost" size="icon" onClick={() => handleCheckHealth(vps)} disabled={checkingHealth === vps.id} title="Verifica connessione">
                             {checkingHealth === vps.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
                           </Button>
+                          {user?.role === "admin" && (
+                            <Button variant="ghost" size="icon" onClick={() => handleUpdateAgent(vps)} disabled={updatingAgent === vps.id || updatingAgent === "all"} title="Aggiorna agent">
+                              {updatingAgent === vps.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                            </Button>
+                          )}
                           <Link href={`/vps/${vps.id}`}>
                             <Button variant="ghost" size="icon" title="Dettagli"><ExternalLink className="w-4 h-4" /></Button>
                           </Link>
