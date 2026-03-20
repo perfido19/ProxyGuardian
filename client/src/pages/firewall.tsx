@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useVpsList, useVpsHealth } from "@/hooks/use-vps";
 import { apiRequest } from "@/lib/queryClient";
@@ -7,7 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Save, Trash2, Wifi, Search, RefreshCw } from "lucide-react";
+import { Plus, Save, Trash2, Wifi, Search, RefreshCw, ShieldAlert, ShieldCheck, ShieldOff, Eye, FileText } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
@@ -112,6 +113,7 @@ export default function Firewall() {
           <TabsTrigger value="ip">IP Whitelist</TabsTrigger>
           <TabsTrigger value="exclusion">IP Exclusion</TabsTrigger>
           <TabsTrigger value="iptables">IPTables Banned</TabsTrigger>
+          <TabsTrigger value="modsec">ModSecurity</TabsTrigger>
         </TabsList>
         <TabsContent value="countries"><CountriesTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="asn"><AsnTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
@@ -120,6 +122,7 @@ export default function Firewall() {
         <TabsContent value="ip"><IpWhitelistTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="exclusion"><ExclusionIpTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="iptables"><IpTablesSearchTab /></TabsContent>
+        <TabsContent value="modsec"><ModSecTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
       </Tabs>
     </div>
   );
@@ -790,5 +793,274 @@ function IpSetViewTab() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ── ModSecurity ────────────────────────────────────────────────────────────────
+
+interface ModSecStatus {
+  engine: string;
+  configFound: boolean;
+  moduleLoaded: boolean;
+  logLines: number;
+  logPath: string;
+  configPath: string;
+}
+
+interface ModSecLogEvent {
+  id: string;
+  timestamp: string;
+  ip: string;
+  uri: string;
+  method: string;
+  status: string;
+  messages: string[];
+}
+
+function engineBadge(engine: string) {
+  if (engine === "On") return <Badge className="bg-green-600 text-white"><ShieldCheck className="w-3 h-3 mr-1 inline" />On</Badge>;
+  if (engine === "DetectionOnly") return <Badge className="bg-yellow-500 text-white"><Eye className="w-3 h-3 mr-1 inline" />Detection Only</Badge>;
+  if (engine === "Off") return <Badge className="bg-destructive text-white"><ShieldOff className="w-3 h-3 mr-1 inline" />Off</Badge>;
+  return <Badge variant="outline">{engine}</Badge>;
+}
+
+function ModSecTab({ refVps, saveTarget, totalCount }: TabProps) {
+  const { toast } = useToast();
+  const [activeSection, setActiveSection] = useState<"status" | "config" | "crs" | "log">("status");
+  const [configContent, setConfigContent] = useState("");
+  const [crsContent, setCrsContent] = useState("");
+  const [configChanged, setConfigChanged] = useState(false);
+  const [crsChanged, setCrsChanged] = useState(false);
+  const saveMutation = useSaveConfig("modsecurity.conf", saveTarget);
+  const crsMutation = useSaveConfig("crs-setup.conf", saveTarget);
+
+  const { data: status, isLoading: statusLoading, refetch: refetchStatus } = useQuery<ModSecStatus>({
+    queryKey: ["modsec-status", refVps?.id],
+    queryFn: async () => { const r = await apiRequest("GET", `/api/vps/${refVps!.id}/proxy/api/modsec/status`); return r.json(); },
+    enabled: !!refVps,
+    refetchInterval: 60000,
+  });
+
+  const { data: configData, isLoading: configLoading } = useQuery<{ content: string }>({
+    queryKey: ["modsec-config", refVps?.id],
+    queryFn: async () => { const r = await apiRequest("GET", `/api/vps/${refVps!.id}/proxy/api/config/modsecurity.conf`); return r.json(); },
+    enabled: !!refVps && activeSection === "config",
+  });
+
+  const { data: crsData, isLoading: crsLoading } = useQuery<{ content: string }>({
+    queryKey: ["crs-config", refVps?.id],
+    queryFn: async () => { const r = await apiRequest("GET", `/api/vps/${refVps!.id}/proxy/api/config/crs-setup.conf`); return r.json(); },
+    enabled: !!refVps && activeSection === "crs",
+  });
+
+  const { data: logData, isLoading: logLoading, refetch: refetchLog } = useQuery<{ raw: string; events: ModSecLogEvent[] }>({
+    queryKey: ["modsec-log", refVps?.id],
+    queryFn: async () => { const r = await apiRequest("GET", `/api/vps/${refVps!.id}/proxy/api/modsec/log?lines=200`); return r.json(); },
+    enabled: !!refVps && activeSection === "log",
+  });
+
+  useEffect(() => { if (configData) { setConfigContent(configData.content); setConfigChanged(false); } }, [configData]);
+  useEffect(() => { if (crsData) { setCrsContent(crsData.content); setCrsChanged(false); } }, [crsData]);
+
+  const engineMutation = useMutation({
+    mutationFn: async (state: string) => {
+      const r = await apiRequest("POST", `/api/vps/${refVps!.id}/proxy/api/modsec/engine`, { state });
+      return r.json();
+    },
+    onSuccess: (data) => {
+      refetchStatus();
+      toast({ title: `ModSecurity: ${data.engine}` });
+    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
+
+  const sectionBtn = (id: typeof activeSection, label: string, icon: React.ReactNode) => (
+    <Button size="sm" variant={activeSection === id ? "default" : "outline"} onClick={() => setActiveSection(id)} className="gap-1.5">
+      {icon}{label}
+    </Button>
+  );
+
+  return (
+    <div className="mt-4 space-y-4">
+      <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
+
+      <div className="flex gap-2 flex-wrap">
+        {sectionBtn("status", "Stato", <ShieldAlert className="w-3.5 h-3.5" />)}
+        {sectionBtn("config", "modsecurity.conf", <FileText className="w-3.5 h-3.5" />)}
+        {sectionBtn("crs", "crs-setup.conf", <FileText className="w-3.5 h-3.5" />)}
+        {sectionBtn("log", "Audit Log", <Eye className="w-3.5 h-3.5" />)}
+      </div>
+
+      {activeSection === "status" && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <Card>
+              <CardContent className="pt-4">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Engine</p>
+                {statusLoading ? <div className="h-6 bg-muted rounded animate-pulse" /> : engineBadge(status?.engine || "unknown")}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Modulo nginx</p>
+                {statusLoading ? <div className="h-6 bg-muted rounded animate-pulse" /> : (
+                  <Badge variant={status?.moduleLoaded ? "default" : "destructive"}>
+                    {status?.moduleLoaded ? "Caricato" : "Non trovato"}
+                  </Badge>
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Righe audit log</p>
+                <p className="text-3xl font-bold font-heading">{statusLoading ? "…" : (status?.logLines || 0).toLocaleString()}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm">Cambia stato engine</CardTitle>
+                <Button variant="ghost" size="sm" onClick={() => refetchStatus()}><RefreshCw className="w-3.5 h-3.5" /></Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="flex gap-2 flex-wrap">
+                {(["On", "DetectionOnly", "Off"] as const).map(state => (
+                  <Button
+                    key={state}
+                    size="sm"
+                    variant={status?.engine === state ? "default" : "outline"}
+                    disabled={engineMutation.isPending || status?.engine === state}
+                    onClick={() => engineMutation.mutate(state)}
+                  >
+                    {state === "On" && <ShieldCheck className="w-3.5 h-3.5 mr-1" />}
+                    {state === "DetectionOnly" && <Eye className="w-3.5 h-3.5 mr-1" />}
+                    {state === "Off" && <ShieldOff className="w-3.5 h-3.5 mr-1" />}
+                    {state}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                <strong>On</strong>: blocca le richieste &nbsp;·&nbsp;
+                <strong>DetectionOnly</strong>: logga senza bloccare &nbsp;·&nbsp;
+                <strong>Off</strong>: disabilitato
+              </p>
+              {status && !status.configFound && (
+                <p className="text-xs text-destructive mt-2">Config non trovata: {status.configPath}</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {(activeSection === "config" || activeSection === "crs") && (() => {
+        const isCrs = activeSection === "crs";
+        const content = isCrs ? crsContent : configContent;
+        const setContent = isCrs ? setCrsContent : setConfigContent;
+        const hasChanges = isCrs ? crsChanged : configChanged;
+        const setHasChanges = isCrs ? setCrsChanged : setConfigChanged;
+        const mutation = isCrs ? crsMutation : saveMutation;
+        const loading = isCrs ? crsLoading : configLoading;
+        const filename = isCrs ? "crs-setup.conf" : "modsecurity.conf";
+
+        return (
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-mono">{filename}</CardTitle>
+                {hasChanges && <Badge variant="outline" className="text-xs">Modificato</Badge>}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {loading ? <LoadingState message="Caricamento..." /> : (
+                <Textarea
+                  value={content}
+                  onChange={e => { setContent(e.target.value); setHasChanges(true); }}
+                  className="font-mono text-xs min-h-[420px] resize-y"
+                  spellCheck={false}
+                />
+              )}
+              <div className="flex justify-end">
+                <Button
+                  onClick={() => mutation.mutate(content, { onSuccess: () => setHasChanges(false) })}
+                  disabled={!hasChanges || mutation.isPending}
+                >
+                  <Save className="w-4 h-4 mr-1" />
+                  {mutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
+      {activeSection === "log" && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm">Audit Log ModSecurity</CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => refetchLog()}><RefreshCw className="w-3.5 h-3.5" /></Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {logLoading ? <LoadingState message="Caricamento..." /> : (
+              <>
+                {logData && logData.events.length > 0 ? (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-2">{logData.events.length} eventi recenti</p>
+                    <div className="border rounded-md overflow-auto max-h-64">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-xs">Timestamp</TableHead>
+                            <TableHead className="text-xs">IP</TableHead>
+                            <TableHead className="text-xs">Metodo</TableHead>
+                            <TableHead className="text-xs">URI</TableHead>
+                            <TableHead className="text-xs">Status</TableHead>
+                            <TableHead className="text-xs">Regola</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {logData.events.map((e, i) => (
+                            <TableRow key={i}>
+                              <TableCell className="text-xs font-mono whitespace-nowrap">{e.timestamp}</TableCell>
+                              <TableCell className="text-xs font-mono">{e.ip}</TableCell>
+                              <TableCell className="text-xs font-mono">{e.method}</TableCell>
+                              <TableCell className="text-xs font-mono max-w-[200px] truncate">{e.uri}</TableCell>
+                              <TableCell className="text-xs">
+                                <Badge variant={e.status && e.status.startsWith("4") ? "destructive" : "outline"}>{e.status || "—"}</Badge>
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">
+                                {e.messages.length > 0 ? e.messages[0].substring(0, 60) + (e.messages[0].length > 60 ? "…" : "") : "—"}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-4">
+                    {logData?.raw?.trim() ? "Nessun evento parsato" : "Audit log vuoto"}
+                  </p>
+                )}
+                {logData?.raw?.trim() && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Raw (ultime righe)</p>
+                    <pre className="bg-muted rounded p-3 text-xs font-mono overflow-auto max-h-48 whitespace-pre-wrap break-all">
+                      {logData.raw.slice(-3000)}
+                    </pre>
+                  </div>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
