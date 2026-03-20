@@ -6,7 +6,7 @@ import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
 import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate } from "./vps-manager";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import session from "express-session";
 
@@ -180,6 +180,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ? (allowed === undefined ? allVps : allVps.filter(id => allowed.includes(id)))
       : (Array.isArray(vpsIds) ? vpsIds.filter(id => allowed === undefined || allowed.includes(id)) : []);
     res.json(await bulkPost(ids, path, body || {}));
+  });
+
+  // ─── Fleet ASN config (repo-backed) ─────────────────────────────────────────
+
+  const FLEET_DIR = join(process.cwd(), "asn-block");
+
+  function readFleetFile(name: string): string {
+    const p = join(FLEET_DIR, name);
+    try { return existsSync(p) ? readFileSync(p, "utf-8") : ""; } catch { return ""; }
+  }
+
+  function writeFleetFile(name: string, content: string): void {
+    if (!existsSync(FLEET_DIR)) mkdirSync(FLEET_DIR, { recursive: true });
+    writeFileSync(join(FLEET_DIR, name), content, "utf-8");
+    // Git commit locale (best-effort, nessun push)
+    try {
+      execSync(
+        `git -C "${process.cwd()}" add asn-block/ && ` +
+        `(git -C "${process.cwd()}" diff --staged --quiet || ` +
+        `git -C "${process.cwd()}" -c user.name="Dashboard" -c user.email="dashboard@local" commit -m "chore: update fleet ${name}")`,
+        { stdio: "pipe" }
+      );
+    } catch {}
+  }
+
+  // Block list (block_asn.conf)
+  app.get("/api/fleet/asn/blocklist", requireAuth, (_req, res) => {
+    res.json({ content: readFleetFile("block_asn.conf") });
+  });
+
+  app.post("/api/fleet/asn/blocklist", requireAuth, requireAdmin, async (req, res) => {
+    const { content } = req.body;
+    if (typeof content !== "string") return res.status(400).json({ error: "content required" });
+    writeFleetFile("block_asn.conf", content);
+    const syncResults = await bulkPost("all", "/api/config/block_asn.conf", { content });
+    const reloadResults = await bulkPost("all", "/api/nginx/reload", {});
+    res.json({ ok: true, syncResults, reloadResults });
+  });
+
+  // Whitelist (asn-whitelist.txt)
+  app.get("/api/fleet/asn/whitelist", requireAuth, (_req, res) => {
+    res.json({ content: readFleetFile("asn-whitelist.txt") });
+  });
+
+  app.post("/api/fleet/asn/whitelist", requireAuth, requireAdmin, async (req, res) => {
+    const { content } = req.body;
+    if (typeof content !== "string") return res.status(400).json({ error: "content required" });
+    writeFleetFile("asn-whitelist.txt", content);
+    const syncResults = await bulkPost("all", "/api/config/asn-whitelist.txt", { content });
+    res.json({ ok: true, syncResults });
+  });
+
+  // Leggi blocklist da un VPS specifico (per importare nel fleet)
+  app.get("/api/fleet/asn/blocklist/import/:vpsId", requireAuth, requireAdmin, async (req, res) => {
+    const vps = getVpsById(req.params.vpsId);
+    if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    try {
+      const data = await agentGet(vps, "/api/config/block_asn.conf");
+      res.json({ content: data.content || "" });
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
   });
 
   // Locali

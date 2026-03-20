@@ -1,0 +1,3 @@
+# Fleet ASN Whitelist — gestito dalla dashboard ProxyGuardian
+# Formato: <CIDR o dominio> [# commento]
+# Esempio: 1.2.3.0/24 # provider fidato
