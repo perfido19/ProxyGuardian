@@ -22931,7 +22931,7 @@ app.post("/api/netbird/stop", async (_req, res) => {
   res.json({ ok: result.ok, error: result.ok ? void 0 : result.stderr });
 });
 app.post("/api/netbird/update", async (_req, res) => {
-  const result = await runCmd("sudo netbird update 2>&1");
+  const result = await runCmd("apt install --only-upgrade netbird -y 2>&1");
   await new Promise((r) => setTimeout(r, 2e3));
   const status = await runCmd("systemctl is-active netbird 2>/dev/null");
   res.json({ ok: result.ok, output: result.stdout || result.stderr, running: status.stdout.trim() === "active" });
