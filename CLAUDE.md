@@ -97,6 +97,7 @@ ProxyGuardian/
 
 ### Agent
 - Codice minimale e autonomo — nessuna dipendenza dal server centrale
+- **Requisito runtime: Node.js 12+** — il bundle è compilato con `--target=node12`; non usare `??` o `?.` nel sorgente (sostituire con `||` e `&&`)
 - Ogni modifica a `agent/index.ts` richiede rebuild: `cd agent && npm run build`
 - Il bundle `agent-bundle.js` va committato dopo ogni rebuild
 - Dopo push, aggiornare il VPS: `git pull && npm run build && pm2 restart proxy-dashboard`

@@ -10,15 +10,15 @@ const execAsync = promisify(exec);
 const app = express();
 app.use(express.json());
 
-const AGENT_API_KEY = process.env.AGENT_API_KEY ?? "";
-const PORT = parseInt(process.env.AGENT_PORT ?? "3001", 10);
-const BIND = process.env.AGENT_BIND ?? "0.0.0.0";
+const AGENT_API_KEY = process.env.AGENT_API_KEY || "";
+const PORT = parseInt(process.env.AGENT_PORT || "3001", 10);
+const BIND = process.env.AGENT_BIND || "0.0.0.0";
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 
 function requireApiKey(req: Request, res: Response, next: NextFunction): void {
   const auth = req.headers["authorization"];
-  const key = auth?.startsWith("Bearer ") ? auth.slice(7) : req.headers["x-api-key"];
+  const key = (auth && auth.startsWith("Bearer ")) ? auth.slice(7) : req.headers["x-api-key"];
   if (!AGENT_API_KEY || key !== AGENT_API_KEY) {
     res.status(401).json({ error: "Unauthorized" });
     return;
@@ -31,7 +31,7 @@ app.use("/api", requireApiKey);
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", hostname: process.env.HOSTNAME ?? "unknown", ts: Date.now() });
+  res.json({ status: "ok", hostname: process.env.HOSTNAME || "unknown", ts: Date.now() });
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ async function runCmd(cmd: string, timeout = 10000): Promise<{ stdout: string; s
     const { stdout, stderr } = await execAsync(cmd, { timeout });
     return { stdout: stdout.trim(), stderr: stderr.trim(), ok: true };
   } catch (err: any) {
-    return { stdout: err.stdout?.trim() ?? "", stderr: err.stderr?.trim() ?? err.message, ok: false };
+    return { stdout: err.stdout ? err.stdout.trim() : "", stderr: err.stderr ? err.stderr.trim() : err.message, ok: false };
   }
 }
 
@@ -103,8 +103,8 @@ app.get("/api/banned-ips", async (_req, res) => {
     for (const jail of jails) {
       const { stdout } = await runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`);
       // Match "Banned IP list:" line and extract all IPv4 addresses from it (handles any whitespace/comma separator)
-      const listLine = stdout.split("\n").find(l => /banned ip list/i.test(l)) ?? "";
-      const ips = listLine.match(/\d+\.\d+\.\d+\.\d+/g) ?? [];
+      const listLine = stdout.split("\n").find(l => /banned ip list/i.test(l)) || "";
+      const ips = listLine.match(/\d+\.\d+\.\d+\.\d+/g) || [];
       for (const ip of ips) {
         bannedIps.push({ ip, jail, banTime: new Date().toISOString() });
       }
@@ -177,7 +177,7 @@ const LOG_PATHS: Record<string, string> = {
 app.get("/api/logs/:logType", async (req, res) => {
   const { logType } = req.params;
   const lines = Math.min(parseInt(req.query.lines as string) || 100, 500);
-  const grepRaw = String(req.query.grep ?? "").trim();
+  const grepRaw = String(req.query.grep || "").trim();
   const logPath = LOG_PATHS[logType];
   if (!logPath) return res.status(400).json({ error: "Unknown log type" });
   try {
@@ -467,8 +467,8 @@ app.get("/api/netbird/status", async (_req, res) => {
 // ─── Grep / search ────────────────────────────────────────────────────────────
 
 app.get("/api/grep", async (req, res) => {
-  const q = String(req.query.q ?? "").trim();
-  const logType = String(req.query.type ?? "nginx_access");
+  const q = String(req.query.q || "").trim();
+  const logType = String(req.query.type || "nginx_access");
   const lines = Math.min(parseInt(req.query.lines as string) || 500, 500);
   if (q.length < 2) return res.status(400).json({ error: "Query troppo breve (min 2 caratteri)" });
   // Sanitize: allow only chars safe for a grep pattern (no shell metacharacters)
@@ -558,7 +558,7 @@ app.get("/api/system", async (_req, res) => {
     memory: { total: memTotal, used: memUsed, free: memFree },
     disk: { total: diskTotal, used: diskUsed, free: diskFree, percent: diskPercent },
     load: { "1m": loadValues[0], "5m": loadValues[1], "15m": loadValues[2] },
-    hostname: process.env.HOSTNAME ?? "unknown",
+    hostname: process.env.HOSTNAME || "unknown",
   });
 });
 
