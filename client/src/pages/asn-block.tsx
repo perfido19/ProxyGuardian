@@ -150,28 +150,28 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">ipset-restore</p>
+            <p style={{ fontSize: 12 }} className="text-muted-foreground uppercase tracking-wide mb-2">ipset-restore</p>
             {statusLoading ? <div className="h-6 bg-muted rounded animate-pulse" /> : <ServiceBadge state={status?.ipsetRestore ?? "unknown"} />}
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">whitelist-watcher</p>
+            <p style={{ fontSize: 12 }} className="text-muted-foreground uppercase tracking-wide mb-2">whitelist-watcher</p>
             {statusLoading ? <div className="h-6 bg-muted rounded animate-pulse" /> : <ServiceBadge state={status?.whitelistWatcher ?? "unknown"} />}
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Prefissi bloccati</p>
-            <p className="text-4xl font-bold font-heading text-foreground leading-none">
+            <p style={{ fontSize: 12 }} className="text-muted-foreground uppercase tracking-wide mb-1">Prefissi bloccati</p>
+            <p style={{ fontSize: 32 }} className="font-bold font-heading text-foreground leading-none">
               {statusLoading ? "…" : (status?.totalPrefixes ?? 0).toLocaleString()}
             </p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Ultimo aggiornamento</p>
-            <p className="text-xs font-mono text-foreground leading-snug break-all">
+            <p style={{ fontSize: 12 }} className="text-muted-foreground uppercase tracking-wide mb-1">Ultimo aggiornamento</p>
+            <p style={{ fontSize: 14 }} className="font-mono text-foreground leading-snug break-all">
               {statusLoading ? "…" : (status?.lastUpdate || "—")}
             </p>
           </CardContent>
@@ -190,19 +190,19 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
         </CardHeader>
         <CardContent className="p-0 relative">
           {statsLoading ? (
-            <div className="h-[420px] flex items-center justify-center"><LoadingState message="Caricamento..." /></div>
+            <div className="h-[550px] flex items-center justify-center"><LoadingState message="Caricamento..." /></div>
           ) : (
             <>
-              <div className="relative" style={{ height: 420 }}>
+              <div className="relative" style={{ height: 550 }}>
                 {tooltip && (
-                  <div className="absolute top-3 left-3 z-10 bg-background/90 border rounded px-3 py-2 text-xs shadow pointer-events-none">
+                  <div className="absolute top-3 left-3 z-10 bg-background/90 border rounded px-3 py-2 shadow pointer-events-none" style={{ fontSize: 13 }}>
                     <span className="text-base mr-1">{tooltip.flag}</span>
                     <span className="font-semibold">{tooltip.name}</span>
                     <br />
                     <span className="text-muted-foreground">{tooltip.packets.toLocaleString()} pacchetti · {tooltip.pct.toFixed(1)}%</span>
                   </div>
                 )}
-                <ComposableMap projectionConfig={{ scale: 140 }} style={{ width: "100%", height: "100%" }}>
+                <ComposableMap projection="geoMercator" projectionConfig={{ scale: 155, center: [0, 20] }} width={960} height={550} style={{ width: "100%", height: "100%" }}>
                   <Geographies geography={GEO_URL}>
                     {({ geographies }) =>
                       geographies.map(geo => {
@@ -238,10 +238,10 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
                   </Geographies>
                 </ComposableMap>
               </div>
-              <div className="flex items-center gap-2 px-4 pb-3 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2 px-4 pb-3 text-muted-foreground" style={{ fontSize: 13 }}>
                 <span>Basso</span>
                 {["#334155","#b45309","#ea580c","#dc2626","#991b1b"].map(c => (
-                  <div key={c} className="w-6 h-2 rounded-sm" style={{ background: c }} />
+                  <div key={c} className="rounded-sm" style={{ background: c, width: 16, height: 16 }} />
                 ))}
                 <span>Alto</span>
               </div>
@@ -268,25 +268,25 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-8">#</TableHead>
-                    <TableHead>ASN</TableHead>
-                    <TableHead>Organizzazione</TableHead>
-                    <TableHead>Paese</TableHead>
-                    <TableHead className="text-right">Pacchetti</TableHead>
-                    <TableHead className="text-right">Bytes</TableHead>
+                    <TableHead className="w-8" style={{ fontSize: 13 }}>#</TableHead>
+                    <TableHead style={{ fontSize: 13 }}>ASN</TableHead>
+                    <TableHead style={{ fontSize: 13 }}>Organizzazione</TableHead>
+                    <TableHead style={{ fontSize: 13 }}>Paese</TableHead>
+                    <TableHead className="text-right" style={{ fontSize: 13 }}>Pacchetti</TableHead>
+                    <TableHead className="text-right" style={{ fontSize: 13 }}>Bytes</TableHead>
                     <TableHead className="w-28"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {pagedAsn.map((s, i) => (
                     <TableRow key={s.asn}>
-                      <TableCell className="text-xs text-muted-foreground">{asnPage * PAGE_SIZE + i + 1}</TableCell>
-                      <TableCell className="font-mono text-xs font-semibold">{s.asn}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground max-w-xs truncate">{s.org}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{flagEmoji(s.countryCode)} {s.country}</TableCell>
-                      <TableCell className="text-right text-xs font-mono">{s.packets.toLocaleString()}</TableCell>
-                      <TableCell className="text-right text-xs font-mono">{fmtBytes(s.bytes)}</TableCell>
-                      <TableCell>
+                      <TableCell className="py-3 text-muted-foreground" style={{ fontSize: 14 }}>{asnPage * PAGE_SIZE + i + 1}</TableCell>
+                      <TableCell className="py-3 font-mono font-medium" style={{ fontSize: 15 }}>{s.asn}</TableCell>
+                      <TableCell className="py-3 text-muted-foreground max-w-xs truncate" style={{ fontSize: 13 }}>{s.org}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap" style={{ fontSize: 14 }}>{flagEmoji(s.countryCode)} {s.country}</TableCell>
+                      <TableCell className="py-3 text-right font-mono" style={{ fontSize: 14 }}>{s.packets.toLocaleString()}</TableCell>
+                      <TableCell className="py-3 text-right font-mono" style={{ fontSize: 14 }}>{fmtBytes(s.bytes)}</TableCell>
+                      <TableCell className="py-3">
                         <div className="h-1.5 rounded bg-muted overflow-hidden">
                           <div className="h-full bg-orange-500 rounded" style={{ width: `${Math.round((s.packets / maxPackets) * 100)}%` }} />
                         </div>
