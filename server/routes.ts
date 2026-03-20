@@ -250,6 +250,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ ok: true, results });
   });
 
+  // ─── Backup / Restore ─────────────────────────────────────────────────────
+
+  const DATA_DIR_PATH = join(process.cwd(), "data");
+
+  app.get("/api/admin/backup", requireAuth, requireAdmin, (_req, res) => {
+    try {
+      const readData = (file: string) => {
+        const p = join(DATA_DIR_PATH, file);
+        try { return existsSync(p) ? JSON.parse(readFileSync(p, "utf-8")) : []; } catch { return []; }
+      };
+      const backup = {
+        version: 1,
+        timestamp: new Date().toISOString(),
+        vps: readData("vps.json"),
+        users: readData("users.json"),
+        asnBlocklist: readFleetFile("asn-blocklist.txt"),
+        asnWhitelist: readFleetFile("asn-whitelist.txt"),
+      };
+      const filename = `pg-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.json(backup);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/admin/restore", requireAuth, requireAdmin, (req, res) => {
+    try {
+      const { version, vps, users, asnBlocklist, asnWhitelist } = req.body;
+      if (version !== 1 || !Array.isArray(vps) || !Array.isArray(users)) {
+        return res.status(400).json({ error: "File backup non valido o versione non supportata" });
+      }
+      if (!existsSync(DATA_DIR_PATH)) mkdirSync(DATA_DIR_PATH, { recursive: true });
+      writeFileSync(join(DATA_DIR_PATH, "vps.json"), JSON.stringify(vps, null, 2), "utf-8");
+      writeFileSync(join(DATA_DIR_PATH, "users.json"), JSON.stringify(users, null, 2), "utf-8");
+      if (typeof asnBlocklist === "string") writeFleetFile("asn-blocklist.txt", asnBlocklist);
+      if (typeof asnWhitelist === "string") writeFleetFile("asn-whitelist.txt", asnWhitelist);
+      res.json({ ok: true, message: "Dati ripristinati. Il server si riavvierà tra 2 secondi." });
+      // Riavvio per ricaricare vpsStore e usersStore in memoria
+      setTimeout(() => process.exit(1), 2000);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   // Locali
   app.get("/api/services", requireAuth, async (_req, res) => { try { res.json(await storage.getServices()); } catch { res.status(500).json({ error: "Errore" }); } });
   app.post("/api/services/action", requireAuth, requireOperator, async (req, res) => {
