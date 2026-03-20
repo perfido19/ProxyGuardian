@@ -355,7 +355,7 @@ function TabWhitelist({ vpsId, canWrite }: { vpsId: string; canWrite: boolean })
 
   const { data: entries, isLoading, refetch } = useQuery<WhitelistEntry[]>({
     queryKey: [`asn-whitelist-${vpsId}`],
-    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/asn/whitelist")); return r.json(); },
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/asn/whitelist")); const d = await r.json(); return d.entries || []; },
     refetchInterval: 60000,
   });
 
@@ -365,7 +365,7 @@ function TabWhitelist({ vpsId, canWrite }: { vpsId: string; canWrite: boolean })
       return r.json();
     },
     onSuccess: (data: any) => {
-      if (data.success) {
+      if (data.ok) {
         refetch();
         setNewValue(""); setNewComment("");
         toast({ title: "Voce aggiunta alla whitelist" });
@@ -633,25 +633,21 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps }: {
                     <TableHead>ASN</TableHead>
                     <TableHead>Descrizione</TableHead>
                     <TableHead>Copertura VPS</TableHead>
-                    {onlineVps.map(v => <TableHead key={v.id} className="text-center text-xs">{v.name}</TableHead>)}
                     <TableHead className="text-right">Azioni</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filtered.length === 0 ? (
-                    <TableRow><TableCell colSpan={4 + onlineVps.length} className="text-center py-8 text-muted-foreground">{search ? "Nessun risultato" : "Nessun ASN bloccato"}</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">{search ? "Nessun risultato" : "Nessun ASN bloccato"}</TableCell></TableRow>
                   ) : filtered.map(({ asn, description, presentIn }) => (
                     <TableRow key={asn}>
                       <TableCell className="font-mono font-semibold">{asn}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{description || "—"}</TableCell>
                       <TableCell>
-                        <Badge variant={presentIn.size === onlineVps.length ? "destructive" : "outline"}>{presentIn.size}/{onlineVps.length} VPS</Badge>
+                        <Badge variant="outline" className={`text-xs ${presentIn.size === onlineVps.length ? "border-green-600/40 text-green-600" : "border-yellow-500/40 text-yellow-600"}`}>
+                          {presentIn.size}/{onlineVps.length} VPS
+                        </Badge>
                       </TableCell>
-                      {onlineVps.map(v => (
-                        <TableCell key={v.id} className="text-center">
-                          {presentIn.has(v.id) ? <CheckCircle className="w-4 h-4 text-green-500 inline" /> : <XCircle className="w-4 h-4 text-muted-foreground/30 inline" />}
-                        </TableCell>
-                      ))}
                       <TableCell className="text-right">
                         <Button variant="ghost" size="icon" disabled={saveAllMutation.isPending}
                           onClick={() => saveAllMutation.mutate({ asn, remove: true })}>
