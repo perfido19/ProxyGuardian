@@ -22754,7 +22754,9 @@ var CONFIG_PATHS = {
   "block_isp.conf": "/etc/nginx/block_isp.conf",
   "useragent.rules": "/etc/nginx/useragent.rules",
   "ip_whitelist.conf": "/etc/nginx/ip_whitelist.conf",
-  "exclusion_ip.conf": "/etc/nginx/exclusion_ip.conf"
+  "exclusion_ip.conf": "/etc/nginx/exclusion_ip.conf",
+  "modsecurity.conf": "/etc/nginx/conf/modsecurity.conf",
+  "crs-setup.conf": "/etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf"
 };
 app.get("/api/config/:filename", async (req, res) => {
   const filePath = CONFIG_PATHS[req.params.filename];
@@ -22780,6 +22782,95 @@ app.post("/api/config/:filename", async (req, res) => {
       }
     }
     res.json({ ok: true, message: `${req.params.filename} updated` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var MODSEC_CONF = "/etc/nginx/conf/modsecurity.conf";
+var MODSEC_LOG = "/opt/log/modsec_audit.log";
+app.get("/api/modsec/status", async (_req, res) => {
+  try {
+    let engine = "unknown";
+    let configFound = false;
+    try {
+      const raw = await (0, import_promises.readFile)(MODSEC_CONF, "utf-8");
+      configFound = true;
+      const match = raw.match(/^\s*SecRuleEngine\s+(\S+)/m);
+      if (match) engine = match[1];
+    } catch {
+    }
+    const logStat = await runCmd(`wc -l ${MODSEC_LOG} 2>/dev/null || echo "0"`);
+    const logLines = parseInt(logStat.stdout.trim().split(/\s+/)[0]) || 0;
+    const nginxV = await runCmd("nginx -V 2>&1 | grep -i modsec | head -1");
+    res.json({
+      engine,
+      configFound,
+      moduleLoaded: nginxV.stdout.length > 0,
+      logLines,
+      logPath: MODSEC_LOG,
+      configPath: MODSEC_CONF
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/modsec/engine", async (req, res) => {
+  const { state } = req.body;
+  if (!["On", "Off", "DetectionOnly"].includes(state)) {
+    return res.status(400).json({ error: "state deve essere On, Off o DetectionOnly" });
+  }
+  try {
+    const raw = await (0, import_promises.readFile)(MODSEC_CONF, "utf-8");
+    const updated = raw.replace(/^(\s*SecRuleEngine\s+)\S+/m, `$1${state}`);
+    await (0, import_promises.writeFile)(MODSEC_CONF, updated, "utf-8");
+    const test = await runCmd("sudo nginx -t 2>&1");
+    if (!test.ok) {
+      await (0, import_promises.writeFile)(MODSEC_CONF, raw, "utf-8");
+      return res.status(422).json({ error: `nginx -t failed: ${test.stderr}` });
+    }
+    await runCmd("sudo nginx -s reload 2>&1");
+    res.json({ ok: true, engine: state });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get("/api/modsec/log", async (req, res) => {
+  const lines = Math.min(parseInt(req.query.lines) || 200, 1e3);
+  try {
+    const result = await runCmd(`tail -${lines} ${MODSEC_LOG} 2>/dev/null || echo ""`);
+    const raw = result.stdout;
+    const events = [];
+    const blocks = raw.split(/^--[a-f0-9]+-A--$/m).filter((b) => b.trim());
+    for (const block of blocks.slice(-50)) {
+      try {
+        const lines2 = block.split("\n");
+        const headerLine = lines2[0] || "";
+        const tsMatch = headerLine.match(/\[([^\]]+)\]/);
+        const timestamp = tsMatch ? tsMatch[1] : "";
+        const idMatch = headerLine.match(/\S+\s+\S+\s+(\S+)/);
+        const id = idMatch ? idMatch[1] : "";
+        const sectionB = block.match(/--[a-f0-9]+-B--\n([\s\S]*?)(?=\n--[a-f0-9]+-)/);
+        const reqLine = sectionB ? sectionB[1].split("\n")[0] : "";
+        const reqParts = reqLine.trim().split(" ");
+        const method = reqParts[0] || "";
+        const uri = reqParts[1] || "";
+        const ipMatch = block.match(/\[client (\S+)\]/) || block.match(/^(\d+\.\d+\.\d+\.\d+)/m);
+        const ip = ipMatch ? ipMatch[1] : "";
+        const sectionF = block.match(/--[a-f0-9]+-F--\n([\s\S]*?)(?=\n--[a-f0-9]+-)/);
+        const statusLine = sectionF ? sectionF[1].split("\n")[0] : "";
+        const statusMatch = statusLine.match(/\s(\d{3})\s/);
+        const status = statusMatch ? statusMatch[1] : "";
+        const sectionH = block.match(/--[a-f0-9]+-H--\n([\s\S]*?)(?=\n--[a-f0-9]+-)/);
+        const messages = [];
+        if (sectionH) {
+          const msgMatches = sectionH[1].matchAll(/Message: ([^\n]+)/g);
+          for (const m of msgMatches) messages.push(m[1]);
+        }
+        if (method || ip) events.push({ id, timestamp, ip, uri, method, status, messages });
+      } catch {
+      }
+    }
+    res.json({ raw: raw.slice(-2e4), events: events.slice(-30) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
