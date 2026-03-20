@@ -10,7 +10,7 @@ const execAsync = promisify(exec);
 const app = express();
 app.use(express.json());
 
-const AGENT_VERSION = "1.2.0";
+const AGENT_VERSION = "1.2.1";
 
 const AGENT_API_KEY = process.env.AGENT_API_KEY || "";
 const PORT = parseInt(process.env.AGENT_PORT || "3001", 10);
@@ -952,13 +952,8 @@ app.post("/api/agent/update", express.raw({ type: "*/*", limit: "10mb" }), async
   try {
     await writeFile(dest, bundle);
     res.json({ ok: true, version: AGENT_VERSION, message: "Bundle aggiornato, riavvio in corso..." });
-    setTimeout(function() {
-      var child = spawn("sudo", ["systemctl", "restart", "proxy-guardian-agent"], {
-        detached: true,
-        stdio: "ignore",
-      });
-      child.unref();
-    }, 500);
+    // process.exit(1) triggers systemd Restart=on-failure → picks up new bundle from disk
+    setTimeout(function() { process.exit(1); }, 500);
   } catch (err) {
     var e = err as any;
     res.status(500).json({ error: e.message });
