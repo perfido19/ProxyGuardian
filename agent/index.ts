@@ -950,9 +950,14 @@ app.post("/api/agent/update", express.raw({ type: "*/*", limit: "10mb" }), async
   if (!Buffer.isBuffer(bundle) || bundle.length < 1000) {
     return res.status(400).json({ error: "Bundle non valido o troppo piccolo" });
   }
-  var dest = process.argv[1];
+  var dir = path.dirname(path.resolve(process.argv[1]));
+  var dest = path.join(dir, "agent-bundle.js");
+  var startSh = path.join(dir, "start.sh");
   try {
     await writeFile(dest, bundle);
+    // Assicura che start.sh punti a agent-bundle.js
+    var startContent = "#!/bin/bash\nset -a\nsource " + dir + "/.env\nset +a\nexec node " + dest + "\n";
+    await writeFile(startSh, startContent);
     res.json({ ok: true, version: AGENT_VERSION, message: "Bundle aggiornato, riavvio in corso..." });
     // process.exit(1) triggers systemd Restart=on-failure → picks up new bundle from disk
     setTimeout(function() { process.exit(1); }, 500);
