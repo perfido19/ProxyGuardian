@@ -857,23 +857,25 @@ app.get("/api/asn/status", async (_req, res) => {
 });
 
 app.get("/api/asn/whitelist", async (_req, res) => {
+  var raw = "";
   try {
-    var raw = "";
-    try { raw = await readFile(ASN_WHITELIST_FILE, "utf-8"); } catch {}
-    var entries = raw.split("\n").map(function(line) {
-      var t = line.trim();
-      if (!t || t.startsWith("#")) return null;
-      var ci = t.indexOf("#");
-      var value = (ci >= 0 ? t.slice(0, ci).trim() : t).trim();
-      var comment = ci >= 0 ? t.slice(ci + 1).trim() : "";
-      if (!value) return null;
-      var type = value.startsWith("domain:") ? "domain" : "cidr";
-      return { value: value, comment: comment, type: type };
-    }).filter(Boolean);
-    res.json({ entries: entries });
+    raw = await readFile(ASN_WHITELIST_FILE, "utf-8");
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (err.code !== "ENOENT") {
+      console.error("[asn/whitelist] readFile " + ASN_WHITELIST_FILE + ":", err.message);
+    }
   }
+  var entries = raw.split("\n").map(function(line) {
+    var t = line.trim();
+    if (!t || t.startsWith("#")) return null;
+    var ci = t.indexOf("#");
+    var value = (ci >= 0 ? t.slice(0, ci).trim() : t).trim();
+    var comment = ci >= 0 ? t.slice(ci + 1).trim() : "";
+    if (!value) return null;
+    var type = value.startsWith("domain:") ? "domain" : "cidr";
+    return { value: value, comment: comment, type: type };
+  }).filter(Boolean);
+  res.json({ entries: entries });
 });
 
 app.post("/api/asn/whitelist", async (req, res) => {

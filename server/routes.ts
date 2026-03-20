@@ -221,8 +221,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Whitelist (asn-whitelist.txt — inotify watcher triggers update automatically)
-  app.get("/api/fleet/asn/whitelist", requireAuth, (_req, res) => {
-    res.json({ content: readFleetFile("asn-whitelist.txt") });
+  app.get("/api/fleet/asn/whitelist", requireAuth, async (_req, res) => {
+    // Se il file locale ha contenuto reale, usalo
+    const local = readFleetFile("asn-whitelist.txt");
+    const hasContent = local.split("\n").some(l => { const t = l.trim(); return t && !t.startsWith("#"); });
+    if (hasContent) return res.json({ content: local });
+    // Altrimenti leggi dal primo VPS agent disponibile
+    const allVps = getAllVps();
+    for (const safe of allVps.filter(v => v.enabled)) {
+      const vps = getVpsById(safe.id);
+      if (!vps) continue;
+      try {
+        const data = await agentGet(vps, "/api/asn/whitelist");
+        const entries: Array<{ value: string; comment: string }> = data.entries || [];
+        const content = entries.map(e => e.comment ? `${e.value} # ${e.comment}` : e.value).join("\n") + (entries.length ? "\n" : "");
+        return res.json({ content });
+      } catch (e: any) {
+        console.error(`[fleet/asn/whitelist] ${vps.name}: ${e.message}`);
+      }
+    }
+    res.json({ content: local });
   });
 
   app.post("/api/fleet/asn/whitelist", requireAuth, requireAdmin, async (req, res) => {

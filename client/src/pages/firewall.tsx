@@ -215,7 +215,7 @@ function CountriesTab({ refVps, saveTarget, totalCount }: TabProps) {
 
 // ── ASN ────────────────────────────────────────────────────────────────────────
 
-function AsnTab({ refVps }: TabProps) {
+function AsnTab({ refVps, totalCount }: TabProps) {
   const { toast } = useToast();
   const [asns, setAsns] = useState<Array<{ asn: string; description?: string }>>([]);
   const [newAsn, setNewAsn] = useState(""); const [newDesc, setNewDesc] = useState("");
@@ -339,21 +339,32 @@ function AsnTab({ refVps }: TabProps) {
           </div>
           {search && <p className="text-xs text-muted-foreground">{filtered.length} / {asns.length} risultati</p>}
           <div className="border rounded-md">
-            <Table>
-              <TableHeader><TableRow><TableHead>ASN</TableHead><TableHead>Descrizione</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {filtered.length === 0 ? (
-                  <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun ASN bloccato"}</TableCell></TableRow>
-                ) : filtered.map(({ asn, description }) => (
-                  <TableRow key={asn}>
-                    <TableCell className="font-mono font-semibold">{asn}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{description || "—"}</TableCell>
-                    <TableCell><Badge variant="destructive">Bloccato</Badge></TableCell>
-                    <TableCell className="text-right"><Button variant="ghost" size="icon" onClick={() => { setAsns(asns.filter(a => a.asn !== asn)); setHasChanges(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            {(() => {
+              const okCount = syncStatus.length > 0 ? syncStatus.filter(r => r.success).length : totalCount;
+              const totCount = syncStatus.length > 0 ? syncStatus.length : totalCount;
+              const allOk = okCount === totCount;
+              return (
+                <Table>
+                  <TableHeader><TableRow><TableHead>ASN</TableHead><TableHead>Descrizione</TableHead><TableHead>Copertura VPS</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {filtered.length === 0 ? (
+                      <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun ASN bloccato"}</TableCell></TableRow>
+                    ) : filtered.map(({ asn, description }) => (
+                      <TableRow key={asn}>
+                        <TableCell className="font-mono font-semibold">{asn}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{description || "—"}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={`text-xs ${allOk ? "border-green-600/40 text-green-600" : "border-yellow-500/40 text-yellow-600"}`}>
+                            {okCount}/{totCount} VPS
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right"><Button variant="ghost" size="icon" onClick={() => { setAsns(asns.filter(a => a.asn !== asn)); setHasChanges(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              );
+            })()}
           </div>
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">{asns.length} ASN bloccati</p>
