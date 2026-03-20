@@ -169,7 +169,22 @@ export default function VpsManager() {
             <div className="flex items-center gap-2">
               <code className="flex-1 bg-muted px-3 py-2 rounded font-mono text-xs break-all">{INSTALL_CMD}</code>
               <Button size="sm" variant="outline" className="shrink-0"
-                onClick={() => { navigator.clipboard.writeText(INSTALL_CMD); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>
+                onClick={() => {
+                  if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(INSTALL_CMD);
+                  } else {
+                    const ta = document.createElement("textarea");
+                    ta.value = INSTALL_CMD;
+                    ta.style.position = "fixed";
+                    ta.style.opacity = "0";
+                    document.body.appendChild(ta);
+                    ta.focus();
+                    ta.select();
+                    try { document.execCommand("copy"); } finally { document.body.removeChild(ta); }
+                  }
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }}>
                 {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
               </Button>
             </div>
