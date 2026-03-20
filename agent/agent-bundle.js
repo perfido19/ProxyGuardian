@@ -23094,7 +23094,7 @@ app.get("/api/asn/stats", async (_req, res) => {
       return res.json(asnStatsCache.data);
     }
     const [statsResult, prefixResult] = await Promise.all([
-      runCmd("python3 /usr/local/bin/asn-log-stats.py --top 50 2>/dev/null", 15e3),
+      runCmd("python3 /usr/local/bin/asn-log-stats.py --top 50 --json 2>/dev/null", 15e3),
       runCmd("ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0")
     ]);
     let top = [];
