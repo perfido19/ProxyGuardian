@@ -1,0 +1,3 @@
+# Fleet ASN Blocklist — gestito dalla dashboard ProxyGuardian
+# Formato: AS<numero> [# descrizione]
+# Esempio: AS15169 # Google LLC
