@@ -69,6 +69,8 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/netbird update
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent
 SUDOEOF
 chmod 440 "$SUDOERS_FILE"
 ok "Sudoers aggiornati"
