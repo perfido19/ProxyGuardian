@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { copyToClipboard } from "@/lib/clipboard";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useVpsList, useVpsHealth } from "@/hooks/use-vps";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -126,7 +127,7 @@ function AsnBlockNotInstalledBanner() {
           {ASNBLOCK_INSTALL_CMD}
         </code>
         <Button variant="ghost" size="sm" className="shrink-0"
-          onClick={() => { navigator.clipboard.writeText(ASNBLOCK_INSTALL_CMD); toast({ title: "Copiato" }); }}>
+          onClick={() => { copyToClipboard(ASNBLOCK_INSTALL_CMD); toast({ title: "Copiato" }); }}>
           <Copy className="w-3.5 h-3.5" />
         </Button>
       </div>
@@ -219,10 +220,10 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
         </CardHeader>
         <CardContent className="p-0 relative">
           {statsLoading ? (
-            <div className="h-[550px] flex items-center justify-center"><LoadingState message="Caricamento..." /></div>
+            <div className="h-[560px] flex items-center justify-center"><LoadingState message="Caricamento..." /></div>
           ) : (
             <>
-              <div className="relative" style={{ height: 550 }}>
+              <div className="relative w-full" style={{ height: 560 }}>
                 {tooltip && (
                   <div className="absolute top-3 left-3 z-10 bg-background/90 border rounded px-3 py-2 shadow pointer-events-none" style={{ fontSize: 13 }}>
                     <span className="text-base mr-1">{tooltip.flag}</span>
@@ -231,7 +232,7 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
                     <span className="text-muted-foreground">{tooltip.packets.toLocaleString()} pacchetti · {tooltip.pct.toFixed(1)}%</span>
                   </div>
                 )}
-                <ComposableMap projection="geoMercator" projectionConfig={{ scale: 155, center: [0, 20] }} width={960} height={550} style={{ width: "100%", height: "100%" }}>
+                <ComposableMap projection="geoMercator" projectionConfig={{ scale: 180, center: [10, 20] }} width={800} height={500} style={{ width: "100%", height: "100%" }}>
                   <Geographies geography={GEO_URL}>
                     {({ geographies }) =>
                       geographies.map(geo => {
