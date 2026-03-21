@@ -822,7 +822,7 @@ app.get("/api/asn/stats", async (_req, res) => {
     }
     const [statsResult, prefixResult] = await Promise.all([
       runCmd("python3 /usr/local/bin/asn-log-stats.py --top 50 --json 2>/dev/null", 15000),
-      runCmd("ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0"),
+      runCmd("sudo ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0"),
     ]);
     let top: any[] = [];
     if (statsResult.ok && statsResult.stdout) {
@@ -839,17 +839,19 @@ app.get("/api/asn/stats", async (_req, res) => {
 
 app.get("/api/asn/status", async (_req, res) => {
   try {
-    const [ipsetRestore, whitelistWatcher, prefixes, lastLog] = await Promise.all([
+    const [ipsetRestore, whitelistWatcher, prefixes, lastMtime] = await Promise.all([
       runCmd("systemctl is-active ipset-restore 2>/dev/null"),
       runCmd("systemctl is-active whitelist-watcher 2>/dev/null"),
-      runCmd("ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0"),
-      runCmd("tail -1 /var/log/update-asn-block.log 2>/dev/null || echo ''"),
+      runCmd("sudo ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0"),
+      runCmd("stat -c %Y /var/log/update-asn-block.log 2>/dev/null || echo 0"),
     ]);
+    const mtimeSec = parseInt(lastMtime.stdout.trim()) || 0;
+    const lastUpdate = mtimeSec > 0 ? new Date(mtimeSec * 1000).toISOString() : "";
     res.json({
       ipsetRestore: ipsetRestore.stdout.trim(),
       whitelistWatcher: whitelistWatcher.stdout.trim(),
       totalPrefixes: parseInt(prefixes.stdout.trim()) || 0,
-      lastUpdate: lastLog.stdout.trim(),
+      lastUpdate: lastUpdate,
       installed: existsSync("/usr/local/bin/update-lists.sh") && existsSync(ASN_UPDATE_SCRIPT),
     });
   } catch (err: any) {
