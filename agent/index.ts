@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from "express";
 import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import { readFile, writeFile, appendFile, access, readdir } from "fs/promises";
-import { constants } from "fs";
+import { constants, existsSync } from "fs";
 import path from "path";
 
 const execAsync = promisify(exec);
@@ -850,6 +850,7 @@ app.get("/api/asn/status", async (_req, res) => {
       whitelistWatcher: whitelistWatcher.stdout.trim(),
       totalPrefixes: parseInt(prefixes.stdout.trim()) || 0,
       lastUpdate: lastLog.stdout.trim(),
+      installed: existsSync("/usr/local/bin/update-lists.sh") && existsSync(ASN_UPDATE_SCRIPT),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -921,11 +922,17 @@ app.delete("/api/asn/whitelist", async (req, res) => {
 });
 
 app.post("/api/asn/update-lists", async (_req, res) => {
+  if (!existsSync("/usr/local/bin/update-lists.sh")) {
+    return res.status(404).json({ success: false, error: "Script update-lists.sh non trovato. AsnBlock non è installato su questo VPS." });
+  }
   const result = await runCmd("sudo bash /usr/local/bin/update-lists.sh 2>&1", 60000);
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
 
 app.post("/api/asn/update-set", async (_req, res) => {
+  if (!existsSync(ASN_UPDATE_SCRIPT)) {
+    return res.status(404).json({ success: false, error: "Script update-asn-block.sh non trovato. AsnBlock non è installato su questo VPS." });
+  }
   const result = await runCmd("sudo bash " + ASN_UPDATE_SCRIPT + " 2>&1", 120000);
   asnStatsCache = null;
   res.json({ success: result.ok, output: result.stdout || result.stderr });
