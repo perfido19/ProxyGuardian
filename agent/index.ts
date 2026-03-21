@@ -734,7 +734,7 @@ const ASN_CACHE_TTL = 5 * 60 * 1000;
 const ASN_AGENT_USER = process.env.USER || "pgagent";
 
 function spawnAsnUpdate() {
-  var child = spawn("bash", [ASN_UPDATE_SCRIPT], { detached: true, stdio: "ignore" });
+  var child = spawn("sudo", ["bash", ASN_UPDATE_SCRIPT], { detached: true, stdio: "ignore" });
   child.unref();
 }
 
@@ -921,12 +921,12 @@ app.delete("/api/asn/whitelist", async (req, res) => {
 });
 
 app.post("/api/asn/update-lists", async (_req, res) => {
-  const result = await runCmd("bash /usr/local/bin/update-lists.sh 2>&1", 60000);
+  const result = await runCmd("sudo bash /usr/local/bin/update-lists.sh 2>&1", 60000);
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
 
 app.post("/api/asn/update-set", async (_req, res) => {
-  const result = await runCmd("bash " + ASN_UPDATE_SCRIPT + " 2>&1", 120000);
+  const result = await runCmd("sudo bash " + ASN_UPDATE_SCRIPT + " 2>&1", 120000);
   asnStatsCache = null;
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
