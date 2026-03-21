@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 import {
   Plus, Trash2, Search, RefreshCw, CheckCircle, XCircle,
-  Shield, Activity, Settings, FileText, AlertTriangle, Play, Database,
+  Shield, Activity, Settings, FileText, AlertTriangle, Play, Database, Copy,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ interface AsnEntry { asn: string; description?: string; }
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
 interface AsnStat { asn: string; org: string; country: string; countryCode: string; packets: number; bytes: number; }
 interface AsnStats { updatedAt: string; totalPrefixes: number; top: AsnStat[]; }
-interface AsnStatus { ipsetRestore: string; whitelistWatcher: string; totalPrefixes: number; lastUpdate: string; }
+interface AsnStatus { ipsetRestore: string; whitelistWatcher: string; totalPrefixes: number; lastUpdate: string; installed?: boolean; }
 interface WhitelistEntry { value: string; comment: string; type: "cidr" | "domain"; }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -108,6 +108,32 @@ function mapColor(packets: number, maxPackets: number): string {
   return "#991b1b";
 }
 
+// ─── AsnBlock not-installed banner ────────────────────────────────────────────
+
+const ASNBLOCK_INSTALL_CMD = "bash <(curl -fsSL https://raw.githubusercontent.com/perfido19/AsnBlock/master/install.sh)";
+
+function AsnBlockNotInstalledBanner() {
+  const { toast } = useToast();
+  return (
+    <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 p-4 space-y-3">
+      <div className="flex items-center gap-2 text-yellow-400 font-medium text-sm">
+        <AlertTriangle className="w-4 h-4 shrink-0" />
+        AsnBlock non è installato su questo VPS.
+      </div>
+      <p className="text-xs text-muted-foreground">Installa con il seguente comando sul VPS:</p>
+      <div className="flex items-center gap-2">
+        <code className="flex-1 bg-zinc-950 text-zinc-200 text-xs font-mono px-3 py-2 rounded-md overflow-auto whitespace-nowrap">
+          {ASNBLOCK_INSTALL_CMD}
+        </code>
+        <Button variant="ghost" size="sm" className="shrink-0"
+          onClick={() => { navigator.clipboard.writeText(ASNBLOCK_INSTALL_CMD); toast({ title: "Copiato" }); }}>
+          <Copy className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Panoramica Tab ───────────────────────────────────────────────────────────
 
 function TabPanoramica({ vpsId }: { vpsId: string }) {
@@ -144,8 +170,11 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
   const pageCount = Math.ceil(Math.min(topAsn.length, 50) / PAGE_SIZE);
   const pagedAsn = topAsn.slice(asnPage * PAGE_SIZE, (asnPage + 1) * PAGE_SIZE);
 
+  const notInstalled = !statusLoading && status !== undefined && status.installed === false;
+
   return (
     <div className="space-y-4">
+      {notInstalled && <AsnBlockNotInstalledBanner />}
       {/* Row 1: 4 status cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
@@ -322,6 +351,13 @@ function TabGestione({ vpsId, canWrite }: { vpsId: string; canWrite: boolean }) 
   const [updateListsOutput, setUpdateListsOutput] = useState("");
   const [updateSetOutput, setUpdateSetOutput] = useState("");
 
+  const { data: status, isLoading: statusLoading } = useQuery<AsnStatus>({
+    queryKey: [`asn-status-${vpsId}`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/asn/status")); return r.json(); },
+    refetchInterval: 60000,
+  });
+  const notInstalled = !statusLoading && status !== undefined && status.installed === false;
+
   const updateListsMutation = useMutation({
     mutationFn: async () => { const r = await apiRequest("POST", proxy("/api/asn/update-lists"), {}); return r.json(); },
     onSuccess: (data: any) => {
@@ -348,6 +384,7 @@ function TabGestione({ vpsId, canWrite }: { vpsId: string; canWrite: boolean }) 
 
   return (
     <div className="space-y-4">
+      {notInstalled && <AsnBlockNotInstalledBanner />}
       {/* Test IP */}
       <Card>
         <CardHeader>
@@ -386,7 +423,7 @@ function TabGestione({ vpsId, canWrite }: { vpsId: string; canWrite: boolean }) 
             <Button
               size="sm"
               variant="outline"
-              disabled={!canWrite || updateListsMutation.isPending}
+              disabled={!canWrite || notInstalled || updateListsMutation.isPending}
               onClick={() => {
                 if (!confirm("Aggiornare le liste da GitHub?")) return;
                 setUpdateListsOutput("");
@@ -421,7 +458,7 @@ function TabGestione({ vpsId, canWrite }: { vpsId: string; canWrite: boolean }) 
             <Button
               size="sm"
               variant="outline"
-              disabled={!canWrite || updateSetMutation.isPending}
+              disabled={!canWrite || notInstalled || updateSetMutation.isPending}
               onClick={() => {
                 if (!confirm("Rigenerare l'intero set ipset? L'operazione può richiedere 1-2 minuti.")) return;
                 setUpdateSetOutput("");
