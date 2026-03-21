@@ -22586,7 +22586,7 @@ var import_path = __toESM(require("path"), 1);
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
 var app = (0, import_express.default)();
 app.use(import_express.default.json());
-var AGENT_VERSION = "1.2.0";
+var AGENT_VERSION = "1.2.1";
 var AGENT_API_KEY = process.env.AGENT_API_KEY || "";
 var PORT = parseInt(process.env.AGENT_PORT || "3001", 10);
 var BIND = process.env.AGENT_BIND || "0.0.0.0";
@@ -22758,7 +22758,7 @@ var CONFIG_PATHS = {
   "exclusion_ip.conf": "/etc/nginx/exclusion_ip.conf",
   "modsecurity.conf": "/etc/nginx/conf/modsecurity.conf",
   "crs-setup.conf": "/etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf",
-  "block_baduseragents.conf": "/etc/nginx/block_baduseragents.conf",
+  "block_baduseragents.conf": "/etc/nginx/block_badagents.conf",
   "asn-whitelist.txt": "/etc/asn-whitelist-nets.txt",
   "asn-blocklist.txt": "/etc/asn-blocklist.txt"
 };
@@ -22788,9 +22788,9 @@ app.post("/api/config/:filename", async (req, res) => {
     res.json({ ok: true, message: `${req.params.filename} updated` });
   } catch (err) {
     if (err.code === "EACCES" || err.code === "EPERM") {
-      const agentUser = process.env.USER || "pgagent";
+      const agentUser2 = process.env.USER || "pgagent";
       return res.status(403).json({
-        error: `Permessi insufficienti su ${filePath} \u2014 esegui: chown root:${agentUser} ${filePath} && chmod 664 ${filePath}`
+        error: `Permessi insufficienti su ${filePath} \u2014 esegui: chown root:${agentUser2} ${filePath} && chmod 664 ${filePath}`
       });
     }
     res.status(500).json({ error: err.message });
@@ -23187,8 +23187,103 @@ app.post("/api/fail2ban/jails/:name", async (req, res) => {
   for (const cmd of cmds) await runCmd(cmd);
   res.json({ ok: true, message: `Jail ${name} updated` });
 });
+var ASN_BLOCKLIST_FILE = "/etc/asn-blocklist.txt";
+var ASN_WHITELIST_FILE = "/etc/asn-whitelist-nets.txt";
+var ASN_UPDATE_SCRIPT = "/usr/local/bin/update-asn-block.sh";
 var asnStatsCache = null;
 var ASN_CACHE_TTL = 5 * 60 * 1e3;
+var ASN_AGENT_USER = process.env.USER || "pgagent";
+function spawnAsnUpdate() {
+  var child = (0, import_child_process.spawn)("sudo", ["bash", ASN_UPDATE_SCRIPT], { detached: true, stdio: "ignore" });
+  child.unref();
+}
+app.get("/api/asn/blocklist", async (_req, res) => {
+  try {
+    var raw = "";
+    try {
+      raw = await (0, import_promises.readFile)(ASN_BLOCKLIST_FILE, "utf-8");
+    } catch {
+    }
+    var asns = raw.split("\n").map(function(l) {
+      return l.trim();
+    }).filter(function(l) {
+      return l.length > 0 && !l.startsWith("#");
+    }).map(function(l) {
+      var ci = l.indexOf("#");
+      return (ci >= 0 ? l.slice(0, ci).trim() : l).trim();
+    }).filter(function(l) {
+      return l.length > 0;
+    });
+    res.json({ total: asns.length, asns });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/asn/blocklist", async (req, res) => {
+  try {
+    var asn = String(req.body.asn || "").trim().toUpperCase();
+    var comment = String(req.body.comment || "").replace(/[\n\r]/g, "").slice(0, 200);
+    if (!asn) return res.status(400).json({ error: "asn required" });
+    if (!/^AS\d+$/.test(asn)) return res.status(400).json({ error: "Formato ASN non valido (es: AS15169)" });
+    var raw = "";
+    try {
+      raw = await (0, import_promises.readFile)(ASN_BLOCKLIST_FILE, "utf-8");
+    } catch {
+    }
+    var exists = raw.split("\n").some(function(l) {
+      var t = l.trim();
+      if (!t || t.startsWith("#")) return false;
+      var ci = t.indexOf("#");
+      return (ci >= 0 ? t.slice(0, ci).trim() : t).trim() === asn;
+    });
+    if (exists) return res.status(409).json({ error: asn + " gia presente nella blocklist" });
+    var line = comment ? asn + "  # " + comment + "\n" : asn + "\n";
+    try {
+      await (0, import_promises.appendFile)(ASN_BLOCKLIST_FILE, line, "utf-8");
+    } catch (err) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        var u = ASN_AGENT_USER;
+        return res.status(403).json({ error: "Permessi insufficienti su " + ASN_BLOCKLIST_FILE + " \u2014 esegui: chown root:" + u + " " + ASN_BLOCKLIST_FILE + " && chmod 664 " + ASN_BLOCKLIST_FILE });
+      }
+      throw err;
+    }
+    spawnAsnUpdate();
+    res.json({ ok: true, asn });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.delete("/api/asn/blocklist", async (req, res) => {
+  try {
+    var asn = String(req.body && req.body.asn || "").trim().toUpperCase();
+    if (!asn) return res.status(400).json({ error: "asn required" });
+    if (!/^AS\d+$/.test(asn)) return res.status(400).json({ error: "Formato ASN non valido" });
+    var raw = "";
+    try {
+      raw = await (0, import_promises.readFile)(ASN_BLOCKLIST_FILE, "utf-8");
+    } catch {
+    }
+    var filtered = raw.split("\n").filter(function(l) {
+      var t = l.trim();
+      if (!t || t.startsWith("#")) return true;
+      var ci = t.indexOf("#");
+      return (ci >= 0 ? t.slice(0, ci).trim() : t).trim() !== asn;
+    }).join("\n");
+    try {
+      await (0, import_promises.writeFile)(ASN_BLOCKLIST_FILE, filtered, "utf-8");
+    } catch (err) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        var u = ASN_AGENT_USER;
+        return res.status(403).json({ error: "Permessi insufficienti su " + ASN_BLOCKLIST_FILE + " \u2014 esegui: chown root:" + u + " " + ASN_BLOCKLIST_FILE + " && chmod 664 " + ASN_BLOCKLIST_FILE });
+      }
+      throw err;
+    }
+    spawnAsnUpdate();
+    res.json({ ok: true, asn });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.get("/api/asn/stats", async (_req, res) => {
   try {
     if (asnStatsCache && Date.now() - asnStatsCache.ts < ASN_CACHE_TTL) {
@@ -23232,22 +23327,25 @@ app.get("/api/asn/status", async (_req, res) => {
   }
 });
 app.get("/api/asn/whitelist", async (_req, res) => {
+  var raw = "";
   try {
-    const { stdout } = await runCmd("cat /etc/asn-whitelist-nets.txt 2>/dev/null || echo ''");
-    const lines = stdout.split("\n").map((line) => {
-      const t = line.trim();
-      if (!t || t.startsWith("#")) return null;
-      const commentIdx = t.indexOf("#");
-      const value = commentIdx >= 0 ? t.slice(0, commentIdx).trim() : t;
-      const comment = commentIdx >= 0 ? t.slice(commentIdx + 1).trim() : "";
-      if (!value) return null;
-      const type = /^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(value) || /^[0-9a-f:]+\/\d+$/i.test(value) ? "cidr" : "domain";
-      return { value, comment, type };
-    }).filter(Boolean);
-    res.json(lines);
+    raw = await (0, import_promises.readFile)(ASN_WHITELIST_FILE, "utf-8");
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (err.code !== "ENOENT") {
+      console.error("[asn/whitelist] readFile " + ASN_WHITELIST_FILE + ":", err.message);
+    }
   }
+  var entries = raw.split("\n").map(function(line) {
+    var t = line.trim();
+    if (!t || t.startsWith("#")) return null;
+    var ci = t.indexOf("#");
+    var value = (ci >= 0 ? t.slice(0, ci).trim() : t).trim();
+    var comment = ci >= 0 ? t.slice(ci + 1).trim() : "";
+    if (!value) return null;
+    var type = value.startsWith("domain:") ? "domain" : "cidr";
+    return { value, comment, type };
+  }).filter(Boolean);
+  res.json({ entries });
 });
 app.post("/api/asn/whitelist", async (req, res) => {
   const { value, comment } = req.body;
@@ -23255,23 +23353,46 @@ app.post("/api/asn/whitelist", async (req, res) => {
   if (!/^[\w.\-:/]+$/.test(value.trim())) return res.status(400).json({ error: "Valore non valido" });
   const safe = value.trim();
   const line = comment ? `${safe} # ${String(comment).replace(/[\n\r]/g, "").slice(0, 200)}` : safe;
-  const result = await runCmd(`echo ${JSON.stringify(line)} >> /etc/asn-whitelist-nets.txt`);
-  res.json({ success: result.ok, error: result.ok ? void 0 : result.stderr });
+  try {
+    await (0, import_promises.appendFile)(ASN_WHITELIST_FILE, line + "\n", "utf-8");
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === "EACCES" || err.code === "EPERM") {
+      var u = agentUser;
+      return res.status(403).json({ error: "Permessi insufficienti su " + ASN_WHITELIST_FILE + " \u2014 esegui: chown root:" + u + " " + ASN_WHITELIST_FILE + " && chmod 664 " + ASN_WHITELIST_FILE });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 app.delete("/api/asn/whitelist", async (req, res) => {
   const { value } = req.body;
   if (!value || typeof value !== "string") return res.status(400).json({ error: "value required" });
   if (!/^[\w.\-:/]+$/.test(value.trim())) return res.status(400).json({ error: "Valore non valido" });
-  const escaped = value.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\//g, "\\/");
-  const result = await runCmd(`sed -i '/^${escaped}[[:space:]#]/d' /etc/asn-whitelist-nets.txt`);
-  res.json({ success: result.ok, error: result.ok ? void 0 : result.stderr });
+  try {
+    var raw = await (0, import_promises.readFile)(ASN_WHITELIST_FILE, "utf-8");
+    var safe = value.trim();
+    var filtered = raw.split("\n").filter(function(l) {
+      var t = l.trim();
+      if (!t || t.startsWith("#")) return true;
+      var ci = t.indexOf("#");
+      return (ci >= 0 ? t.slice(0, ci).trim() : t).trim() !== safe;
+    }).join("\n");
+    await (0, import_promises.writeFile)(ASN_WHITELIST_FILE, filtered, "utf-8");
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === "EACCES" || err.code === "EPERM") {
+      var u = agentUser;
+      return res.status(403).json({ error: "Permessi insufficienti su " + ASN_WHITELIST_FILE + " \u2014 esegui: chown root:" + u + " " + ASN_WHITELIST_FILE + " && chmod 664 " + ASN_WHITELIST_FILE });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 app.post("/api/asn/update-lists", async (_req, res) => {
-  const result = await runCmd("bash /usr/local/bin/update-lists.sh 2>&1", 6e4);
+  const result = await runCmd("sudo bash /usr/local/bin/update-lists.sh 2>&1", 6e4);
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
 app.post("/api/asn/update-set", async (_req, res) => {
-  const result = await runCmd("bash /usr/local/bin/update-asn-block.sh 2>&1", 12e4);
+  const result = await runCmd("sudo bash " + ASN_UPDATE_SCRIPT + " 2>&1", 12e4);
   asnStatsCache = null;
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
@@ -23282,7 +23403,7 @@ app.post("/api/asn/test-ip", async (req, res) => {
   res.json({ blocked: result.ok });
 });
 app.get("/api/asn/log", async (_req, res) => {
-  const { stdout } = await runCmd("tail -50 /var/log/update-asn-block.log 2>/dev/null || echo ''");
+  const { stdout } = await runCmd("tail -100 /var/log/update-asn-block.log 2>/dev/null || echo ''");
   res.json({ lines: stdout.split("\n").filter(Boolean) });
 });
 app.post("/api/agent/update", import_express.default.raw({ type: "*/*", limit: "10mb" }), async (req, res) => {
@@ -23290,16 +23411,16 @@ app.post("/api/agent/update", import_express.default.raw({ type: "*/*", limit: "
   if (!Buffer.isBuffer(bundle) || bundle.length < 1e3) {
     return res.status(400).json({ error: "Bundle non valido o troppo piccolo" });
   }
-  var dest = process.argv[1];
+  var dir = import_path.default.dirname(import_path.default.resolve(process.argv[1]));
+  var dest = import_path.default.join(dir, "agent-bundle.js");
+  var startSh = import_path.default.join(dir, "start.sh");
   try {
     await (0, import_promises.writeFile)(dest, bundle);
+    var startContent = "#!/bin/bash\nset -a\nsource " + dir + "/.env\nset +a\nexec node " + dest + "\n";
+    await (0, import_promises.writeFile)(startSh, startContent);
     res.json({ ok: true, version: AGENT_VERSION, message: "Bundle aggiornato, riavvio in corso..." });
     setTimeout(function() {
-      var child = (0, import_child_process.spawn)("sudo", ["systemctl", "restart", "proxy-guardian-agent"], {
-        detached: true,
-        stdio: "ignore"
-      });
-      child.unref();
+      process.exit(1);
     }, 500);
   } catch (err) {
     var e = err;
