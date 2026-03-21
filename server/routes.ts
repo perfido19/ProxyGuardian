@@ -5,7 +5,7 @@ import { execSync } from "child_process";
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
-import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate } from "./vps-manager";
+import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import session from "express-session";
@@ -152,7 +152,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     const vps = getVpsById(req.params.id);
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
-    try { res.json(await agentPost(vps, proxyPath, req.body)); }
+    const timeout = SLOW_PATHS.includes(proxyPath) ? SLOW_REQUEST_TIMEOUT : undefined;
+    try { res.json(await agentPost(vps, proxyPath, req.body, timeout)); }
     catch (e: any) { res.status(502).json({ error: e.message }); }
   });
 

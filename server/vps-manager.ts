@@ -93,11 +93,14 @@ export function deleteVps(id: string): void {
 }
 
 const REQUEST_TIMEOUT = 10000;
+export const SLOW_REQUEST_TIMEOUT = 120000;
 
-async function agentFetch(vps: VpsConfig, path: string, options: RequestInit = {}): Promise<Response> {
+export const SLOW_PATHS = ["/api/asn/update-lists", "/api/asn/update-set"];
+
+async function agentFetch(vps: VpsConfig, path: string, options: RequestInit = {}, timeout = REQUEST_TIMEOUT): Promise<Response> {
   const url = `http://${vps.host}:${vps.port}${path}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  const timer = setTimeout(() => controller.abort(), timeout);
   try {
     return await fetch(url, {
       ...options, signal: controller.signal,
@@ -112,8 +115,8 @@ export async function agentGet(vps: VpsConfig, path: string): Promise<any> {
   return res.json();
 }
 
-export async function agentPost(vps: VpsConfig, path: string, body: any): Promise<any> {
-  const res = await agentFetch(vps, path, { method: "POST", body: JSON.stringify(body) });
+export async function agentPost(vps: VpsConfig, path: string, body: any, timeout = REQUEST_TIMEOUT): Promise<any> {
+  const res = await agentFetch(vps, path, { method: "POST", body: JSON.stringify(body) }, timeout);
   if (!res.ok) {
     const text = await res.text();
     let msg = text;
