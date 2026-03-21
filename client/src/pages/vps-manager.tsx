@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { copyToClipboard } from "@/lib/clipboard";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useVpsList, useVpsHealth, useCreateVps, useUpdateVps, useDeleteVps, type VpsConfig } from "@/hooks/use-vps";
@@ -277,18 +278,7 @@ export default function VpsManager() {
               <code className="flex-1 bg-muted px-3 py-2 rounded font-mono text-xs break-all">{INSTALL_CMD}</code>
               <Button size="sm" variant="outline" className="shrink-0"
                 onClick={() => {
-                  if (navigator.clipboard && window.isSecureContext) {
-                    navigator.clipboard.writeText(INSTALL_CMD);
-                  } else {
-                    const ta = document.createElement("textarea");
-                    ta.value = INSTALL_CMD;
-                    ta.style.position = "fixed";
-                    ta.style.opacity = "0";
-                    document.body.appendChild(ta);
-                    ta.focus();
-                    ta.select();
-                    try { document.execCommand("copy"); } finally { document.body.removeChild(ta); }
-                  }
+                  copyToClipboard(INSTALL_CMD);
                   setCopied(true);
                   setTimeout(() => setCopied(false), 2000);
                 }}>
