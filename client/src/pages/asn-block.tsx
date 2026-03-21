@@ -203,7 +203,7 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
             <p style={{ fontSize: 12 }} className="text-muted-foreground uppercase tracking-wide mb-1">Ultimo aggiornamento</p>
             <p style={{ fontSize: 14 }} className="font-mono text-foreground leading-snug">
               {statusLoading ? "…" : status?.lastUpdate
-                ? new Date(status.lastUpdate).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })
+                ? (() => { const d = new Date(status.lastUpdate); return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; })()
                 : "—"}
             </p>
           </CardContent>
