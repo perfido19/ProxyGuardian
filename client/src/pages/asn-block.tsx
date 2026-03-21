@@ -201,8 +201,10 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
         <Card>
           <CardContent className="pt-4">
             <p style={{ fontSize: 12 }} className="text-muted-foreground uppercase tracking-wide mb-1">Ultimo aggiornamento</p>
-            <p style={{ fontSize: 14 }} className="font-mono text-foreground leading-snug break-all">
-              {statusLoading ? "…" : (status?.lastUpdate || "—")}
+            <p style={{ fontSize: 14 }} className="font-mono text-foreground leading-snug">
+              {statusLoading ? "…" : status?.lastUpdate
+                ? new Date(status.lastUpdate).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })
+                : "—"}
             </p>
           </CardContent>
         </Card>
