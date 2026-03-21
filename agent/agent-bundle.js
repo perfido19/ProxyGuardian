@@ -23320,7 +23320,8 @@ app.get("/api/asn/status", async (_req, res) => {
       ipsetRestore: ipsetRestore.stdout.trim(),
       whitelistWatcher: whitelistWatcher.stdout.trim(),
       totalPrefixes: parseInt(prefixes.stdout.trim()) || 0,
-      lastUpdate: lastLog.stdout.trim()
+      lastUpdate: lastLog.stdout.trim(),
+      installed: (0, import_fs.existsSync)("/usr/local/bin/update-lists.sh") && (0, import_fs.existsSync)(ASN_UPDATE_SCRIPT)
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -23388,10 +23389,16 @@ app.delete("/api/asn/whitelist", async (req, res) => {
   }
 });
 app.post("/api/asn/update-lists", async (_req, res) => {
+  if (!(0, import_fs.existsSync)("/usr/local/bin/update-lists.sh")) {
+    return res.status(404).json({ success: false, error: "Script update-lists.sh non trovato. AsnBlock non \xE8 installato su questo VPS." });
+  }
   const result = await runCmd("sudo bash /usr/local/bin/update-lists.sh 2>&1", 6e4);
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
 app.post("/api/asn/update-set", async (_req, res) => {
+  if (!(0, import_fs.existsSync)(ASN_UPDATE_SCRIPT)) {
+    return res.status(404).json({ success: false, error: "Script update-asn-block.sh non trovato. AsnBlock non \xE8 installato su questo VPS." });
+  }
   const result = await runCmd("sudo bash " + ASN_UPDATE_SCRIPT + " 2>&1", 12e4);
   asnStatsCache = null;
   res.json({ success: result.ok, output: result.stdout || result.stderr });
