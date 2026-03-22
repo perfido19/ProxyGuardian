@@ -9,6 +9,7 @@ import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth,
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import session from "express-session";
+import { startUpgradeJob, subscribeToJob, getJobSnapshot, getJobLogs } from "./fleet-upgrade";
 
 // Percorsi proxy che un operator può modificare (POST)
 const OPERATOR_WRITE_PATHS = [
@@ -405,6 +406,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch {}
       res.json({ memory: { totalMb: Math.round(memTotal / 1024 / 1024), usedPct: memUsedPct }, disk, load, cpuCount: cpus().length });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Fleet Upgrade ────────────────────────────────────────────────────────────
+
+  // Avvia un job di upgrade su VPS selezionati
+  app.post("/api/fleet/upgrade/start", requireAuth, requireAdmin, async (req, res) => {
+    const { vpsIds } = req.body;
+    if (!vpsIds) return res.status(400).json({ error: "vpsIds richiesto" });
+    try {
+      const jobId = await startUpgradeJob(vpsIds);
+      res.json({ jobId });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // SSE stream per un job in corso
+  app.get("/api/fleet/upgrade/:jobId/events", requireAuth, (req, res) => {
+    const ok = subscribeToJob(req.params.jobId, res);
+    if (!ok) res.status(404).json({ error: "Job non trovato" });
+  });
+
+  // Snapshot dello stato corrente (per polling/refresh)
+  app.get("/api/fleet/upgrade/:jobId/status", requireAuth, (req, res) => {
+    const job = getJobSnapshot(req.params.jobId);
+    if (!job) return res.status(404).json({ error: "Job non trovato" });
+    res.json(job);
+  });
+
+  // Log completo di un VPS (per download)
+  app.get("/api/fleet/upgrade/:jobId/logs/:vpsId", requireAuth, (req, res) => {
+    const logs = getJobLogs(req.params.jobId, req.params.vpsId);
+    if (!logs) return res.status(404).json({ error: "Log non trovati" });
+    res.json({ logs });
   });
 
   return createServer(app);
