@@ -1,4 +1,4 @@
-import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Users, Network, Search, ShieldCheck, Globe } from "lucide-react";
+import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Users, Network, Search, ShieldCheck, Globe, Rocket } from "lucide-react";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter } from "@/components/ui/sidebar";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -63,6 +63,21 @@ export function AppSidebar() {
                     <Link href="/utenti">
                       <Users className="w-4 h-4" />
                       <span>Utenti</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {user?.role === "admin" && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === "/fleet-upgrade"}
+                    data-testid="link-fleet-upgrade"
+                    className="font-heading text-sm tracking-wide"
+                  >
+                    <Link href="/fleet-upgrade">
+                      <Rocket className="w-4 h-4" />
+                      <span>Fleet Upgrade</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
