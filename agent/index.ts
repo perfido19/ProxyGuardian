@@ -10,7 +10,7 @@ const execAsync = promisify(exec);
 const app = express();
 app.use(express.json());
 
-const AGENT_VERSION = "1.3.0";
+const AGENT_VERSION = "1.3.1";
 
 const AGENT_API_KEY = process.env.AGENT_API_KEY || "";
 const PORT = parseInt(process.env.AGENT_PORT || "3001", 10);

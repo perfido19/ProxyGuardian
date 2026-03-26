@@ -24484,7 +24484,7 @@ var import_path = __toESM(require("path"), 1);
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
 var app = (0, import_express.default)();
 app.use(import_express.default.json());
-var AGENT_VERSION = "1.3.0";
+var AGENT_VERSION = "1.3.1";
 var AGENT_API_KEY = process.env.AGENT_API_KEY || "";
 var PORT = parseInt(process.env.AGENT_PORT || "3001", 10);
 var BIND = process.env.AGENT_BIND || "0.0.0.0";
