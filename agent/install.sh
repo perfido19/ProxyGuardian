@@ -103,6 +103,14 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/netbird update
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /etc/systemd/system/netbird.service.d
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird.service.d/restart-nginx.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/bin/netbird-ipset-cleanup.sh
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird-cleanup.service
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod +x /usr/local/bin/netbird-ipset-cleanup.sh
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl enable netbird-cleanup.service
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl disable netbird-cleanup.service
 SUDOEOF
 chmod 440 /etc/sudoers.d/proxy-guardian-agent
 ok "Sudoers configurati"

@@ -24484,7 +24484,7 @@ var import_path = __toESM(require("path"), 1);
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
 var app = (0, import_express.default)();
 app.use(import_express.default.json());
-var AGENT_VERSION = "1.2.1";
+var AGENT_VERSION = "1.3.0";
 var AGENT_API_KEY = process.env.AGENT_API_KEY || "";
 var PORT = parseInt(process.env.AGENT_PORT || "3001", 10);
 var BIND = process.env.AGENT_BIND || "0.0.0.0";
@@ -24969,6 +24969,90 @@ app.get("/api/netbird/status", async (_req, res) => {
     res.json({ running, connected, ip, peers });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+var NETBIRD_RESTART_NGINX_CONF = "[Service]\nExecStartPost=/bin/bash -c 'sleep 3 && systemctl restart nginx'\n";
+var NETBIRD_IPSET_CLEANUP_SH = [
+  "#!/bin/bash",
+  "declare -A CHAIN_TABLE=(",
+  "    [NETBIRD-ACL-INPUT]=filter",
+  "    [NETBIRD-RT-FWD-IN]=filter",
+  "    [NETBIRD-RT-FWD-OUT]=filter",
+  "    [NETBIRD-RT-NAT]=nat",
+  "    [NETBIRD-RT-RDR]=nat",
+  "    [NETBIRD-RT-PRE]=mangle",
+  "    [NETBIRD-RT-MSSCLAMP]=mangle",
+  ")",
+  'for chain in "${!CHAIN_TABLE[@]}"; do',
+  '    table="${CHAIN_TABLE[$chain]}"',
+  '    iptables -t "$table" -S | grep "$chain" | grep "^-A" | while read -r rule; do',
+  '        iptables -t "$table" ${rule/-A/-D} 2>/dev/null',
+  "    done",
+  '    iptables -t "$table" -F "$chain" 2>/dev/null',
+  '    iptables -t "$table" -X "$chain" 2>/dev/null',
+  "done",
+  "for ipset in $(ipset list -n 2>/dev/null | grep -i netbird); do",
+  '    ipset flush "$ipset" 2>/dev/null',
+  '    ipset destroy "$ipset" 2>/dev/null',
+  "done",
+  ""
+].join("\n");
+var NETBIRD_CLEANUP_SERVICE = [
+  "[Unit]",
+  "Description=Cleanup orphaned NetBird ipsets before start",
+  "Before=netbird.service",
+  "DefaultDependencies=no",
+  "After=network-pre.target",
+  "",
+  "[Service]",
+  "Type=oneshot",
+  "ExecStart=/usr/local/bin/netbird-ipset-cleanup.sh",
+  "RemainAfterExit=yes",
+  "",
+  "[Install]",
+  "WantedBy=multi-user.target",
+  ""
+].join("\n");
+app.get("/api/netbird/cleanup-status", async (_req, res) => {
+  try {
+    const dropinInstalled = (0, import_fs.existsSync)("/etc/systemd/system/netbird.service.d/restart-nginx.conf");
+    const scriptInstalled = (0, import_fs.existsSync)("/usr/local/bin/netbird-ipset-cleanup.sh");
+    const serviceInstalled = (0, import_fs.existsSync)("/etc/systemd/system/netbird-cleanup.service");
+    const enabledResult = await runCmd("systemctl is-enabled netbird-cleanup.service 2>/dev/null || echo disabled");
+    const serviceEnabled = enabledResult.stdout.trim() === "enabled";
+    res.json({
+      dropinInstalled,
+      scriptInstalled,
+      serviceInstalled,
+      serviceEnabled,
+      ready: dropinInstalled && scriptInstalled && serviceInstalled && serviceEnabled
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/netbird/setup-cleanup", async (_req, res) => {
+  const steps = [];
+  function addStep(label, result) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? void 0 : result.stderr });
+  }
+  try {
+    await (0, import_promises.writeFile)("/tmp/pg-netbird-restart-nginx.conf", NETBIRD_RESTART_NGINX_CONF, "utf-8");
+    await (0, import_promises.writeFile)("/tmp/pg-netbird-ipset-cleanup.sh", NETBIRD_IPSET_CLEANUP_SH, "utf-8");
+    await (0, import_promises.writeFile)("/tmp/pg-netbird-cleanup.service", NETBIRD_CLEANUP_SERVICE, "utf-8");
+    addStep("mkdir netbird.service.d", await runCmd("sudo mkdir -p /etc/systemd/system/netbird.service.d"));
+    addStep("deploy restart-nginx.conf", await runCmd("cat /tmp/pg-netbird-restart-nginx.conf | sudo tee /etc/systemd/system/netbird.service.d/restart-nginx.conf > /dev/null"));
+    addStep("deploy netbird-ipset-cleanup.sh", await runCmd("cat /tmp/pg-netbird-ipset-cleanup.sh | sudo tee /usr/local/bin/netbird-ipset-cleanup.sh > /dev/null"));
+    addStep("chmod +x netbird-ipset-cleanup.sh", await runCmd("sudo chmod +x /usr/local/bin/netbird-ipset-cleanup.sh"));
+    addStep("deploy netbird-cleanup.service", await runCmd("cat /tmp/pg-netbird-cleanup.service | sudo tee /etc/systemd/system/netbird-cleanup.service > /dev/null"));
+    addStep("systemctl daemon-reload", await runCmd("sudo systemctl daemon-reload"));
+    addStep("systemctl enable netbird-cleanup.service", await runCmd("sudo systemctl enable netbird-cleanup.service"));
+    const allOk = steps.every(function(s) {
+      return s.ok;
+    });
+    res.json({ ok: allOk, steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message, steps });
   }
 });
 app.get("/api/grep", async (req, res) => {
