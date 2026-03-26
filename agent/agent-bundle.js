@@ -25397,6 +25397,73 @@ app.get("/api/asn/log", async (_req, res) => {
   const { stdout } = await runCmd("tail -100 /var/log/update-asn-block.log 2>/dev/null || echo ''");
   res.json({ lines: stdout.split("\n").filter(Boolean) });
 });
+var SUDOERS_PATH = "/etc/sudoers.d/proxy-guardian-agent";
+var SUDOERS_CONTENT = [
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl status *",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start fail2ban",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop fail2ban",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart fail2ban",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start mariadb",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop mariadb",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart mariadb",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/ipset *",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start netbird",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop netbird",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart netbird",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /etc/systemd/system/netbird.service.d",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird.service.d/restart-nginx.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/bin/netbird-ipset-cleanup.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird-cleanup.service",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod +x /usr/local/bin/netbird-ipset-cleanup.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable netbird-cleanup.service",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable netbird-cleanup.service",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/sudoers.d/proxy-guardian-agent",
+  ""
+].join("\n");
+app.get("/api/system/sudoers-status", async (_req, res) => {
+  try {
+    var content = "";
+    try {
+      content = await (0, import_promises.readFile)(SUDOERS_PATH, "utf-8");
+    } catch {
+    }
+    res.json({
+      exists: content.length > 0,
+      hasNetbirdCleanupEntries: content.includes("tee /etc/systemd/system/netbird-cleanup.service"),
+      canSelfUpdate: content.includes("tee /etc/sudoers.d/proxy-guardian-agent")
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/system/update-sudoers", async (_req, res) => {
+  try {
+    await (0, import_promises.writeFile)("/tmp/pg-sudoers-update", SUDOERS_CONTENT, "utf-8");
+    const result = await runCmd("cat /tmp/pg-sudoers-update | sudo tee " + SUDOERS_PATH + " > /dev/null");
+    if (!result.ok) {
+      return res.status(403).json({ ok: false, error: result.stderr });
+    }
+    await runCmd("chmod 440 " + SUDOERS_PATH);
+    res.json({ ok: true, message: "Sudoers aggiornati" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.post("/api/agent/update", import_express.default.raw({ type: "*/*", limit: "10mb" }), async (req, res) => {
   var bundle = req.body;
   if (!Buffer.isBuffer(bundle) || bundle.length < 1e3) {
