@@ -120,6 +120,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "?", vpsName: "?", version: null, online: false }));
   });
 
+  // Agent update bulk (deve stare prima di /:id per evitare che "bulk" venga catturato come id)
+  app.post("/api/vps/bulk/agent/update", requireAuth, requireAdmin, async (_req, res) => {
+    try { res.json(await bulkAgentUpdate("all")); }
+    catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   // Agent update singolo VPS
   app.post("/api/vps/:id/agent/update", requireAuth, requireAdmin, async (req, res) => {
     const vps = getVpsById(req.params.id);
@@ -128,12 +134,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const bundle = Buffer.from(readFileSync(join(process.cwd(), "agent", "agent-bundle.js")));
       res.json(await agentUpdate(vps, bundle));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // Agent update bulk
-  app.post("/api/vps/bulk/agent/update", requireAuth, requireAdmin, async (_req, res) => {
-    try { res.json(await bulkAgentUpdate("all")); }
-    catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   // Proxy singolo VPS
