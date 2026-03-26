@@ -344,6 +344,27 @@ export default function VpsDetail() {
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
+  const { data: cleanupStatus, refetch: refetchCleanupStatus } = useQuery<{
+    dropinInstalled: boolean; scriptInstalled: boolean; serviceInstalled: boolean; serviceEnabled: boolean; ready: boolean;
+  }>({
+    queryKey: [`vps-${id}-netbird-cleanup-status`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/netbird/cleanup-status")); return r.json(); },
+    enabled: !!vps,
+  });
+
+  const setupCleanupMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", proxy("/api/netbird/setup-cleanup"), {});
+      return r.json();
+    },
+    onSuccess: (data) => {
+      refetchCleanupStatus();
+      if (data.ok) toast({ title: "Cleanup setup completato" });
+      else toast({ title: "Setup completato con errori", description: data.steps?.find((s: any) => !s.ok)?.error, variant: "destructive" });
+    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
   if (!vpsList) return <LoadingState message="Caricamento..." />;
   if (!vps) {
     return (
@@ -1081,6 +1102,41 @@ export default function VpsDetail() {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="text-base">IPSet Cleanup</CardTitle>
+                  <CardDescription>Pulizia chain iptables e ipset orfani di NetBird</CardDescription>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-2 text-xs text-muted-foreground">
+                    {[
+                      { label: "drop-in", ok: cleanupStatus?.dropinInstalled },
+                      { label: "script", ok: cleanupStatus?.scriptInstalled },
+                      { label: "service", ok: cleanupStatus?.serviceInstalled },
+                      { label: "enabled", ok: cleanupStatus?.serviceEnabled },
+                    ].map(({ label, ok }) => (
+                      <span key={label} className="flex items-center gap-1">
+                        {ok ? <CheckCircle className="w-3 h-3 text-green-500" /> : <XCircle className="w-3 h-3 text-destructive" />}
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant={cleanupStatus?.ready ? "outline" : "default"}
+                    onClick={() => setupCleanupMutation.mutate()}
+                    disabled={setupCleanupMutation.isPending}
+                  >
+                    {setupCleanupMutation.isPending ? <RefreshCw className="w-4 h-4 mr-1 animate-spin" /> : <Shield className="w-4 h-4 mr-1" />}
+                    {cleanupStatus?.ready ? "Re-deploy" : "Setup Cleanup"}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+          </Card>
 
           <Card>
             <CardHeader>
