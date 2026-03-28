@@ -9,3 +9,8 @@ agent/agent-bundle.js
 agent/package-lock.json
 agent/node_modules
 .env
+.agents/
+.claude/
+.replit
+CLAUDE.md
+mnt/user-data/outputs/*/CLAUDE.md
