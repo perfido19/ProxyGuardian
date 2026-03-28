@@ -23220,6 +23220,12 @@ app.post("/api/nginx/reload", async (_req, res) => {
   const result = await runCmd("sudo systemctl reload nginx");
   res.json({ ok: result.ok, error: result.stderr || void 0 });
 });
+app.get("/api/nginx/version", async (_req, res) => {
+  const result = await runCmd("nginx -v 2>&1");
+  const output = (result.stdout || result.stderr || "").trim();
+  const match = output.match(/nginx\/(\S+)/);
+  res.json({ version: match ? match[1] : null, raw: output });
+});
 app.get("/api/system", async (_req, res) => {
   const [uptime, memory, disk, load] = await Promise.all([
     runCmd("uptime -p"),

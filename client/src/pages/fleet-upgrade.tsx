@@ -17,7 +17,10 @@ import {
   Rocket,
   RotateCcw,
   Download,
+  RefreshCw,
 } from "lucide-react";
+
+const TARGET_VERSION = "1.26.2";
 
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
 
@@ -147,8 +150,25 @@ function VpsLogCard({ vps }: { vps: VpsState }) {
 
 // ─── Pagina principale ────────────────────────────────────────────────────────
 
+interface NginxVersionInfo {
+  vpsId: string;
+  vpsName: string;
+  version: string | null;
+  error: string | null;
+}
+
 export default function FleetUpgrade() {
   const { data: vpsList = [] } = useQuery<SafeVps[]>({ queryKey: ["/api/vps"] });
+  const { data: nginxVersions = [], isFetching: fetchingVersions, refetch: refetchVersions } = useQuery<NginxVersionInfo[]>({
+    queryKey: ["/api/fleet/nginx/versions"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/fleet/nginx/versions");
+      return res.json();
+    },
+    staleTime: 30000,
+  });
+
+  const versionMap = new Map(nginxVersions.map(v => [v.vpsId, v.version]));
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pageState, setPageState] = useState<PageState>("idle");
@@ -317,36 +337,55 @@ export default function FleetUpgrade() {
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-heading">Seleziona VPS da aggiornare</CardTitle>
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors">
-                <Checkbox
-                  checked={allSelected}
-                  onCheckedChange={toggleAll}
-                  className="h-3.5 w-3.5"
-                />
-                Tutti ({enabledVps.length})
-              </label>
+              <div>
+                <CardTitle className="text-sm font-heading">Seleziona VPS da aggiornare</CardTitle>
+                <p className="text-xs text-muted-foreground mt-0.5">Target: nginx <span className="font-mono text-primary">{TARGET_VERSION}</span></p>
+              </div>
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => refetchVersions()} disabled={fetchingVersions} title="Aggiorna versioni">
+                  <RefreshCw className={`w-3.5 h-3.5 ${fetchingVersions ? "animate-spin" : ""}`} />
+                </Button>
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors">
+                  <Checkbox checked={allSelected} onCheckedChange={toggleAll} className="h-3.5 w-3.5" />
+                  Tutti ({enabledVps.length})
+                </label>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-1.5">
             {enabledVps.length === 0 && (
               <p className="text-sm text-muted-foreground">Nessun VPS abilitato.</p>
             )}
-            {enabledVps.map((vps) => (
-              <label
-                key={vps.id}
-                className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-muted/40 cursor-pointer transition-colors"
-              >
-                <Checkbox
-                  checked={selectedIds.has(vps.id)}
-                  onCheckedChange={() => toggleVps(vps.id)}
-                  className="h-3.5 w-3.5"
-                />
-                <span className="text-sm font-medium flex-1">{vps.name}</span>
-                <span className="text-xs text-muted-foreground font-mono">{vps.host}</span>
-                <div className={`w-1.5 h-1.5 rounded-full ${vps.lastStatus === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`} />
-              </label>
-            ))}
+            {enabledVps.map((vps) => {
+              const version = versionMap.get(vps.id);
+              const isUpToDate = version === TARGET_VERSION;
+              return (
+                <label
+                  key={vps.id}
+                  className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-muted/40 cursor-pointer transition-colors"
+                >
+                  <Checkbox
+                    checked={selectedIds.has(vps.id)}
+                    onCheckedChange={() => toggleVps(vps.id)}
+                    className="h-3.5 w-3.5"
+                  />
+                  <span className="text-sm font-medium flex-1">{vps.name}</span>
+                  <span className="text-xs text-muted-foreground font-mono">{vps.host}</span>
+                  {fetchingVersions && !version ? (
+                    <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                  ) : version ? (
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] h-4 px-1.5 font-mono ${isUpToDate ? "text-green-600 border-green-500/40 bg-green-500/10" : "text-orange-500 border-orange-500/40 bg-orange-500/10"}`}
+                    >
+                      {isUpToDate && <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" />}
+                      {version}
+                    </Badge>
+                  ) : null}
+                  <div className={`w-1.5 h-1.5 rounded-full ${vps.lastStatus === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`} />
+                </label>
+              );
+            })}
           </CardContent>
         </Card>
       )}

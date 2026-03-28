@@ -535,6 +535,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(results);
   });
 
+  // ─── Fleet Nginx Versions ─────────────────────────────────────────────────────
+
+  app.get("/api/fleet/nginx/versions", requireAuth, async (_req, res) => {
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        const data = await agentGet(vps, "/api/nginx/version");
+        return { vpsId: vps.id, vpsName: vps.name, version: data.version || null, error: null };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, version: null, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
   // ─── Fleet SSH Key ────────────────────────────────────────────────────────────
 
   app.get("/api/fleet/ssh-key", requireAuth, requireAdmin, (_req, res) => {

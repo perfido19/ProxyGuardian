@@ -757,6 +757,13 @@ app.post("/api/nginx/reload", async (_req, res) => {
   res.json({ ok: result.ok, error: result.stderr || undefined });
 });
 
+app.get("/api/nginx/version", async (_req, res) => {
+  const result = await runCmd("nginx -v 2>&1");
+  const output = (result.stdout || result.stderr || "").trim();
+  const match = output.match(/nginx\/(\S+)/);
+  res.json({ version: match ? match[1] : null, raw: output });
+});
+
 // ─── System info ──────────────────────────────────────────────────────────────
 
 app.get("/api/system", async (_req, res) => {
