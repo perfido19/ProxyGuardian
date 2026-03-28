@@ -49,6 +49,14 @@ info "IP:     ${NETBIRD_IP:-$PUBLIC_IP}"
 info "Porta:  $AGENT_PORT"
 echo ""
 
+# ── Flush ipset blocked_asn ──────────────────────────────────────────────────
+if command -v ipset &>/dev/null && ipset list blocked_asn &>/dev/null 2>&1; then
+  ipset flush blocked_asn
+  ok "ipset blocked_asn svuotata"
+else
+  info "ipset blocked_asn non presente — verrà creata al primo uso"
+fi
+
 # ── Node.js 20+ ──────────────────────────────────────────────────────────────
 if command -v node &>/dev/null; then
   NODE_MAJOR=$(node -v | cut -dv -f2 | cut -d. -f1)
@@ -133,14 +141,6 @@ if [ -f /etc/nginx/nginx.conf ]; then
   chown root:"$AGENT_USER" /etc/nginx/nginx.conf
   chmod 664 /etc/nginx/nginx.conf
   ok "Permessi nginx.conf impostati per $AGENT_USER"
-fi
-
-# ── Pulisci ipset blocked_asn ─────────────────────────────────────────────────
-if ipset list blocked_asn &>/dev/null; then
-  ipset flush blocked_asn
-  ok "ipset blocked_asn svuotata"
-else
-  info "ipset blocked_asn non esistente (verrà creata al primo uso)"
 fi
 
 # ── ModSecurity audit log ────────────────────────────────────────────────────
