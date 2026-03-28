@@ -469,7 +469,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/fleet/nginx/status", requireAuth, async (_req, res) => {
-    const vpsList = getAllVps().filter(v => v.enabled);
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
     const results = await Promise.all(vpsList.map(async (vps) => {
       try {
         const data = await agentGet(vps, "/api/config/nginx.conf");
@@ -492,7 +492,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) {
       return res.status(500).json({ error: "Template nginx non trovato sul server" });
     }
-    const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled);
+    const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
     const results = await Promise.all(vpsList.map(async (vps) => {
       try {
         await agentPost(vps, "/api/system/setup-nginx-dirs", {});
