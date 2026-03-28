@@ -135,6 +135,14 @@ if [ -f /etc/nginx/nginx.conf ]; then
   ok "Permessi nginx.conf impostati per $AGENT_USER"
 fi
 
+# ── Pulisci ipset blocked_asn ─────────────────────────────────────────────────
+if ipset list blocked_asn &>/dev/null; then
+  ipset flush blocked_asn
+  ok "ipset blocked_asn svuotata"
+else
+  info "ipset blocked_asn non esistente (verrà creata al primo uso)"
+fi
+
 # ── ModSecurity audit log ────────────────────────────────────────────────────
 NGINX_USER=$(grep -oP '^user\s+\K\S+(?=;)' /etc/nginx/nginx.conf 2>/dev/null || echo "www-data")
 mkdir -p /opt/log
