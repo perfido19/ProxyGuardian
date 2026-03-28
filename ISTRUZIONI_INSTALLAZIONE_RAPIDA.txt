@@ -190,7 +190,7 @@ Per documentazione completa, vedi INSTALL.md nella cartella del progetto.
 
 File importanti:
 - INSTALL.md           → Guida installazione completa
-- replit.md           → Documentazione architettura
+- README.md           → Documentazione architettura
 - design_guidelines.md → Linee guida design frontend
 
 ===============================================================================

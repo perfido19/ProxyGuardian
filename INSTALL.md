@@ -521,4 +521,4 @@ La dashboard è ora installata e funzionante! Puoi:
 - ✅ Visualizzare log in tempo reale
 - ✅ Editare configurazioni nginx e fail2ban
 
-Per supporto o domande, consulta la documentazione in `replit.md`.
+Per supporto o domande, consulta la documentazione in `README.md`.
