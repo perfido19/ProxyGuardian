@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 interface NginxCheck {
-  streamCache50g: boolean;
+  streamCacheValid: boolean;
   modsecurityActive: boolean;
   reuseport: boolean;
   upstreamKeepalive: boolean;
@@ -28,11 +28,12 @@ interface VpsNginxStatus {
   vpsName: string;
   optimized: boolean;
   checks: NginxCheck;
+  cacheSize?: string;
   error: string | null;
 }
 
 const CHECK_LABELS: Record<keyof NginxCheck, { label: string; icon: React.ReactNode }> = {
-  streamCache50g:     { label: "Cache streaming 50g",   icon: <HardDrive className="w-3.5 h-3.5" /> },
+  streamCacheValid:   { label: "Cache streaming",       icon: <HardDrive className="w-3.5 h-3.5" /> },
   modsecurityActive:  { label: "ModSecurity attivo",    icon: <ShieldCheck className="w-3.5 h-3.5" /> },
   reuseport:          { label: "reuseport",             icon: <Zap className="w-3.5 h-3.5" /> },
   upstreamKeepalive:  { label: "Upstream keepalive",    icon: <Network className="w-3.5 h-3.5" /> },
@@ -243,7 +244,7 @@ export default function FleetConfig() {
                 </TableHead>
                 <TableHead>VPS</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Cache 50g</TableHead>
+                <TableHead>Cache</TableHead>
                 <TableHead>ModSec</TableHead>
                 <TableHead>Reuseport</TableHead>
                 <TableHead>Keepalive</TableHead>
@@ -283,12 +284,17 @@ export default function FleetConfig() {
                         </Badge>
                       )}
                     </TableCell>
-                    {(["streamCache50g", "modsecurityActive", "reuseport", "upstreamKeepalive", "openFileCache", "largeProxyBuffers"] as (keyof NginxCheck)[]).map(key => (
+                    {(["streamCacheValid", "modsecurityActive", "reuseport", "upstreamKeepalive", "openFileCache", "largeProxyBuffers"] as (keyof NginxCheck)[]).map(key => (
                       <TableCell key={key}>
                         {vps.error ? (
                           <span className="text-muted-foreground">—</span>
                         ) : vps.checks[key] ? (
-                          <CheckCircle2 className="w-4 h-4 text-green-500" />
+                          <div className="flex items-center gap-1">
+                            <CheckCircle2 className="w-4 h-4 text-green-500" />
+                            {key === "streamCacheValid" && vps.cacheSize && (
+                              <span className="text-[10px] text-muted-foreground font-mono">{vps.cacheSize}</span>
+                            )}
+                          </div>
                         ) : (
                           <XCircle className="w-4 h-4 text-red-400" />
                         )}

@@ -447,16 +447,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const NGINX_TEMPLATE_PATH = join(process.cwd(), "server", "nginx-template.conf");
 
-  function isNginxOptimized(config: string): { optimized: boolean; checks: Record<string, boolean> } {
+  function isNginxOptimized(config: string): { optimized: boolean; checks: Record<string, boolean>; cacheSize?: string } {
+    // Cache: verifica che sia presente un valore valido (non placeholder) >= 5g
+    const cacheMatch = config.match(/stream_cache:200m max_size=(\d+[gGmM])/);
+    const cacheSize = cacheMatch ? cacheMatch[1] : null;
+    const cacheValid = cacheSize && !cacheSize.includes("__") && (
+      cacheSize.toLowerCase().endsWith("g") ? parseInt(cacheSize) >= 5 :
+      cacheSize.toLowerCase().endsWith("m") ? parseInt(cacheSize) >= 5120 : false
+    );
     const checks: Record<string, boolean> = {
-      streamCache50g: config.includes("stream_cache:200m max_size=50g"),
+      streamCacheValid: !!cacheValid,
       modsecurityActive: /^\s*modsecurity\s+on;/m.test(config),
       reuseport: config.includes("listen 8880 reuseport"),
       upstreamKeepalive: config.includes("keepalive 32"),
       openFileCache: config.includes("open_file_cache max=10000"),
       largeProxyBuffers: config.includes("proxy_buffers 16 512k"),
     };
-    return { optimized: Object.values(checks).every(Boolean), checks };
+    return { optimized: Object.values(checks).every(Boolean), checks, cacheSize: cacheSize || undefined };
   }
 
   app.get("/api/fleet/nginx/template", requireAuth, (_req, res) => {
@@ -474,14 +481,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const data = await agentGet(vps, "/api/config/nginx.conf");
         const config: string = data.content || "";
-        const { optimized, checks } = isNginxOptimized(config);
-        return { vpsId: vps.id, vpsName: vps.name, optimized, checks, error: null };
+        const { optimized, checks, cacheSize } = isNginxOptimized(config);
+        return { vpsId: vps.id, vpsName: vps.name, optimized, checks, cacheSize, error: null };
       } catch (e: any) {
-        return { vpsId: vps.id, vpsName: vps.name, optimized: false, checks: {}, error: e.message };
+        return { vpsId: vps.id, vpsName: vps.name, optimized: false, checks: {}, cacheSize: null, error: e.message };
       }
     }));
     res.json(results);
   });
+
+  function calculateCacheSize(diskFree: string): string {
+    // diskFree es: "115G", "500M", "2T"
+    const match = diskFree.match(/^(\d+(?:\.\d+)?)([gGmMtT])$/);
+    if (!match) return "5g"; // fallback
+    const value = parseFloat(match[1]);
+    const unit = match[2].toLowerCase();
+    let freeGB: number;
+    if (unit === "t") freeGB = value * 1024;
+    else if (unit === "g") freeGB = value;
+    else if (unit === "m") freeGB = value / 1024;
+    else freeGB = 5;
+    // 60% dello spazio libero, min 5g, max 100g
+    const cacheGB = Math.min(100, Math.max(5, Math.floor(freeGB * 0.6)));
+    return cacheGB + "g";
+  }
 
   app.post("/api/fleet/nginx/apply", requireAuth, requireAdmin, async (req, res) => {
     const { vpsIds } = req.body;
@@ -495,12 +518,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
     const results = await Promise.all(vpsList.map(async (vps) => {
       try {
+        // Ottieni info disco dal VPS
+        const sysInfo = await agentGet(vps, "/api/system");
+        const diskFree = sysInfo.disk?.free || "5g";
+        const cacheSize = calculateCacheSize(diskFree);
+        // Sostituisci placeholder nel template
+        const config = template.replace(/__STREAM_CACHE_SIZE__/g, cacheSize);
         await agentPost(vps, "/api/system/setup-nginx-dirs", {});
-        await agentPost(vps, "/api/config/nginx.conf", { content: template });
+        await agentPost(vps, "/api/config/nginx.conf", { content: config });
         const reload = await agentPost(vps, "/api/nginx/reload", {});
-        return { vpsId: vps.id, vpsName: vps.name, ok: reload.ok !== false, error: reload.error };
+        return { vpsId: vps.id, vpsName: vps.name, ok: reload.ok !== false, cacheSize, error: reload.error };
       } catch (e: any) {
-        return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message };
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, cacheSize: null, error: e.message };
       }
     }));
     res.json(results);
