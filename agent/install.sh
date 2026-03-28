@@ -111,6 +111,14 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod +x /usr/local/bin/netbird-ipset-clean
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl enable netbird-cleanup.service
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl disable netbird-cleanup.service
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/sudoers.d/proxy-guardian-agent
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /root/.ssh
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee -a /root/.ssh/authorized_keys
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod 700 /root/.ssh
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod 600 /root/.ssh/authorized_keys
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /var/cache/nginx/epg /var/cache/nginx/streaming
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/epg
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/streaming
 SUDOEOF
 chmod 440 /etc/sudoers.d/proxy-guardian-agent
 ok "Sudoers configurati"
@@ -120,6 +128,12 @@ usermod -aG adm "$AGENT_USER" 2>/dev/null || true
 chmod 644 /var/log/nginx/*.log 2>/dev/null || true
 chmod 644 /var/log/fail2ban.log 2>/dev/null || true
 [ -d /etc/nginx ] && chmod o+r /etc/nginx/*.conf /etc/nginx/conf.d/*.conf 2>/dev/null || true
+# Permetti a pgagent di scrivere nginx.conf (richiesto da Fleet Config)
+if [ -f /etc/nginx/nginx.conf ]; then
+  chown root:"$AGENT_USER" /etc/nginx/nginx.conf
+  chmod 664 /etc/nginx/nginx.conf
+  ok "Permessi nginx.conf impostati per $AGENT_USER"
+fi
 
 # ── ModSecurity audit log ────────────────────────────────────────────────────
 NGINX_USER=$(grep -oP '^user\s+\K\S+(?=;)' /etc/nginx/nginx.conf 2>/dev/null || echo "www-data")
