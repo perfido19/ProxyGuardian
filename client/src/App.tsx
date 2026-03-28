@@ -18,6 +18,7 @@ import VpsManager from "@/pages/vps-manager";
 import AsnBlock from "@/pages/asn-block";
 import VpsDetail from "@/pages/vps-detail";
 import FleetUpgrade from "@/pages/fleet-upgrade";
+import FleetConfig from "@/pages/fleet-config";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -71,6 +72,7 @@ function Router() {
       <Route path="/vps/:id" component={VpsDetail} />
       {user?.role === "admin" && <Route path="/utenti" component={UserManagement} />}
       {user?.role === "admin" && <Route path="/fleet-upgrade" component={FleetUpgrade} />}
+      {user?.role === "admin" && <Route path="/fleet-config" component={FleetConfig} />}
       <Route component={NotFound} />
     </Switch>
   );

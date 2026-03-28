@@ -8,6 +8,7 @@ import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAll
 import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
+import { homedir } from "os";
 import session from "express-session";
 import { startUpgradeJob, subscribeToJob, getJobSnapshot, getJobLogs } from "./fleet-upgrade";
 
@@ -440,6 +441,97 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const logs = getJobLogs(req.params.jobId, req.params.vpsId);
     if (!logs) return res.status(404).json({ error: "Log non trovati" });
     res.json({ logs });
+  });
+
+  // ─── Fleet Nginx Config ───────────────────────────────────────────────────────
+
+  const NGINX_TEMPLATE_PATH = join(process.cwd(), "server", "nginx-template.conf");
+
+  function isNginxOptimized(config: string): { optimized: boolean; checks: Record<string, boolean> } {
+    const checks: Record<string, boolean> = {
+      streamCache50g: config.includes("stream_cache:200m max_size=50g"),
+      modsecurityActive: /^\s*modsecurity\s+on;/m.test(config),
+      reuseport: config.includes("listen 8880 reuseport"),
+      upstreamKeepalive: config.includes("keepalive 32"),
+      openFileCache: config.includes("open_file_cache max=10000"),
+      largeProxyBuffers: config.includes("proxy_buffers 16 512k"),
+    };
+    return { optimized: Object.values(checks).every(Boolean), checks };
+  }
+
+  app.get("/api/fleet/nginx/template", requireAuth, (_req, res) => {
+    try {
+      const content = readFileSync(NGINX_TEMPLATE_PATH, "utf-8");
+      res.json({ content });
+    } catch (e: any) {
+      res.status(500).json({ error: "Template non trovato: " + e.message });
+    }
+  });
+
+  app.get("/api/fleet/nginx/status", requireAuth, async (_req, res) => {
+    const vpsList = getAllVps().filter(v => v.enabled);
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        const data = await agentGet(vps, "/api/config/nginx.conf");
+        const config: string = data.content || "";
+        const { optimized, checks } = isNginxOptimized(config);
+        return { vpsId: vps.id, vpsName: vps.name, optimized, checks, error: null };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, optimized: false, checks: {}, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
+  app.post("/api/fleet/nginx/apply", requireAuth, requireAdmin, async (req, res) => {
+    const { vpsIds } = req.body;
+    if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds[] richiesto" });
+    let template: string;
+    try {
+      template = readFileSync(NGINX_TEMPLATE_PATH, "utf-8");
+    } catch (e: any) {
+      return res.status(500).json({ error: "Template nginx non trovato sul server" });
+    }
+    const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled);
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        await agentPost(vps, "/api/system/setup-nginx-dirs", {});
+        await agentPost(vps, "/api/config/nginx.conf", { content: template });
+        const reload = await agentPost(vps, "/api/nginx/reload", {});
+        return { vpsId: vps.id, vpsName: vps.name, ok: reload.ok !== false, error: reload.error };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
+  // ─── Fleet SSH Key ────────────────────────────────────────────────────────────
+
+  app.get("/api/fleet/ssh-key", requireAuth, requireAdmin, (_req, res) => {
+    try {
+      const key = readFileSync(join(homedir(), ".ssh", "id_ed25519.pub"), "utf-8").trim();
+      res.json({ key });
+    } catch {
+      res.status(404).json({ error: "Chiave SSH non trovata su questo server" });
+    }
+  });
+
+  app.post("/api/fleet/ssh-key/install/:vpsId", requireAuth, requireAdmin, async (req, res) => {
+    const vps = getVpsById(req.params.vpsId);
+    if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    let key: string;
+    try {
+      key = readFileSync(join(homedir(), ".ssh", "id_ed25519.pub"), "utf-8").trim();
+    } catch {
+      return res.status(500).json({ error: "Chiave SSH non trovata sul server dashboard" });
+    }
+    try {
+      const data = await agentPost(vps, "/api/system/install-ssh-key", { publicKey: key });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   return createServer(app);

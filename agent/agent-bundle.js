@@ -25433,6 +25433,13 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable netbird-cleanup.service",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable netbird-cleanup.service",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/sudoers.d/proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /root/.ssh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee -a /root/.ssh/authorized_keys",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 700 /root/.ssh",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 600 /root/.ssh/authorized_keys",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /var/cache/nginx/epg /var/cache/nginx/streaming",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/epg",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/streaming",
   ""
 ].join("\n");
 app.get("/api/system/sudoers-status", async (_req, res) => {
@@ -25462,6 +25469,53 @@ app.post("/api/system/update-sudoers", async (_req, res) => {
     res.json({ ok: true, message: "Sudoers aggiornati" });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/system/install-ssh-key", async (req, res) => {
+  var publicKey = req.body && req.body.publicKey ? String(req.body.publicKey).trim() : "";
+  if (!publicKey || !/^ssh-/.test(publicKey)) {
+    return res.status(400).json({ error: "publicKey non valida o mancante" });
+  }
+  publicKey = publicKey.replace(/[\r\n]+/g, "");
+  var steps = [];
+  function addStep(label, result) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? void 0 : result.stderr });
+  }
+  try {
+    addStep("mkdir -p /root/.ssh", await runCmd("sudo mkdir -p /root/.ssh"));
+    addStep("chmod 700 /root/.ssh", await runCmd("sudo chmod 700 /root/.ssh"));
+    var checkResult = await runCmd("sudo cat /root/.ssh/authorized_keys 2>/dev/null || echo ''");
+    var existing = checkResult.stdout || "";
+    if (existing.indexOf(publicKey) !== -1) {
+      return res.json({ ok: true, steps: [], message: "Chiave gia presente" });
+    }
+    await (0, import_promises.writeFile)("/tmp/pg-sshkey", publicKey + "\n", "utf-8");
+    addStep("append authorized_keys", await runCmd("cat /tmp/pg-sshkey | sudo tee -a /root/.ssh/authorized_keys > /dev/null"));
+    addStep("chmod 600 authorized_keys", await runCmd("sudo chmod 600 /root/.ssh/authorized_keys"));
+    var allOk = steps.every(function(s) {
+      return s.ok;
+    });
+    res.json({ ok: allOk, steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message, steps });
+  }
+});
+app.post("/api/system/setup-nginx-dirs", async (_req, res) => {
+  var steps = [];
+  function addStep(label, result) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? void 0 : result.stderr });
+  }
+  try {
+    addStep("mkdir epg", await runCmd("sudo mkdir -p /var/cache/nginx/epg"));
+    addStep("mkdir streaming", await runCmd("sudo mkdir -p /var/cache/nginx/streaming"));
+    addStep("chown epg", await runCmd("sudo chown -R www-data /var/cache/nginx/epg"));
+    addStep("chown streaming", await runCmd("sudo chown -R www-data /var/cache/nginx/streaming"));
+    var allOk = steps.every(function(s) {
+      return s.ok;
+    });
+    res.json({ ok: allOk, steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message, steps });
   }
 });
 app.post("/api/agent/update", import_express.default.raw({ type: "*/*", limit: "10mb" }), async (req, res) => {
