@@ -2,10 +2,10 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Download } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Download, X } from "lucide-react";
 import type { VpsState } from "@/contexts/upgrade-context";
 
-export function VpsLogCard({ vps }: { vps: VpsState }) {
+export function VpsLogCard({ vps, onRemove }: { vps: VpsState; onRemove?: (vpsId: string) => void }) {
   const [open, setOpen] = useState(vps.status === "running" || vps.status === "failed");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -62,6 +62,12 @@ export function VpsLogCard({ vps }: { vps: VpsState }) {
                 <Button variant="ghost" size="icon" className="h-6 w-6"
                   onClick={(e) => { e.stopPropagation(); downloadLog(); }} title="Scarica log">
                   <Download className="w-3 h-3" />
+                </Button>
+              )}
+              {(vps.status === "success" || vps.status === "failed") && onRemove && (
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                  onClick={(e) => { e.stopPropagation(); onRemove(vps.vpsId); }} title="Rimuovi dalla lista">
+                  <X className="w-3 h-3" />
                 </Button>
               )}
               {open ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}

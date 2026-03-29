@@ -21,6 +21,7 @@ interface UpgradeContextValue {
   error: string | null;
   startUpgrade: (vpsIds: string[]) => Promise<void>;
   reset: () => void;
+  removeVps: (vpsId: string) => void;
 }
 
 const UpgradeContext = createContext<UpgradeContextValue | null>(null);
@@ -146,6 +147,14 @@ export function UpgradeProvider({ children }: { children: ReactNode }) {
     }
   }, [connectSse]);
 
+  const removeVps = useCallback((vpsId: string) => {
+    setVpsStates(prev => {
+      const next = new Map(prev);
+      next.delete(vpsId);
+      return next;
+    });
+  }, []);
+
   const reset = useCallback(() => {
     esRef.current?.close();
     esRef.current = null;
@@ -156,7 +165,7 @@ export function UpgradeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <UpgradeContext.Provider value={{ pageState, jobId, vpsStates, error, startUpgrade, reset }}>
+    <UpgradeContext.Provider value={{ pageState, jobId, vpsStates, error, startUpgrade, reset, removeVps }}>
       {children}
     </UpgradeContext.Provider>
   );

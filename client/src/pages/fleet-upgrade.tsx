@@ -17,7 +17,7 @@ interface SafeVps { id: string; name: string; host: string; enabled: boolean; la
 interface NginxVersionInfo { vpsId: string; vpsName: string; version: string | null; error: string | null; }
 
 export default function FleetUpgrade() {
-  const { pageState, vpsStates, error, startUpgrade, reset } = useUpgrade();
+  const { pageState, vpsStates, error, startUpgrade, reset, removeVps } = useUpgrade();
 
   const { data: vpsList = [] } = useQuery<SafeVps[]>({ queryKey: ["/api/vps"] });
   const { data: nginxVersions = [], isFetching: fetchingVersions, refetch: refetchVersions } = useQuery<NginxVersionInfo[]>({
@@ -173,7 +173,7 @@ export default function FleetUpgrade() {
 
               <div className="space-y-2">
                 <h2 className="text-sm font-heading font-medium text-muted-foreground uppercase tracking-wider">Log per VPS</h2>
-                {vpsStateArray.map(vps => <VpsLogCard key={vps.vpsId} vps={vps} />)}
+                {vpsStateArray.map(vps => <VpsLogCard key={vps.vpsId} vps={vps} onRemove={removeVps} />)}
               </div>
             </>
           )}
