@@ -12,15 +12,15 @@ export function UpgradeFloatPanel() {
   const [minimized, setMinimized] = useState(false);
   const [closed, setClosed] = useState(false);
 
-  // Mostra solo su pagine diverse da fleet-upgrade, durante un upgrade
-  if (location === "/fleet-upgrade") return null;
-  if (pageState === "idle") return null;
-  if (closed) return null;
-
+  // useMemo DEVE stare prima dei return condizionali (Rules of Hooks)
   const vpsArray = useMemo(() => Array.from(vpsStates.values()).sort((a, b) => {
     const order = { running: 0, failed: 1, success: 2, pending: 3 } as const;
     return order[a.status] - order[b.status];
   }), [vpsStates]);
+
+  if (location === "/fleet-upgrade") return null;
+  if (pageState === "idle") return null;
+  if (closed) return null;
 
   const total = vpsArray.length;
   const done = vpsArray.filter(v => v.status === "success" || v.status === "failed").length;
