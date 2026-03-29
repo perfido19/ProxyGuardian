@@ -422,24 +422,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const allowed = getUserAllowedVps(req.session.userId!);
     const targets = getAllVps().filter(v => v.enabled && (allowed === undefined || allowed.includes(v.id)));
-    let completed = 0;
     const total = targets.length;
 
-    res.write(`event: total\ndata: ${JSON.stringify({ total })}\n\n`);
+    const safeWrite = (chunk: string) => { if (!res.writableEnded) res.write(chunk); };
 
+    safeWrite(`event: total\ndata: ${JSON.stringify({ total })}\n\n`);
+
+    if (total === 0) {
+      safeWrite(`event: done\ndata: {}\n\n`);
+      res.end();
+      return;
+    }
+
+    let completed = 0;
     await Promise.allSettled(targets.map(async (safe) => {
       const vps = getVpsById(safe.id);
-      if (!vps) return;
+      if (!vps) { completed++; return; }
       try {
         const data = await agentGet(vps, "/api/banned-ips", 5000);
-        res.write(`event: result\ndata: ${JSON.stringify({ vpsId: vps.id, vpsName: vps.name, success: true, data })}\n\n`);
+        safeWrite(`event: result\ndata: ${JSON.stringify({ vpsId: vps.id, vpsName: vps.name, success: true, data })}\n\n`);
       } catch (e: any) {
-        res.write(`event: result\ndata: ${JSON.stringify({ vpsId: vps.id, vpsName: vps.name, success: false, error: e.message })}\n\n`);
+        safeWrite(`event: result\ndata: ${JSON.stringify({ vpsId: vps.id, vpsName: vps.name, success: false, error: e.message })}\n\n`);
       }
       completed++;
       if (completed === total) {
-        res.write(`event: done\ndata: {}\n\n`);
-        res.end();
+        safeWrite(`event: done\ndata: {}\n\n`);
+        if (!res.writableEnded) res.end();
       }
     }));
   });
@@ -450,7 +458,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/fleet/upgrade/active", requireAuth, (_req, res) => {
     const active = getActiveJob();
     if (!active) return res.status(404).json({ error: "Nessun job attivo" });
-    res.json(active);
+    res.json({ jobId: active.id, status: active.status });
   });
 
   // Avvia un job di upgrade su VPS selezionati

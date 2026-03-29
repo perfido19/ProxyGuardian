@@ -107,7 +107,8 @@ export function UpgradeProvider({ children }: { children: ReactNode }) {
       try {
         const activeRes = await fetch("/api/fleet/upgrade/active");
         if (!activeRes.ok) return;
-        const { jobId: activeId } = await activeRes.json();
+        const { jobId: activeId, status: activeStatus } = await activeRes.json();
+        if (!activeId) return;
 
         const snapRes = await fetch(`/api/fleet/upgrade/${activeId}/status`);
         if (!snapRes.ok) return;
@@ -122,8 +123,9 @@ export function UpgradeProvider({ children }: { children: ReactNode }) {
         }
         setVpsStates(initStates);
         setJobId(activeId);
-        setPageState("running");
-        connectSse(activeId);
+        setPageState(activeStatus === "running" ? "running" : "done");
+        // Riconnetti SSE solo se il job è ancora in corso
+        if (activeStatus === "running") connectSse(activeId);
       } catch { /* nessun job attivo */ }
     })();
     return () => { esRef.current?.close(); };
