@@ -109,8 +109,8 @@ async function agentFetch(vps: VpsConfig, path: string, options: RequestInit = {
   } finally { clearTimeout(timer); }
 }
 
-export async function agentGet(vps: VpsConfig, path: string): Promise<any> {
-  const res = await agentFetch(vps, path);
+export async function agentGet(vps: VpsConfig, path: string, timeout?: number): Promise<any> {
+  const res = await agentFetch(vps, path, {}, timeout);
   if (!res.ok) throw new Error(`Agent ${vps.name}: ${res.status} ${res.statusText}`);
   return res.json();
 }

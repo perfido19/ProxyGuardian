@@ -409,6 +409,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Fleet Banned IPs streaming ───────────────────────────────────────────────
+
+  // Invia i risultati man mano che ogni VPS risponde (SSE) — timeout 5s per VPS
+  app.get("/api/fleet/banned-ips/stream", requireAuth, async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const allowed = getUserAllowedVps(req.session.userId!);
+    const targets = getAllVps().filter(v => v.enabled && (allowed === undefined || allowed.includes(v.id)));
+    let completed = 0;
+    const total = targets.length;
+
+    res.write(`event: total\ndata: ${JSON.stringify({ total })}\n\n`);
+
+    await Promise.allSettled(targets.map(async (safe) => {
+      const vps = getVpsById(safe.id);
+      if (!vps) return;
+      try {
+        const data = await agentGet(vps, "/api/banned-ips", 5000);
+        res.write(`event: result\ndata: ${JSON.stringify({ vpsId: vps.id, vpsName: vps.name, success: true, data })}\n\n`);
+      } catch (e: any) {
+        res.write(`event: result\ndata: ${JSON.stringify({ vpsId: vps.id, vpsName: vps.name, success: false, error: e.message })}\n\n`);
+      }
+      completed++;
+      if (completed === total) {
+        res.write(`event: done\ndata: {}\n\n`);
+        res.end();
+      }
+    }));
+  });
+
   // ─── Fleet Upgrade ────────────────────────────────────────────────────────────
 
   // Job attivo più recente (per riconnettersi dopo navigazione)

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useVpsList, useVpsHealth } from "@/hooks/use-vps";
 import { apiRequest } from "@/lib/queryClient";
@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { LoadingState } from "@/components/loading-state";
-import { Search, Shield, FileText, AlertTriangle } from "lucide-react";
+import { Search, Shield, FileText, AlertTriangle, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
@@ -34,25 +34,73 @@ function BannedIpsTab() {
   const { data: healthMap } = useVpsHealth();
   const onlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
 
-  const { data: results, isLoading, refetch } = useQuery<BulkResult[]>({
-    queryKey: ["search-banned-ips", selectedVps],
+  // Stato streaming
+  const [results, setResults] = useState<BulkResult[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loaded, setLoaded] = useState(0);
+  const [done, setDone] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
+
+  const startStream = useCallback(() => {
+    esRef.current?.close();
+    setResults([]);
+    setTotal(0);
+    setLoaded(0);
+    setDone(false);
+
+    const es = new EventSource("/api/fleet/banned-ips/stream");
+    esRef.current = es;
+
+    es.addEventListener("total", (e) => {
+      setTotal(JSON.parse(e.data).total);
+    });
+
+    es.addEventListener("result", (e) => {
+      const item: BulkResult = JSON.parse(e.data);
+      setResults(prev => [...prev, item]);
+      setLoaded(n => n + 1);
+    });
+
+    es.addEventListener("done", () => {
+      es.close();
+      esRef.current = null;
+      setDone(true);
+    });
+
+    es.onerror = () => {
+      es.close();
+      esRef.current = null;
+      setDone(true);
+    };
+  }, []);
+
+  // Avvia stream al mount; per VPS singolo usa query normale
+  useEffect(() => {
+    if (selectedVps === "all") {
+      startStream();
+    } else {
+      esRef.current?.close();
+    }
+    return () => { esRef.current?.close(); };
+  }, [selectedVps, startStream]);
+
+  const { data: singleResult, isLoading: singleLoading, refetch: refetchSingle } = useQuery<BulkResult[]>({
+    queryKey: ["search-banned-ips-single", selectedVps],
     queryFn: async () => {
-      if (selectedVps === "all") {
-        const r = await apiRequest("POST", "/api/vps/bulk/get", { vpsIds: "all", path: "/api/banned-ips" });
-        return r.json();
-      } else {
-        const r = await apiRequest("GET", `/api/vps/${selectedVps}/proxy/api/banned-ips`);
-        const data = await r.json();
-        const vps = vpsList?.find(v => v.id === selectedVps);
-        return [{ vpsId: selectedVps, vpsName: vps?.name ?? selectedVps, success: true, data }];
-      }
+      const r = await apiRequest("GET", `/api/vps/${selectedVps}/proxy/api/banned-ips`);
+      const data = await r.json();
+      const vps = vpsList?.find(v => v.id === selectedVps);
+      return [{ vpsId: selectedVps, vpsName: vps?.name ?? selectedVps, success: true, data }];
     },
-    refetchInterval: 60000,
+    enabled: selectedVps !== "all",
   });
 
-  // Flatten all banned IPs from all VPS
+  const activeResults = selectedVps === "all" ? results : (singleResult ?? []);
+  const isLoading = selectedVps === "all" ? (!done && loaded === 0) : singleLoading;
+
+  // Flatten banned IPs
   const allBanned: Array<{ vpsId: string; vpsName: string; ip: string; jail: string; banTime?: string }> = [];
-  (results || []).forEach(r => {
+  activeResults.forEach(r => {
     if (r.success && Array.isArray(r.data)) {
       r.data.forEach((b: BannedIp) => {
         allBanned.push({ vpsId: r.vpsId, vpsName: r.vpsName, ip: b.ip, jail: b.jail, banTime: b.banTime });
@@ -64,8 +112,7 @@ function BannedIpsTab() {
     ? allBanned.filter(b => b.ip.includes(search) || b.jail.toLowerCase().includes(search.toLowerCase()) || b.vpsName.toLowerCase().includes(search.toLowerCase()))
     : allBanned;
 
-  // Group by VPS for summary
-  const byVps = (results || []).reduce((acc, r) => {
+  const byVps = activeResults.reduce((acc, r) => {
     acc[r.vpsName] = r.success ? (Array.isArray(r.data) ? r.data.length : 0) : -1;
     return acc;
   }, {} as Record<string, number>);
@@ -75,7 +122,7 @@ function BannedIpsTab() {
     try {
       await apiRequest("POST", `/api/vps/${vpsId}/proxy/api/unban`, { ip, jail });
       toast({ title: `${ip} sbloccato` });
-      refetch();
+      if (selectedVps === "all") startStream(); else refetchSingle();
     } catch (e: any) {
       toast({ title: "Errore unban", description: e.message, variant: "destructive" });
     } finally {
@@ -83,15 +130,19 @@ function BannedIpsTab() {
     }
   };
 
-  if (isLoading) return <LoadingState message="Recupero IP bannati da tutti i VPS..." />;
-
-  const onlineCount = (results || []).filter(r => r.success).length;
+  const onlineCount = activeResults.filter(r => r.success).length;
+  const streamProgress = total > 0 ? Math.round((loaded / total) * 100) : 0;
 
   return (
     <div className="space-y-4 pt-4">
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex gap-2 text-xs text-muted-foreground">
-          <span>{onlineCount}/{(results || []).length} VPS risposto</span>
+          {selectedVps === "all" && !done && total > 0 && (
+            <span className="text-blue-400">{loaded}/{total} VPS caricati...</span>
+          )}
+          {(done || selectedVps !== "all") && (
+            <span>{onlineCount}/{activeResults.length} VPS risposto</span>
+          )}
           <span>·</span>
           <span className="font-semibold text-foreground">{allBanned.length} IP bannati totali</span>
         </div>
@@ -105,18 +156,29 @@ function BannedIpsTab() {
               {onlineVps.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" onClick={() => refetch()}>Aggiorna</Button>
+          <Button variant="outline" size="sm" onClick={() => selectedVps === "all" ? startStream() : refetchSingle()} disabled={isLoading}>
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
+          </Button>
         </div>
       </div>
 
+      {/* Barra di avanzamento streaming */}
+      {selectedVps === "all" && !done && total > 0 && (
+        <div className="w-full bg-muted rounded-full h-1.5">
+          <div className="bg-blue-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${streamProgress}%` }} />
+        </div>
+      )}
+
       {/* Summary per VPS */}
-      <div className="flex flex-wrap gap-2">
-        {Object.entries(byVps).map(([name, count]) => (
-          <Badge key={name} variant={count >= 0 ? "outline" : "destructive"} className="font-mono text-xs">
-            {name}: {count >= 0 ? count : "offline"}
-          </Badge>
-        ))}
-      </div>
+      {Object.keys(byVps).length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(byVps).map(([name, count]) => (
+            <Badge key={name} variant={count >= 0 ? "outline" : "destructive"} className="font-mono text-xs">
+              {name}: {count >= 0 ? count : "offline"}
+            </Badge>
+          ))}
+        </div>
+      )}
 
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -130,46 +192,50 @@ function BannedIpsTab() {
 
       {search && <p className="text-xs text-muted-foreground">{filtered.length} risultati</p>}
 
-      <Card className="border-card-border">
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>IP</TableHead>
-                  <TableHead>Jail</TableHead>
-                  <TableHead>VPS</TableHead>
-                  <TableHead className="text-right">Azioni</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.length === 0 ? (
+      {isLoading ? (
+        <LoadingState message="Connessione ai VPS..." />
+      ) : (
+        <Card className="border-card-border">
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
-                      {search ? "Nessun risultato" : "Nessun IP bannato"}
-                    </TableCell>
+                    <TableHead>IP</TableHead>
+                    <TableHead>Jail</TableHead>
+                    <TableHead>VPS</TableHead>
+                    <TableHead className="text-right">Azioni</TableHead>
                   </TableRow>
-                ) : filtered.map((b, i) => (
-                  <TableRow key={i}>
-                    <TableCell className="font-mono font-semibold text-red-400">{b.ip}</TableCell>
-                    <TableCell><Badge variant="outline" className="font-mono text-xs">{b.jail}</Badge></TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{b.vpsName}</TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm" variant="outline"
-                        disabled={unbanning === `${b.vpsId}-${b.ip}`}
-                        onClick={() => handleUnban(b.vpsId, b.ip, b.jail)}
-                      >
-                        {unbanning === `${b.vpsId}-${b.ip}` ? "..." : "Unban"}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+                </TableHeader>
+                <TableBody>
+                  {filtered.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                        {search ? "Nessun risultato" : allBanned.length === 0 && !done ? "Caricamento..." : "Nessun IP bannato"}
+                      </TableCell>
+                    </TableRow>
+                  ) : filtered.map((b, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="font-mono font-semibold text-red-400">{b.ip}</TableCell>
+                      <TableCell><Badge variant="outline" className="font-mono text-xs">{b.jail}</Badge></TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{b.vpsName}</TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm" variant="outline"
+                          disabled={unbanning === `${b.vpsId}-${b.ip}`}
+                          onClick={() => handleUnban(b.vpsId, b.ip, b.jail)}
+                        >
+                          {unbanning === `${b.vpsId}-${b.ip}` ? "..." : "Unban"}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
