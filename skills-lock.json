@@ -10,6 +10,11 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
+    },
+    "secure-linux-web-hosting": {
+      "source": "xixu-me/skills",
+      "sourceType": "github",
+      "computedHash": "88702e410c58301f5617a0e54188df30653cf87614abd620fa02ed5333594b49"
     }
   }
 }

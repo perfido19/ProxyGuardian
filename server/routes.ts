@@ -11,6 +11,7 @@ import { join } from "path";
 import { homedir } from "os";
 import session from "express-session";
 import { startUpgradeJob, subscribeToJob, getJobSnapshot, getJobLogs, getActiveJob } from "./fleet-upgrade";
+import { generateSshToken, attachSshWebSocket } from "./ssh-console";
 
 // Percorsi proxy che un operator può modificare (POST)
 const OPERATOR_WRITE_PATHS = [
@@ -619,5 +620,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  return createServer(app);
+  // ─── SSH Console ──────────────────────────────────────────────────────────────
+
+  // Genera token usa-e-getta (30s) per autenticare la WebSocket SSH
+  app.post("/api/admin/ssh/token", requireAuth, requireAdmin, (req, res) => {
+    const { vpsId } = req.body;
+    if (!vpsId) return res.status(400).json({ error: "vpsId richiesto" });
+    const vps = getVpsById(vpsId);
+    if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    const token = generateSshToken(vpsId, req.session.userId!);
+    res.json({ token });
+  });
+
+  const server = createServer(app);
+  attachSshWebSocket(server);
+  return server;
 }

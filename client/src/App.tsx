@@ -1,12 +1,14 @@
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ProtectedRoute } from "@/components/protected-route";
 import { useAuth } from "@/hooks/use-auth";
+import { UpgradeProvider, useUpgrade } from "@/contexts/upgrade-context";
+import { UpgradeFloatPanel } from "@/components/upgrade-float-panel";
 import Dashboard from "@/pages/dashboard";
 import Services from "@/pages/services";
 import Firewall from "@/pages/firewall";
@@ -19,6 +21,7 @@ import AsnBlock from "@/pages/asn-block";
 import VpsDetail from "@/pages/vps-detail";
 import FleetUpgrade from "@/pages/fleet-upgrade";
 import FleetConfig from "@/pages/fleet-config";
+import SshConsole from "@/pages/ssh-console";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,43 +30,21 @@ import { LogOut, User, Rocket, CheckCircle2, XCircle, Loader2 } from "lucide-rea
 
 const roleLabels = { admin: "Admin", operator: "Operator", viewer: "Viewer" } as const;
 
-// ─── Banner upgrade persistente ───────────────────────────────────────────────
+// ─── Banner upgrade (usa context invece di polling) ───────────────────────────
 
 function UpgradeBanner() {
   const [location] = useLocation();
+  const { pageState, vpsStates } = useUpgrade();
 
-  const { data: active } = useQuery<{ id: string; status: string }>({
-    queryKey: ["upgrade-active"],
-    queryFn: async () => {
-      const res = await fetch("/api/fleet/upgrade/active");
-      if (!res.ok) throw new Error("no active job");
-      return res.json();
-    },
-    refetchInterval: 4000,
-    retry: false,
-  });
+  if (pageState === "idle" || location === "/fleet-upgrade") return null;
 
-  const { data: snap } = useQuery<{
-    status: string; total: number; successCount: number; failCount: number;
-    vpsJobs: Array<{ vpsId: string; vpsName: string; status: string }>;
-  }>({
-    queryKey: ["upgrade-snap", active?.id],
-    queryFn: async () => {
-      const res = await fetch(`/api/fleet/upgrade/${active!.id}/status`);
-      if (!res.ok) throw new Error("no snap");
-      return res.json();
-    },
-    enabled: !!active?.id,
-    refetchInterval: 2000,
-  });
-
-  // Nascondi se già sulla pagina fleet-upgrade
-  if (!active || location === "/fleet-upgrade") return null;
-
-  const total = snap?.total ?? 0;
-  const done = (snap?.successCount ?? 0) + (snap?.failCount ?? 0);
+  const vpsArray = Array.from(vpsStates.values());
+  const total = vpsArray.length;
+  const done = vpsArray.filter(v => v.status === "success" || v.status === "failed").length;
+  const successCount = vpsArray.filter(v => v.status === "success").length;
+  const failCount = vpsArray.filter(v => v.status === "failed").length;
   const progress = total > 0 ? Math.round((done / total) * 100) : 0;
-  const isDone = snap?.status === "done";
+  const isDone = pageState === "done";
 
   const vpsStatusIcon = (status: string) => {
     if (status === "success") return <CheckCircle2 className="w-2.5 h-2.5 text-green-500" />;
@@ -85,18 +66,17 @@ function UpgradeBanner() {
             <span className="font-mono text-muted-foreground shrink-0">{done}/{total}</span>
           </>
         )}
-        {snap?.vpsJobs && snap.vpsJobs.length > 0 && (
+        {vpsArray.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
-            {snap.vpsJobs.map((vj) => (
+            {vpsArray.map(vj => (
               <span key={vj.vpsId} className="flex items-center gap-1 font-mono text-[10px] bg-black/20 rounded px-1.5 py-0.5">
-                {vpsStatusIcon(vj.status)}
-                {vj.vpsName}
+                {vpsStatusIcon(vj.status)}{vj.vpsName}
               </span>
             ))}
           </div>
         )}
         {!isDone && <Loader2 className="w-3 h-3 animate-spin text-blue-400 shrink-0 ml-auto" />}
-        {isDone && <span className="text-green-400 font-heading shrink-0 ml-auto">Completato</span>}
+        {isDone && <span className="text-green-400 font-heading shrink-0 ml-auto">Completato — <span className="text-green-500">{successCount}✓</span>{failCount > 0 && <span className="text-red-400 ml-1">{failCount}✗</span>}</span>}
       </div>
     </a>
   );
@@ -149,6 +129,7 @@ function Router() {
       {user?.role === "admin" && <Route path="/utenti" component={UserManagement} />}
       {user?.role === "admin" && <Route path="/fleet-upgrade" component={FleetUpgrade} />}
       {user?.role === "admin" && <Route path="/fleet-config" component={FleetConfig} />}
+      {user?.role === "admin" && <Route path="/ssh-console" component={SshConsole} />}
       <Route component={NotFound} />
     </Switch>
   );
@@ -167,6 +148,7 @@ function AppLayout() {
           </main>
         </div>
       </div>
+      <UpgradeFloatPanel />
     </SidebarProvider>
   );
 }
@@ -175,7 +157,9 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <ProtectedRoute><AppLayout /></ProtectedRoute>
+        <UpgradeProvider>
+          <ProtectedRoute><AppLayout /></ProtectedRoute>
+        </UpgradeProvider>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
