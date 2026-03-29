@@ -45,7 +45,7 @@ function UpgradeBanner() {
 
   const { data: snap } = useQuery<{
     status: string; total: number; successCount: number; failCount: number;
-    vpsJobs: Array<{ status: string }>;
+    vpsJobs: Array<{ vpsId: string; vpsName: string; status: string }>;
   }>({
     queryKey: ["upgrade-snap", active?.id],
     queryFn: async () => {
@@ -65,6 +65,13 @@ function UpgradeBanner() {
   const progress = total > 0 ? Math.round((done / total) * 100) : 0;
   const isDone = snap?.status === "done";
 
+  const vpsStatusIcon = (status: string) => {
+    if (status === "success") return <CheckCircle2 className="w-2.5 h-2.5 text-green-500" />;
+    if (status === "failed") return <XCircle className="w-2.5 h-2.5 text-red-500" />;
+    if (status === "running") return <Loader2 className="w-2.5 h-2.5 animate-spin text-blue-400" />;
+    return <div className="w-2.5 h-2.5 rounded-full bg-muted-foreground/30" />;
+  };
+
   return (
     <a href="/fleet-upgrade" className="block">
       <div className={`px-4 py-1.5 border-b flex items-center gap-3 text-xs cursor-pointer transition-colors ${isDone ? "bg-green-950/40 border-green-500/30 hover:bg-green-950/60" : "bg-blue-950/40 border-blue-500/30 hover:bg-blue-950/60"}`}>
@@ -72,24 +79,24 @@ function UpgradeBanner() {
         <span className="font-heading font-medium text-foreground/80 shrink-0">Fleet Upgrade</span>
         {total > 0 && (
           <>
-            <div className="flex-1 max-w-48">
+            <div className="flex-1 max-w-40">
               <Progress value={progress} className="h-1.5" />
             </div>
             <span className="font-mono text-muted-foreground shrink-0">{done}/{total}</span>
           </>
         )}
-        {snap && (
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="flex items-center gap-1 text-green-500">
-              <CheckCircle2 className="w-3 h-3" />{snap.successCount}
-            </span>
-            <span className="flex items-center gap-1 text-red-500">
-              <XCircle className="w-3 h-3" />{snap.failCount}
-            </span>
+        {snap?.vpsJobs && snap.vpsJobs.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {snap.vpsJobs.map((vj) => (
+              <span key={vj.vpsId} className="flex items-center gap-1 font-mono text-[10px] bg-black/20 rounded px-1.5 py-0.5">
+                {vpsStatusIcon(vj.status)}
+                {vj.vpsName}
+              </span>
+            ))}
           </div>
         )}
-        {!isDone && <Loader2 className="w-3 h-3 animate-spin text-blue-400 shrink-0" />}
-        {isDone && <span className="text-green-400 font-heading shrink-0">Completato</span>}
+        {!isDone && <Loader2 className="w-3 h-3 animate-spin text-blue-400 shrink-0 ml-auto" />}
+        {isDone && <span className="text-green-400 font-heading shrink-0 ml-auto">Completato</span>}
       </div>
     </a>
   );
