@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CheckCircle2, XCircle, Loader2, Rocket, RotateCcw, RefreshCw } from "lucide-react";
 
 const TARGET_VERSION = "1.26.2";
@@ -61,102 +62,123 @@ export default function FleetUpgrade() {
         <p className="text-sm text-muted-foreground mt-1">Nginx 1.26.2 + ModSecurity v3 + OWASP CRS v4</p>
       </div>
 
-      {pageState === "idle" && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-sm font-heading">Seleziona VPS da aggiornare</CardTitle>
-                <p className="text-xs text-muted-foreground mt-0.5">Target: nginx <span className="font-mono text-primary">{TARGET_VERSION}</span></p>
+      <Tabs defaultValue="upgrade">
+        <TabsList className="h-8">
+          <TabsTrigger value="upgrade" className="text-xs font-heading h-7 px-3">Upgrade</TabsTrigger>
+          <TabsTrigger value="avanzamento" className="text-xs font-heading h-7 px-3 gap-1.5">
+            Avanzamento
+            {pageState === "running" && <Loader2 className="w-3 h-3 animate-spin text-blue-400" />}
+            {pageState === "done" && totalVps > 0 && (
+              <span className={`text-[10px] font-mono ${failCount === 0 ? "text-green-500" : "text-yellow-500"}`}>
+                {successCount}/{totalVps}
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ── Tab Upgrade ── */}
+        <TabsContent value="upgrade" className="space-y-4 mt-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-heading">Seleziona VPS da aggiornare</CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">Target: nginx <span className="font-mono text-primary">{TARGET_VERSION}</span></p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => refetchVersions()} disabled={fetchingVersions} title="Aggiorna versioni">
+                    <RefreshCw className={`w-3.5 h-3.5 ${fetchingVersions ? "animate-spin" : ""}`} />
+                  </Button>
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors">
+                    <Checkbox checked={allSelected} onCheckedChange={toggleAll} className="h-3.5 w-3.5" />
+                    Tutti ({enabledVps.length})
+                  </label>
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => refetchVersions()} disabled={fetchingVersions} title="Aggiorna versioni">
-                  <RefreshCw className={`w-3.5 h-3.5 ${fetchingVersions ? "animate-spin" : ""}`} />
-                </Button>
-                <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors">
-                  <Checkbox checked={allSelected} onCheckedChange={toggleAll} className="h-3.5 w-3.5" />
-                  Tutti ({enabledVps.length})
-                </label>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-1.5">
-            {enabledVps.length === 0 && <p className="text-sm text-muted-foreground">Nessun VPS abilitato.</p>}
-            {enabledVps.map(vps => {
-              const version = versionMap.get(vps.id);
-              const isUpToDate = version === TARGET_VERSION;
-              return (
-                <label key={vps.id} className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-muted/40 cursor-pointer transition-colors">
-                  <Checkbox checked={selectedIds.has(vps.id)} onCheckedChange={() => toggleVps(vps.id)} className="h-3.5 w-3.5" />
-                  <span className="text-sm font-medium flex-1">{vps.name}</span>
-                  <span className="text-xs text-muted-foreground font-mono">{vps.host}</span>
-                  {fetchingVersions && !version ? (
-                    <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-                  ) : version ? (
-                    <Badge variant="outline" className={`text-[10px] h-4 px-1.5 font-mono ${isUpToDate ? "text-green-600 border-green-500/40 bg-green-500/10" : "text-orange-500 border-orange-500/40 bg-orange-500/10"}`}>
-                      {isUpToDate && <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" />}{version}
-                    </Badge>
-                  ) : null}
-                  <div className={`w-1.5 h-1.5 rounded-full ${vps.lastStatus === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`} />
-                </label>
-              );
-            })}
-          </CardContent>
-        </Card>
-      )}
+            </CardHeader>
+            <CardContent className="space-y-1.5">
+              {enabledVps.length === 0 && <p className="text-sm text-muted-foreground">Nessun VPS abilitato.</p>}
+              {enabledVps.map(vps => {
+                const version = versionMap.get(vps.id);
+                const isUpToDate = version === TARGET_VERSION;
+                return (
+                  <label key={vps.id} className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-muted/40 cursor-pointer transition-colors">
+                    <Checkbox checked={selectedIds.has(vps.id)} onCheckedChange={() => toggleVps(vps.id)} className="h-3.5 w-3.5" />
+                    <span className="text-sm font-medium flex-1">{vps.name}</span>
+                    <span className="text-xs text-muted-foreground font-mono">{vps.host}</span>
+                    {fetchingVersions && !version ? (
+                      <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                    ) : version ? (
+                      <Badge variant="outline" className={`text-[10px] h-4 px-1.5 font-mono ${isUpToDate ? "text-green-600 border-green-500/40 bg-green-500/10" : "text-orange-500 border-orange-500/40 bg-orange-500/10"}`}>
+                        {isUpToDate && <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" />}{version}
+                      </Badge>
+                    ) : null}
+                    <div className={`w-1.5 h-1.5 rounded-full ${vps.lastStatus === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`} />
+                  </label>
+                );
+              })}
+            </CardContent>
+          </Card>
 
-      {error && (
-        <div className="bg-red-950/30 border border-red-500/30 rounded-lg px-4 py-3 text-sm text-red-400 font-mono">{error}</div>
-      )}
+          {error && (
+            <div className="bg-red-950/30 border border-red-500/30 rounded-lg px-4 py-3 text-sm text-red-400 font-mono">{error}</div>
+          )}
 
-      <div className="flex items-center gap-3">
-        {pageState === "idle" && (
-          <Button onClick={() => startUpgrade([...selectedIds])} disabled={totalSelected === 0} className="gap-2">
-            <Rocket className="w-4 h-4" />Avvia Upgrade ({totalSelected} VPS)
-          </Button>
-        )}
-        {pageState === "done" && (
-          <Button variant="outline" onClick={reset} className="gap-2">
-            <RotateCcw className="w-4 h-4" />Nuovo upgrade
-          </Button>
-        )}
-        {pageState === "running" && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin" /><span>Upgrade in corso...</span>
-          </div>
-        )}
-      </div>
-
-      {(pageState === "running" || pageState === "done") && totalVps > 0 && (
-        <Card>
-          <CardContent className="pt-4 pb-4 space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-heading font-medium">Progresso globale</span>
-              <span className="font-mono text-muted-foreground">{doneCount}/{totalVps} VPS</span>
-            </div>
-            <Progress value={progress} className="h-2" />
-            <div className="flex gap-4 text-xs">
-              <span className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" />{successCount} successi</span>
-              <span className="flex items-center gap-1.5 text-red-500"><XCircle className="w-3 h-3" />{failCount} falliti</span>
-              {pageState === "running" && (
-                <span className="flex items-center gap-1.5 text-blue-500"><Loader2 className="w-3 h-3 animate-spin" />{totalVps - doneCount} in corso</span>
-              )}
-            </div>
-            {pageState === "done" && (
-              <div className={`text-sm font-heading font-medium ${failCount === 0 ? "text-green-600" : failCount === totalVps ? "text-red-500" : "text-yellow-600"}`}>
-                {failCount === 0 ? "Tutti i VPS aggiornati con successo." : failCount === totalVps ? "Upgrade fallito su tutti i VPS." : `${successCount}/${totalVps} VPS aggiornati. ${failCount} falliti.`}
+          <div className="flex items-center gap-3">
+            <Button onClick={() => startUpgrade([...selectedIds])} disabled={totalSelected === 0 || pageState === "running"} className="gap-2">
+              <Rocket className="w-4 h-4" />Avvia Upgrade ({totalSelected} VPS)
+            </Button>
+            {pageState !== "idle" && (
+              <Button variant="outline" onClick={reset} disabled={pageState === "running"} className="gap-2">
+                <RotateCcw className="w-4 h-4" />Reset
+              </Button>
+            )}
+            {pageState === "running" && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" /><span>Upgrade in corso — vedi tab Avanzamento</span>
               </div>
             )}
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        </TabsContent>
 
-      {vpsStateArray.length > 0 && (
-        <div className="space-y-2">
-          <h2 className="text-sm font-heading font-medium text-muted-foreground uppercase tracking-wider">Dettaglio per VPS</h2>
-          {vpsStateArray.map(vps => <VpsLogCard key={vps.vpsId} vps={vps} />)}
-        </div>
-      )}
+        {/* ── Tab Avanzamento ── */}
+        <TabsContent value="avanzamento" className="space-y-4 mt-4">
+          {totalVps === 0 ? (
+            <div className="text-sm text-muted-foreground py-8 text-center">
+              Nessun upgrade avviato. Seleziona i VPS dalla scheda Upgrade e premi Avvia.
+            </div>
+          ) : (
+            <>
+              <Card>
+                <CardContent className="pt-4 pb-4 space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-heading font-medium">Progresso globale</span>
+                    <span className="font-mono text-muted-foreground">{doneCount}/{totalVps} VPS</span>
+                  </div>
+                  <Progress value={progress} className="h-2" />
+                  <div className="flex gap-4 text-xs">
+                    <span className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" />{successCount} successi</span>
+                    <span className="flex items-center gap-1.5 text-red-500"><XCircle className="w-3 h-3" />{failCount} falliti</span>
+                    {pageState === "running" && (
+                      <span className="flex items-center gap-1.5 text-blue-500"><Loader2 className="w-3 h-3 animate-spin" />{totalVps - doneCount} in corso</span>
+                    )}
+                  </div>
+                  {pageState === "done" && (
+                    <div className={`text-sm font-heading font-medium ${failCount === 0 ? "text-green-600" : failCount === totalVps ? "text-red-500" : "text-yellow-600"}`}>
+                      {failCount === 0 ? "Tutti i VPS aggiornati con successo." : failCount === totalVps ? "Upgrade fallito su tutti i VPS." : `${successCount}/${totalVps} VPS aggiornati. ${failCount} falliti.`}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <div className="space-y-2">
+                <h2 className="text-sm font-heading font-medium text-muted-foreground uppercase tracking-wider">Log per VPS</h2>
+                {vpsStateArray.map(vps => <VpsLogCard key={vps.vpsId} vps={vps} />)}
+              </div>
+            </>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
