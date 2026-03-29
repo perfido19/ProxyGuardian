@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useVpsList, useVpsHealth } from "@/hooks/use-vps";
 import { apiRequest } from "@/lib/queryClient";
@@ -23,65 +23,97 @@ const LOG_TYPES = [
   { value: "system", label: "Syslog" },
 ];
 
-// ── Banned IPs tab ─────────────────────────────────────────────────────────────
+const PAGE_SIZE = 100;
 
 function BannedIpsTab() {
   const { toast } = useToast();
-  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState(""); // debounced
   const [selectedVps, setSelectedVps] = useState("all");
   const [unbanning, setUnbanning] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
   const { data: vpsList } = useVpsList();
   const { data: healthMap } = useVpsHealth();
   const onlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
 
-  // Stato streaming
+  // Debounce ricerca: aggiorna `search` solo dopo 300ms di inattività
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleSearchChange = (val: string) => {
+    setSearchInput(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { setSearch(val); setPage(0); }, 300);
+  };
+
+  // Stato streaming — buffer in ref, flush ogni 300ms per ridurre i re-render
   const [results, setResults] = useState<BulkResult[]>([]);
   const [total, setTotal] = useState(0);
   const [loaded, setLoaded] = useState(0);
   const [done, setDone] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+  const bufferRef = useRef<BulkResult[]>([]);
+  const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const startStream = useCallback(() => {
     esRef.current?.close();
+    if (flushTimerRef.current) clearInterval(flushTimerRef.current);
+    bufferRef.current = [];
     setResults([]);
     setTotal(0);
     setLoaded(0);
     setDone(false);
+    setPage(0);
 
     const es = new EventSource("/api/fleet/banned-ips/stream");
     esRef.current = es;
+
+    // Flush buffer → state ogni 300ms
+    flushTimerRef.current = setInterval(() => {
+      if (bufferRef.current.length === 0) return;
+      const batch = bufferRef.current.splice(0);
+      setResults(prev => [...prev, ...batch]);
+      setLoaded(n => n + batch.length);
+    }, 300);
 
     es.addEventListener("total", (e) => {
       setTotal(JSON.parse(e.data).total);
     });
 
     es.addEventListener("result", (e) => {
-      const item: BulkResult = JSON.parse(e.data);
-      setResults(prev => [...prev, item]);
-      setLoaded(n => n + 1);
+      bufferRef.current.push(JSON.parse(e.data));
     });
 
     es.addEventListener("done", () => {
+      // Flush finale
+      const remaining = bufferRef.current.splice(0);
+      if (remaining.length > 0) {
+        setResults(prev => [...prev, ...remaining]);
+        setLoaded(n => n + remaining.length);
+      }
+      if (flushTimerRef.current) clearInterval(flushTimerRef.current);
       es.close();
       esRef.current = null;
       setDone(true);
     });
 
     es.onerror = () => {
+      if (flushTimerRef.current) clearInterval(flushTimerRef.current);
       es.close();
       esRef.current = null;
       setDone(true);
     };
   }, []);
 
-  // Avvia stream al mount; per VPS singolo usa query normale
   useEffect(() => {
     if (selectedVps === "all") {
       startStream();
     } else {
       esRef.current?.close();
+      if (flushTimerRef.current) clearInterval(flushTimerRef.current);
     }
-    return () => { esRef.current?.close(); };
+    return () => {
+      esRef.current?.close();
+      if (flushTimerRef.current) clearInterval(flushTimerRef.current);
+    };
   }, [selectedVps, startStream]);
 
   const { data: singleResult, isLoading: singleLoading, refetch: refetchSingle } = useQuery<BulkResult[]>({
@@ -98,24 +130,37 @@ function BannedIpsTab() {
   const activeResults = selectedVps === "all" ? results : (singleResult ?? []);
   const isLoading = selectedVps === "all" ? (!done && loaded === 0) : singleLoading;
 
-  // Flatten banned IPs
-  const allBanned: Array<{ vpsId: string; vpsName: string; ip: string; jail: string; banTime?: string }> = [];
-  activeResults.forEach(r => {
-    if (r.success && Array.isArray(r.data)) {
-      r.data.forEach((b: BannedIp) => {
-        allBanned.push({ vpsId: r.vpsId, vpsName: r.vpsName, ip: b.ip, jail: b.jail, banTime: b.banTime });
-      });
+  // Memoizza flatten + filtro per evitare ricalcoli su ogni re-render
+  const allBanned = useMemo(() => {
+    const out: Array<{ vpsId: string; vpsName: string; ip: string; jail: string; banTime?: string }> = [];
+    for (const r of activeResults) {
+      if (r.success && Array.isArray(r.data)) {
+        for (const b of r.data as BannedIp[]) {
+          out.push({ vpsId: r.vpsId, vpsName: r.vpsName, ip: b.ip, jail: b.jail, banTime: b.banTime });
+        }
+      }
     }
-  });
+    return out;
+  }, [activeResults]);
 
-  const filtered = search
-    ? allBanned.filter(b => b.ip.includes(search) || b.jail.toLowerCase().includes(search.toLowerCase()) || b.vpsName.toLowerCase().includes(search.toLowerCase()))
-    : allBanned;
+  const filtered = useMemo(() => {
+    if (!search) return allBanned;
+    const q = search.toLowerCase();
+    return allBanned.filter(b =>
+      b.ip.includes(search) ||
+      b.jail.toLowerCase().includes(q) ||
+      b.vpsName.toLowerCase().includes(q)
+    );
+  }, [allBanned, search]);
 
-  const byVps = activeResults.reduce((acc, r) => {
+  // Paginazione: mai più di PAGE_SIZE righe nel DOM
+  const pageCount = Math.ceil(filtered.length / PAGE_SIZE);
+  const pageRows = useMemo(() => filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [filtered, page]);
+
+  const byVps = useMemo(() => activeResults.reduce((acc, r) => {
     acc[r.vpsName] = r.success ? (Array.isArray(r.data) ? r.data.length : 0) : -1;
     return acc;
-  }, {} as Record<string, number>);
+  }, {} as Record<string, number>), [activeResults]);
 
   const handleUnban = async (vpsId: string, ip: string, jail: string) => {
     setUnbanning(`${vpsId}-${ip}`);
@@ -130,7 +175,7 @@ function BannedIpsTab() {
     }
   };
 
-  const onlineCount = activeResults.filter(r => r.success).length;
+  const onlineCount = useMemo(() => activeResults.filter(r => r.success).length, [activeResults]);
   const streamProgress = total > 0 ? Math.round((loaded / total) * 100) : 0;
 
   return (
@@ -147,7 +192,7 @@ function BannedIpsTab() {
           <span className="font-semibold text-foreground">{allBanned.length} IP bannati totali</span>
         </div>
         <div className="flex items-center gap-2 ml-auto">
-          <Select value={selectedVps} onValueChange={setSelectedVps}>
+          <Select value={selectedVps} onValueChange={v => { setSelectedVps(v); setPage(0); }}>
             <SelectTrigger className="w-44 h-8 text-sm">
               <SelectValue placeholder="Tutti i VPS" />
             </SelectTrigger>
@@ -162,14 +207,12 @@ function BannedIpsTab() {
         </div>
       </div>
 
-      {/* Barra di avanzamento streaming */}
       {selectedVps === "all" && !done && total > 0 && (
         <div className="w-full bg-muted rounded-full h-1.5">
           <div className="bg-blue-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${streamProgress}%` }} />
         </div>
       )}
 
-      {/* Summary per VPS */}
       {Object.keys(byVps).length > 0 && (
         <div className="flex flex-wrap gap-2">
           {Object.entries(byVps).map(([name, count]) => (
@@ -183,8 +226,8 @@ function BannedIpsTab() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
+          value={searchInput}
+          onChange={e => handleSearchChange(e.target.value)}
           placeholder="Cerca per IP, jail o VPS..."
           className="pl-9 font-mono"
         />
@@ -195,46 +238,58 @@ function BannedIpsTab() {
       {isLoading ? (
         <LoadingState message="Connessione ai VPS..." />
       ) : (
-        <Card className="border-card-border">
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>IP</TableHead>
-                    <TableHead>Jail</TableHead>
-                    <TableHead>VPS</TableHead>
-                    <TableHead className="text-right">Azioni</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.length === 0 ? (
+        <>
+          <Card className="border-card-border">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
-                        {search ? "Nessun risultato" : allBanned.length === 0 && !done ? "Caricamento..." : "Nessun IP bannato"}
-                      </TableCell>
+                      <TableHead>IP</TableHead>
+                      <TableHead>Jail</TableHead>
+                      <TableHead>VPS</TableHead>
+                      <TableHead className="text-right">Azioni</TableHead>
                     </TableRow>
-                  ) : filtered.map((b, i) => (
-                    <TableRow key={i}>
-                      <TableCell className="font-mono font-semibold text-red-400">{b.ip}</TableCell>
-                      <TableCell><Badge variant="outline" className="font-mono text-xs">{b.jail}</Badge></TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{b.vpsName}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm" variant="outline"
-                          disabled={unbanning === `${b.vpsId}-${b.ip}`}
-                          onClick={() => handleUnban(b.vpsId, b.ip, b.jail)}
-                        >
-                          {unbanning === `${b.vpsId}-${b.ip}` ? "..." : "Unban"}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {pageRows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                          {search ? "Nessun risultato" : allBanned.length === 0 && !done ? "Caricamento..." : "Nessun IP bannato"}
+                        </TableCell>
+                      </TableRow>
+                    ) : pageRows.map((b, i) => (
+                      <TableRow key={i}>
+                        <TableCell className="font-mono font-semibold text-red-400">{b.ip}</TableCell>
+                        <TableCell><Badge variant="outline" className="font-mono text-xs">{b.jail}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{b.vpsName}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            size="sm" variant="outline"
+                            disabled={unbanning === `${b.vpsId}-${b.ip}`}
+                            onClick={() => handleUnban(b.vpsId, b.ip, b.jail)}
+                          >
+                            {unbanning === `${b.vpsId}-${b.ip}` ? "..." : "Unban"}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {pageCount > 1 && (
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Pagina {page + 1} di {pageCount} ({filtered.length} totali)</span>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>← Prec</Button>
+                <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setPage(p => p + 1)}>Succ →</Button>
+              </div>
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </>
       )}
     </div>
   );
