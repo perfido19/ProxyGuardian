@@ -199,19 +199,7 @@ export async function startUpgradeJob(vpsIds: string[] | "all"): Promise<string>
       failCount: job.failCount,
     });
     closeJobClients(jobId);
-  })().catch((err) => {
-    // Errore imprevisto nel background job — marca tutto come fallito
-    job.status = "done";
-    for (const vpsJob of job.vpsJobs.values()) {
-      if (vpsJob.status === "pending" || vpsJob.status === "running") {
-        vpsJob.status = "failed";
-        vpsJob.error = `Errore interno: ${err?.message ?? err}`;
-        job.failCount++;
-      }
-    }
-    emit(jobId, "job-done", { successCount: job.successCount, failCount: job.failCount });
-    closeJobClients(jobId);
-  });
+  })();
 
   return jobId;
 }
