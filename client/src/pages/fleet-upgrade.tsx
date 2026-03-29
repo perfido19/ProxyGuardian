@@ -174,9 +174,6 @@ export default function FleetUpgrade() {
   const [pageState, setPageState] = useState<PageState>("idle");
   const [jobId, setJobId] = useState<string | null>(null);
   const [vpsStates, setVpsStates] = useState<Map<string, VpsState>>(new Map());
-  const [doneCount, setDoneCount] = useState(0);
-  const [successCount, setSuccessCount] = useState(0);
-  const [failCount, setFailCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
@@ -184,6 +181,15 @@ export default function FleetUpgrade() {
   const allSelected = enabledVps.length > 0 && selectedIds.size === enabledVps.length;
   const totalSelected = selectedIds.size;
   const totalVps = vpsStates.size;
+
+  // Contatori derivati da vpsStates (no stato separato, evita doppio conteggio nel replay)
+  const vpsStateArray = Array.from(vpsStates.values()).sort((a, b) => {
+    const order: Record<VpsStatus, number> = { running: 0, failed: 1, success: 2, pending: 3 };
+    return order[a.status] - order[b.status];
+  });
+  const doneCount = vpsStateArray.filter((v) => v.status === "success" || v.status === "failed").length;
+  const successCount = vpsStateArray.filter((v) => v.status === "success").length;
+  const failCount = vpsStateArray.filter((v) => v.status === "failed").length;
   const progress = totalVps > 0 ? Math.round((doneCount / totalVps) * 100) : 0;
 
   // Toggle selezione singola
@@ -223,14 +229,62 @@ export default function FleetUpgrade() {
     });
   }, []);
 
+  // Connette SSE a un job esistente (usato sia all'avvio che al riconnect)
+  const connectSse = useCallback((id: string) => {
+    esRef.current?.close();
+    const es = new EventSource(`/api/fleet/upgrade/${id}/events`);
+    esRef.current = es;
+
+    es.addEventListener("vps-start", (e) => {
+      const { vpsId, vpsName } = JSON.parse(e.data);
+      const vps = vpsList.find((v) => v.id === vpsId);
+      setVpsStates((prev) => {
+        const next = new Map(prev);
+        // Se il VPS è già presente con stato terminale, aggiorna solo i log (replay)
+        const existing = next.get(vpsId);
+        next.set(vpsId, {
+          vpsId,
+          vpsName,
+          vpsHost: existing?.vpsHost ?? vps?.host ?? "",
+          status: "running",
+          logs: [],
+          error: undefined,
+        });
+        return next;
+      });
+    });
+
+    es.addEventListener("vps-log", (e) => {
+      const { vpsId, line } = JSON.parse(e.data);
+      appendLog(vpsId, line);
+    });
+
+    es.addEventListener("vps-done", (e) => {
+      const { vpsId, success, error: err } = JSON.parse(e.data);
+      updateVps(vpsId, {
+        status: success ? "success" : "failed",
+        error: err,
+      });
+    });
+
+    es.addEventListener("job-done", () => {
+      es.close();
+      esRef.current = null;
+      setPageState("done");
+    });
+
+    es.onerror = () => {
+      es.close();
+      esRef.current = null;
+      setPageState((s) => (s === "running" ? "done" : s));
+    };
+  }, [vpsList, appendLog, updateVps]);
+
   // Avvia upgrade
   const startUpgrade = async () => {
     if (totalSelected === 0) return;
     setError(null);
     setPageState("running");
-    setDoneCount(0);
-    setSuccessCount(0);
-    setFailCount(0);
     setVpsStates(new Map());
 
     try {
@@ -239,60 +293,46 @@ export default function FleetUpgrade() {
       });
       const { jobId: id } = await res.json();
       setJobId(id);
-
-      // Apri SSE
-      const es = new EventSource(`/api/fleet/upgrade/${id}/events`);
-      esRef.current = es;
-
-      es.addEventListener("vps-start", (e) => {
-        const { vpsId, vpsName } = JSON.parse(e.data);
-        const vps = vpsList.find((v) => v.id === vpsId);
-        setVpsStates((prev) => {
-          const next = new Map(prev);
-          next.set(vpsId, {
-            vpsId,
-            vpsName,
-            vpsHost: vps?.host ?? "",
-            status: "running",
-            logs: [],
-          });
-          return next;
-        });
-      });
-
-      es.addEventListener("vps-log", (e) => {
-        const { vpsId, line } = JSON.parse(e.data);
-        appendLog(vpsId, line);
-      });
-
-      es.addEventListener("vps-done", (e) => {
-        const { vpsId, success, error: err } = JSON.parse(e.data);
-        updateVps(vpsId, {
-          status: success ? "success" : "failed",
-          error: err,
-        });
-        setDoneCount((n) => n + 1);
-        if (success) setSuccessCount((n) => n + 1);
-        else setFailCount((n) => n + 1);
-      });
-
-      es.addEventListener("job-done", () => {
-        es.close();
-        esRef.current = null;
-        setPageState("done");
-      });
-
-      es.onerror = () => {
-        es.close();
-        esRef.current = null;
-        // Se il job era running, segnala come done (la connessione si chiude naturalmente a fine job)
-        setPageState((s) => (s === "running" ? "done" : s));
-      };
+      connectSse(id);
     } catch (e: any) {
       setError(e.message);
       setPageState("idle");
     }
   };
+
+  // Al mount: controlla se esiste un job attivo e riconnettiti
+  useEffect(() => {
+    (async () => {
+      try {
+        const activeRes = await fetch("/api/fleet/upgrade/active");
+        if (!activeRes.ok) return;
+        const { jobId: activeId } = await activeRes.json();
+
+        // Carica snapshot per inizializzare i VPS prima che arrivino gli eventi SSE
+        const snapRes = await fetch(`/api/fleet/upgrade/${activeId}/status`);
+        if (!snapRes.ok) return;
+        const snap = await snapRes.json();
+
+        const initStates = new Map<string, VpsState>();
+        for (const vj of snap.vpsJobs) {
+          initStates.set(vj.vpsId, {
+            vpsId: vj.vpsId,
+            vpsName: vj.vpsName,
+            vpsHost: vj.vpsHost,
+            status: vj.status,
+            logs: [],
+            error: vj.error,
+          });
+        }
+        setVpsStates(initStates);
+        setJobId(activeId);
+        setPageState("running");
+        connectSse(activeId);
+      } catch {
+        // Nessun job attivo, pagina rimane in idle
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cleanup SSE alla smontatura
   useEffect(() => {
@@ -306,21 +346,8 @@ export default function FleetUpgrade() {
     setPageState("idle");
     setJobId(null);
     setVpsStates(new Map());
-    setDoneCount(0);
-    setSuccessCount(0);
-    setFailCount(0);
     setError(null);
   };
-
-  // Inizializza stati pending quando arriva la lista dal server
-  useEffect(() => {
-    if (pageState !== "idle") return;
-  }, [pageState]);
-
-  const vpsStateArray = Array.from(vpsStates.values()).sort((a, b) => {
-    const order: Record<VpsStatus, number> = { running: 0, failed: 1, success: 2, pending: 3 };
-    return order[a.status] - order[b.status];
-  });
 
   return (
     <div className="space-y-6 max-w-4xl">

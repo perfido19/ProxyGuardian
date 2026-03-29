@@ -281,3 +281,12 @@ export function getJobLogs(jobId: string, vpsId: string): string[] | null {
   if (!job) return null;
   return job.vpsJobs.get(vpsId)?.logs ?? null;
 }
+
+export function getActiveJob(): { id: string; status: "running" | "done" } | null {
+  let latest: UpgradeJob | null = null;
+  for (const job of jobs.values()) {
+    if (!latest || job.createdAt > latest.createdAt) latest = job;
+  }
+  if (!latest) return null;
+  return { id: latest.id, status: latest.status };
+}

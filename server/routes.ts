@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import session from "express-session";
-import { startUpgradeJob, subscribeToJob, getJobSnapshot, getJobLogs } from "./fleet-upgrade";
+import { startUpgradeJob, subscribeToJob, getJobSnapshot, getJobLogs, getActiveJob } from "./fleet-upgrade";
 
 // Percorsi proxy che un operator può modificare (POST)
 const OPERATOR_WRITE_PATHS = [
@@ -410,6 +410,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ─── Fleet Upgrade ────────────────────────────────────────────────────────────
+
+  // Job attivo più recente (per riconnettersi dopo navigazione)
+  app.get("/api/fleet/upgrade/active", requireAuth, (_req, res) => {
+    const active = getActiveJob();
+    if (!active) return res.status(404).json({ error: "Nessun job attivo" });
+    res.json(active);
+  });
 
   // Avvia un job di upgrade su VPS selezionati
   app.post("/api/fleet/upgrade/start", requireAuth, requireAdmin, async (req, res) => {
