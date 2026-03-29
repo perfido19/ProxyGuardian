@@ -47,7 +47,7 @@ export default function VpsManager() {
       const res = await apiRequest("GET", "/api/vps/agents/versions");
       return res.json();
     },
-    staleTime: 30000,
+    staleTime: 0,
   });
 
   const versionMap = useMemo(() => {
@@ -201,7 +201,7 @@ export default function VpsManager() {
               <CardDescription>{list.length} VPS • {list.filter(v => v.enabled).length} abilitati</CardDescription>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => refetchHealth()}><RefreshCw className="w-4 h-4 mr-1" />Aggiorna stato</Button>
+              <Button variant="outline" size="sm" onClick={() => { refetchHealth(); refetchVersions(); }}><RefreshCw className="w-4 h-4 mr-1" />Aggiorna stato</Button>
               {user?.role === "admin" && (
                 <Button variant="outline" size="sm" onClick={handleUpdateAllAgents} disabled={updatingAgent === "all"}>
                   {updatingAgent === "all" ? <RefreshCw className="w-4 h-4 mr-1 animate-spin" /> : <Download className="w-4 h-4 mr-1" />}
