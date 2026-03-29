@@ -1,6 +1,6 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -22,9 +22,78 @@ import FleetConfig from "@/pages/fleet-config";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { LogOut, User } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { LogOut, User, Rocket, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 
 const roleLabels = { admin: "Admin", operator: "Operator", viewer: "Viewer" } as const;
+
+// ─── Banner upgrade persistente ───────────────────────────────────────────────
+
+function UpgradeBanner() {
+  const [location] = useLocation();
+
+  const { data: active } = useQuery<{ id: string; status: string }>({
+    queryKey: ["upgrade-active"],
+    queryFn: async () => {
+      const res = await fetch("/api/fleet/upgrade/active");
+      if (!res.ok) throw new Error("no active job");
+      return res.json();
+    },
+    refetchInterval: 4000,
+    retry: false,
+  });
+
+  const { data: snap } = useQuery<{
+    status: string; total: number; successCount: number; failCount: number;
+    vpsJobs: Array<{ status: string }>;
+  }>({
+    queryKey: ["upgrade-snap", active?.id],
+    queryFn: async () => {
+      const res = await fetch(`/api/fleet/upgrade/${active!.id}/status`);
+      if (!res.ok) throw new Error("no snap");
+      return res.json();
+    },
+    enabled: !!active?.id,
+    refetchInterval: 2000,
+  });
+
+  // Nascondi se già sulla pagina fleet-upgrade
+  if (!active || location === "/fleet-upgrade") return null;
+
+  const total = snap?.total ?? 0;
+  const done = (snap?.successCount ?? 0) + (snap?.failCount ?? 0);
+  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
+  const isDone = snap?.status === "done";
+
+  return (
+    <a href="/fleet-upgrade" className="block">
+      <div className={`px-4 py-1.5 border-b flex items-center gap-3 text-xs cursor-pointer transition-colors ${isDone ? "bg-green-950/40 border-green-500/30 hover:bg-green-950/60" : "bg-blue-950/40 border-blue-500/30 hover:bg-blue-950/60"}`}>
+        <Rocket className="w-3 h-3 shrink-0 text-blue-400" />
+        <span className="font-heading font-medium text-foreground/80 shrink-0">Fleet Upgrade</span>
+        {total > 0 && (
+          <>
+            <div className="flex-1 max-w-48">
+              <Progress value={progress} className="h-1.5" />
+            </div>
+            <span className="font-mono text-muted-foreground shrink-0">{done}/{total}</span>
+          </>
+        )}
+        {snap && (
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="flex items-center gap-1 text-green-500">
+              <CheckCircle2 className="w-3 h-3" />{snap.successCount}
+            </span>
+            <span className="flex items-center gap-1 text-red-500">
+              <XCircle className="w-3 h-3" />{snap.failCount}
+            </span>
+          </div>
+        )}
+        {!isDone && <Loader2 className="w-3 h-3 animate-spin text-blue-400 shrink-0" />}
+        {isDone && <span className="text-green-400 font-heading shrink-0">Completato</span>}
+      </div>
+    </a>
+  );
+}
 
 function Header() {
   const { user, logout } = useAuth();
@@ -85,6 +154,7 @@ function AppLayout() {
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
           <Header />
+          <UpgradeBanner />
           <main className="flex-1 overflow-auto p-8 bg-background">
             <Router />
           </main>
