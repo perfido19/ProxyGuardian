@@ -157,6 +157,19 @@ export default function FleetConfig() {
             <FileCode className="w-3.5 h-3.5" />
             Vedi template
           </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => {
+              const allIds = (statuses || []).filter(s => !s.error).map(s => s.vpsId);
+              if (allIds.length > 0) applyConfig(allIds);
+            }}
+            disabled={!statuses || statuses.filter(s => !s.error).length === 0}
+            className="gap-1.5"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            Forza applica a tutti
+          </Button>
         </div>
       </div>
 
