@@ -1,4 +1,4 @@
-import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Users, Network, Search, ShieldCheck, Globe, Rocket, Settings2, TerminalSquare } from "lucide-react";
+import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Users, Network, Search, ShieldCheck, Globe, Rocket, Settings2, TerminalSquare, RotateCw } from "lucide-react";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter } from "@/components/ui/sidebar";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -93,6 +93,21 @@ export function AppSidebar() {
                     <Link href="/fleet-config">
                       <Settings2 className="w-4 h-4" />
                       <span>Fleet Config</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {user?.role === "admin" && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === "/logrotate"}
+                    data-testid="link-logrotate"
+                    className="font-heading text-sm tracking-wide"
+                  >
+                    <Link href="/logrotate">
+                      <RotateCw className="w-4 h-4" />
+                      <span>Logrotate</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

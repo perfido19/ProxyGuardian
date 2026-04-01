@@ -636,12 +636,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/fleet/logrotate/setup", requireAuth, requireAdmin, async (req, res) => {
-    const { vpsIds } = req.body;
+    const { vpsIds, config } = req.body;
     if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds[] richiesto" });
     const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
     const results = await Promise.all(vpsList.map(async (vps) => {
       try {
-        const data = await agentPost(vps, "/api/logrotate/setup", {});
+        const data = await agentPost(vps, "/api/logrotate/setup", { config });
         return { vpsId: vps.id, vpsName: vps.name, ok: data.ok, error: data.ok ? null : "Setup fallito" };
       } catch (e: any) {
         return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message };

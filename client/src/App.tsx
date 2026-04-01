@@ -22,6 +22,7 @@ import VpsDetail from "@/pages/vps-detail";
 import FleetUpgrade from "@/pages/fleet-upgrade";
 import FleetConfig from "@/pages/fleet-config";
 import SshConsole from "@/pages/ssh-console";
+import Logrotate from "@/pages/logrotate";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -130,6 +131,7 @@ function Router() {
       {user?.role === "admin" && <Route path="/fleet-upgrade" component={FleetUpgrade} />}
       {user?.role === "admin" && <Route path="/fleet-config" component={FleetConfig} />}
       {user?.role === "admin" && <Route path="/ssh-console" component={SshConsole} />}
+      {user?.role === "admin" && <Route path="/logrotate" component={Logrotate} />}
       <Route component={NotFound} />
     </Switch>
   );

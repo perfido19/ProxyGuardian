@@ -727,13 +727,14 @@ app.get("/api/logrotate/status", async (_req, res) => {
   }
 });
 
-app.post("/api/logrotate/setup", async (_req, res) => {
+app.post("/api/logrotate/setup", async (req, res) => {
   const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
   function addStep(label: string, result: { ok: boolean; stderr: string }): void {
     steps.push({ step: label, ok: result.ok, error: result.ok ? undefined : result.stderr });
   }
   try {
-    await writeFile("/tmp/pg-logrotate.conf", LOGROTATE_CONF, "utf-8");
+    const conf = (req.body && req.body.config) ? req.body.config : LOGROTATE_CONF;
+    await writeFile("/tmp/pg-logrotate.conf", conf, "utf-8");
     addStep("deploy logrotate config", await runCmd("cat /tmp/pg-logrotate.conf | sudo tee /etc/logrotate.d/proxyguardian > /dev/null"));
     addStep("validate logrotate", await runCmd("sudo logrotate --debug /etc/logrotate.d/proxyguardian 2>&1 | tail -5"));
     const allOk = steps.every(s => s.ok);
