@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 import {
   CheckCircle2, XCircle, AlertCircle, RefreshCw, Upload,
-  Key, ShieldCheck, Server, HardDrive, Zap, Network, FileCode, Flame
+  Key, ShieldCheck, Server, HardDrive, Zap, Network, FileCode, Flame, RotateCw
 } from "lucide-react";
 
 interface NginxCheck {
@@ -40,6 +40,14 @@ interface VpsCleanupStatus {
   error: string | null;
 }
 
+interface VpsLogrotateStatus {
+  vpsId: string;
+  vpsName: string;
+  ready: boolean;
+  checks: { installed: boolean; upToDate: boolean; ready: boolean } | null;
+  error: string | null;
+}
+
 const CHECK_LABELS: Record<keyof NginxCheck, { label: string; icon: React.ReactNode }> = {
   streamCacheValid:   { label: "Cache streaming",       icon: <HardDrive className="w-3.5 h-3.5" /> },
   modsecurityActive:  { label: "ModSecurity attivo",    icon: <ShieldCheck className="w-3.5 h-3.5" /> },
@@ -55,6 +63,7 @@ export default function FleetConfig() {
   const [applying, setApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [installing, setInstalling] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [cleanupApplying, setCleanupApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
+  const [logrotateApplying, setLogrotateApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [templateOpen, setTemplateOpen] = useState(false);
 
   const { data: statuses, isLoading, refetch, isFetching } = useQuery<VpsNginxStatus[]>({
@@ -79,6 +88,15 @@ export default function FleetConfig() {
     queryKey: ["/api/fleet/netbird/cleanup-status"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/fleet/netbird/cleanup-status");
+      return res.json();
+    },
+    staleTime: 30000,
+  });
+
+  const { data: logrotateStatuses, refetch: refetchLogrotate } = useQuery<VpsLogrotateStatus[]>({
+    queryKey: ["/api/fleet/logrotate/status"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/fleet/logrotate/status");
       return res.json();
     },
     staleTime: 30000,
@@ -158,6 +176,30 @@ export default function FleetConfig() {
     }
   };
 
+  const applyLogrotate = async (vpsIds: string[]) => {
+    const next: Record<string, "idle" | "running" | "ok" | "error"> = { ...logrotateApplying };
+    vpsIds.forEach(id => { next[id] = "running"; });
+    setLogrotateApplying(next);
+    try {
+      const res = await apiRequest("POST", "/api/fleet/logrotate/setup", { vpsIds });
+      const results: Array<{ vpsId: string; vpsName: string; ok: boolean; error?: string }> = await res.json();
+      const updated: Record<string, "idle" | "running" | "ok" | "error"> = { ...logrotateApplying };
+      results.forEach(r => { updated[r.vpsId] = r.ok ? "ok" : "error"; });
+      setLogrotateApplying(updated);
+      const failed = results.filter(r => !r.ok);
+      if (failed.length === 0) {
+        toast({ title: "Logrotate configurato", description: `${results.length} VPS aggiornati` });
+      } else {
+        toast({ title: "Setup parziale", description: `${failed.length} VPS falliti: ${failed.map(f => f.vpsName).join(", ")}`, variant: "destructive" });
+      }
+      setTimeout(() => refetchLogrotate(), 1500);
+    } catch (e: any) {
+      vpsIds.forEach(id => { next[id] = "error"; });
+      setLogrotateApplying({ ...next });
+      toast({ title: "Errore", description: e.message, variant: "destructive" });
+    }
+  };
+
   const installSshKey = async (vpsId: string) => {
     setInstalling(prev => ({ ...prev, [vpsId]: "running" }));
     try {
@@ -225,6 +267,20 @@ export default function FleetConfig() {
           >
             <Flame className="w-3.5 h-3.5" />
             Applica cleanup
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => {
+              const notReady = (logrotateStatuses || []).filter(l => !l.ready && !l.error).map(l => l.vpsId);
+              const allIds = notReady.length > 0 ? notReady : (logrotateStatuses || []).filter(l => !l.error).map(l => l.vpsId);
+              if (allIds.length > 0) applyLogrotate(allIds);
+            }}
+            disabled={!logrotateStatuses || logrotateStatuses.filter(l => !l.error).length === 0}
+            className="gap-1.5"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+            Applica logrotate
           </Button>
         </div>
       </div>
@@ -320,6 +376,7 @@ export default function FleetConfig() {
                 <TableHead>File cache</TableHead>
                 <TableHead>Buffers</TableHead>
                 <TableHead>IPSet Cleanup</TableHead>
+                <TableHead>Logrotate</TableHead>
                 <TableHead>SSH Key</TableHead>
                 <TableHead className="text-right pr-4">Azioni</TableHead>
               </TableRow>
@@ -330,6 +387,8 @@ export default function FleetConfig() {
                 const sshState = installing[vps.vpsId] || "idle";
                 const cleanupState = cleanupApplying[vps.vpsId] || "idle";
                 const cleanupVps = cleanupStatuses?.find(c => c.vpsId === vps.vpsId);
+                const logrotateState = logrotateApplying[vps.vpsId] || "idle";
+                const logrotateVps = logrotateStatuses?.find(l => l.vpsId === vps.vpsId);
                 const isSelectable = !vps.optimized && !vps.error;
                 return (
                   <TableRow key={vps.vpsId} className={selected.has(vps.vpsId) ? "bg-muted/30" : ""}>
@@ -380,6 +439,19 @@ export default function FleetConfig() {
                       ) : cleanupState === "error" ? (
                         <XCircle className="w-4 h-4 text-red-400" />
                       ) : cleanupVps?.error ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <XCircle className="w-4 h-4 text-red-400" />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {logrotateState === "running" ? (
+                        <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground" />
+                      ) : logrotateState === "ok" || logrotateVps?.ready ? (
+                        <CheckCircle2 className="w-4 h-4 text-green-500" />
+                      ) : logrotateState === "error" ? (
+                        <XCircle className="w-4 h-4 text-red-400" />
+                      ) : logrotateVps?.error ? (
                         <span className="text-muted-foreground">—</span>
                       ) : (
                         <XCircle className="w-4 h-4 text-red-400" />

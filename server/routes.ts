@@ -620,6 +620,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(results);
   });
 
+  // ─── Fleet Logrotate ───────────────────────────────────────────────────────────
+
+  app.get("/api/fleet/logrotate/status", requireAuth, async (_req, res) => {
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        const data = await agentGet(vps, "/api/logrotate/status");
+        return { vpsId: vps.id, vpsName: vps.name, ready: data.ready, checks: data, error: null };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ready: false, checks: null, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
+  app.post("/api/fleet/logrotate/setup", requireAuth, requireAdmin, async (req, res) => {
+    const { vpsIds } = req.body;
+    if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds[] richiesto" });
+    const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        const data = await agentPost(vps, "/api/logrotate/setup", {});
+        return { vpsId: vps.id, vpsName: vps.name, ok: data.ok, error: data.ok ? null : "Setup fallito" };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
   // ─── Fleet Nginx Versions ─────────────────────────────────────────────────────
 
   app.get("/api/fleet/nginx/versions", requireAuth, async (_req, res) => {
