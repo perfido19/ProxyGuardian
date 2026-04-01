@@ -496,6 +496,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ─── Fleet Nginx Config ───────────────────────────────────────────────────────
 
   const NGINX_TEMPLATE_PATH = join(process.cwd(), "server", "nginx-template.conf");
+  const MODSEC_RELAXED_PATH = join(process.cwd(), "server", "modsec_api_relaxed.conf");
 
   function isNginxOptimized(config: string): { optimized: boolean; checks: Record<string, boolean>; cacheSize?: string } {
     // Cache: verifica che sia presente un valore valido (non placeholder) >= 5g
@@ -560,10 +561,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const { vpsIds } = req.body;
     if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds[] richiesto" });
     let template: string;
+    let modsecRelaxed: string;
     try {
       template = readFileSync(NGINX_TEMPLATE_PATH, "utf-8");
+      modsecRelaxed = readFileSync(MODSEC_RELAXED_PATH, "utf-8");
     } catch (e: any) {
-      return res.status(500).json({ error: "Template nginx non trovato sul server" });
+      return res.status(500).json({ error: "Template nginx o modsec non trovato sul server" });
     }
     const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
     const results = await Promise.all(vpsList.map(async (vps) => {
@@ -575,11 +578,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Sostituisci placeholder nel template
         const config = template.replace(/__STREAM_CACHE_SIZE__/g, cacheSize);
         await agentPost(vps, "/api/system/setup-nginx-dirs", {});
+        // Distribuisci config modsec relaxed per API
+        await agentPost(vps, "/api/config/modsec_api_relaxed.conf", { content: modsecRelaxed });
         await agentPost(vps, "/api/config/nginx.conf", { content: config });
         const reload = await agentPost(vps, "/api/nginx/reload", {});
         return { vpsId: vps.id, vpsName: vps.name, ok: reload.ok !== false, cacheSize, error: reload.error };
       } catch (e: any) {
         return { vpsId: vps.id, vpsName: vps.name, ok: false, cacheSize: null, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
+  // ─── Fleet Netbird Cleanup ─────────────────────────────────────────────────────
+
+  app.get("/api/fleet/netbird/cleanup-status", requireAuth, async (_req, res) => {
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        const data = await agentGet(vps, "/api/netbird/cleanup-status");
+        return { vpsId: vps.id, vpsName: vps.name, ready: data.ready, checks: data, error: null };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ready: false, checks: null, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
+  app.post("/api/fleet/netbird/setup-cleanup", requireAuth, requireAdmin, async (req, res) => {
+    const { vpsIds } = req.body;
+    if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds[] richiesto" });
+    const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        const data = await agentPost(vps, "/api/netbird/setup-cleanup", {});
+        return { vpsId: vps.id, vpsName: vps.name, ok: data.ok, error: data.ok ? null : "Setup fallito" };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message };
       }
     }));
     res.json(results);

@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 import {
   CheckCircle2, XCircle, AlertCircle, RefreshCw, Upload,
-  Key, ShieldCheck, Server, HardDrive, Zap, Network, FileCode
+  Key, ShieldCheck, Server, HardDrive, Zap, Network, FileCode, Flame
 } from "lucide-react";
 
 interface NginxCheck {
@@ -32,6 +32,14 @@ interface VpsNginxStatus {
   error: string | null;
 }
 
+interface VpsCleanupStatus {
+  vpsId: string;
+  vpsName: string;
+  ready: boolean;
+  checks: { dropinInstalled: boolean; scriptInstalled: boolean; serviceInstalled: boolean; serviceEnabled: boolean; ready: boolean } | null;
+  error: string | null;
+}
+
 const CHECK_LABELS: Record<keyof NginxCheck, { label: string; icon: React.ReactNode }> = {
   streamCacheValid:   { label: "Cache streaming",       icon: <HardDrive className="w-3.5 h-3.5" /> },
   modsecurityActive:  { label: "ModSecurity attivo",    icon: <ShieldCheck className="w-3.5 h-3.5" /> },
@@ -46,6 +54,7 @@ export default function FleetConfig() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [applying, setApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [installing, setInstalling] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
+  const [cleanupApplying, setCleanupApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [templateOpen, setTemplateOpen] = useState(false);
 
   const { data: statuses, isLoading, refetch, isFetching } = useQuery<VpsNginxStatus[]>({
@@ -64,6 +73,15 @@ export default function FleetConfig() {
       return res.json();
     },
     enabled: templateOpen,
+  });
+
+  const { data: cleanupStatuses, refetch: refetchCleanup } = useQuery<VpsCleanupStatus[]>({
+    queryKey: ["/api/fleet/netbird/cleanup-status"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/fleet/netbird/cleanup-status");
+      return res.json();
+    },
+    staleTime: 30000,
   });
 
   const { data: sshKeyData } = useQuery<{ key: string }>({
@@ -112,6 +130,30 @@ export default function FleetConfig() {
     } catch (e: any) {
       vpsIds.forEach(id => { next[id] = "error"; });
       setApplying({ ...next });
+      toast({ title: "Errore", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const applyCleanup = async (vpsIds: string[]) => {
+    const next: Record<string, "idle" | "running" | "ok" | "error"> = { ...cleanupApplying };
+    vpsIds.forEach(id => { next[id] = "running"; });
+    setCleanupApplying(next);
+    try {
+      const res = await apiRequest("POST", "/api/fleet/netbird/setup-cleanup", { vpsIds });
+      const results: Array<{ vpsId: string; vpsName: string; ok: boolean; error?: string }> = await res.json();
+      const updated: Record<string, "idle" | "running" | "ok" | "error"> = { ...cleanupApplying };
+      results.forEach(r => { updated[r.vpsId] = r.ok ? "ok" : "error"; });
+      setCleanupApplying(updated);
+      const failed = results.filter(r => !r.ok);
+      if (failed.length === 0) {
+        toast({ title: "IPSet Cleanup installato", description: `${results.length} VPS aggiornati` });
+      } else {
+        toast({ title: "Setup parziale", description: `${failed.length} VPS falliti: ${failed.map(f => f.vpsName).join(", ")}`, variant: "destructive" });
+      }
+      setTimeout(() => refetchCleanup(), 1500);
+    } catch (e: any) {
+      vpsIds.forEach(id => { next[id] = "error"; });
+      setCleanupApplying({ ...next });
       toast({ title: "Errore", description: e.message, variant: "destructive" });
     }
   };
@@ -168,7 +210,21 @@ export default function FleetConfig() {
             className="gap-1.5"
           >
             <Upload className="w-3.5 h-3.5" />
-            Forza applica a tutti
+            Forza applica nginx
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => {
+              const notReady = (cleanupStatuses || []).filter(c => !c.ready && !c.error).map(c => c.vpsId);
+              const allIds = notReady.length > 0 ? notReady : (cleanupStatuses || []).filter(c => !c.error).map(c => c.vpsId);
+              if (allIds.length > 0) applyCleanup(allIds);
+            }}
+            disabled={!cleanupStatuses || cleanupStatuses.filter(c => !c.error).length === 0}
+            className="gap-1.5"
+          >
+            <Flame className="w-3.5 h-3.5" />
+            Applica cleanup
           </Button>
         </div>
       </div>
@@ -263,6 +319,7 @@ export default function FleetConfig() {
                 <TableHead>Keepalive</TableHead>
                 <TableHead>File cache</TableHead>
                 <TableHead>Buffers</TableHead>
+                <TableHead>IPSet Cleanup</TableHead>
                 <TableHead>SSH Key</TableHead>
                 <TableHead className="text-right pr-4">Azioni</TableHead>
               </TableRow>
@@ -271,6 +328,8 @@ export default function FleetConfig() {
               {(statuses || []).map(vps => {
                 const applyState = applying[vps.vpsId] || "idle";
                 const sshState = installing[vps.vpsId] || "idle";
+                const cleanupState = cleanupApplying[vps.vpsId] || "idle";
+                const cleanupVps = cleanupStatuses?.find(c => c.vpsId === vps.vpsId);
                 const isSelectable = !vps.optimized && !vps.error;
                 return (
                   <TableRow key={vps.vpsId} className={selected.has(vps.vpsId) ? "bg-muted/30" : ""}>
@@ -313,6 +372,19 @@ export default function FleetConfig() {
                         )}
                       </TableCell>
                     ))}
+                    <TableCell>
+                      {cleanupState === "running" ? (
+                        <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground" />
+                      ) : cleanupState === "ok" || cleanupVps?.ready ? (
+                        <CheckCircle2 className="w-4 h-4 text-green-500" />
+                      ) : cleanupState === "error" ? (
+                        <XCircle className="w-4 h-4 text-red-400" />
+                      ) : cleanupVps?.error ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <XCircle className="w-4 h-4 text-red-400" />
+                      )}
+                    </TableCell>
                     <TableCell>
                       {sshState === "ok" ? (
                         <CheckCircle2 className="w-4 h-4 text-green-500" />
