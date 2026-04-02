@@ -209,6 +209,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch {}
   }
 
+  // ── System config helpers for backup/restore ──
+
+  const NGINX_CONF_FILES = [
+    "country_whitelist.conf",
+    "block_asn.conf",
+    "block_isp.conf",
+    "block_badagents.conf",
+    "ip_whitelist.conf",
+    "exclusion_ip.conf",
+  ];
+
+  const FAIL2BAN_CONF_FILES = [
+    "jail.local",
+    "fail2ban.local",
+  ];
+
+  function readSystemConfigs(): Record<string, Record<string, string>> {
+    const nginxConfigs: Record<string, string> = {};
+    for (const file of NGINX_CONF_FILES) {
+      const path = `/etc/nginx/${file}`;
+      try {
+        if (existsSync(path)) nginxConfigs[file] = readFileSync(path, "utf-8");
+      } catch {}
+    }
+
+    const fail2banConfigs: Record<string, string> = {};
+    for (const file of FAIL2BAN_CONF_FILES) {
+      const path = `/etc/fail2ban/${file}`;
+      try {
+        if (existsSync(path)) fail2banConfigs[file] = readFileSync(path, "utf-8");
+      } catch {}
+    }
+
+    const asnBlockFiles: Record<string, string> = {};
+    try {
+      if (existsSync(FLEET_DIR)) {
+        for (const file of ["blocked_asn.txt", "whitelisted_asn.txt"]) {
+          const p = join(FLEET_DIR, file);
+          if (existsSync(p)) asnBlockFiles[file] = readFileSync(p, "utf-8");
+        }
+      }
+    } catch {}
+
+    return { nginxConfigs, fail2banConfigs, asnBlockFiles };
+  }
+
   // Block list (asn-blocklist.txt — AsnBlock format: "AS12345 # Description")
   app.get("/api/fleet/asn/blocklist", requireAuth, (_req, res) => {
     res.json({ content: readFleetFile("asn-blocklist.txt") });
@@ -283,8 +329,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const p = join(DATA_DIR_PATH, file);
         try { return existsSync(p) ? JSON.parse(readFileSync(p, "utf-8")) : []; } catch { return []; }
       };
+      const systemConfigs = readSystemConfigs();
       const backup = {
-        version: 1,
+        version: 2,
         timestamp: new Date().toISOString(),
         vps: readData("vps.json"),
         users: readData("users.json"),
@@ -295,6 +342,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return existsSync(LOGROTATE_CONFIG_FILE) ? JSON.parse(readFileSync(LOGROTATE_CONFIG_FILE, "utf-8")) : null;
           } catch { return null; }
         })(),
+        nginxConfigs: systemConfigs.nginxConfigs,
+        fail2banConfigs: systemConfigs.fail2banConfigs,
+        asnBlockFiles: systemConfigs.asnBlockFiles,
       };
       const filename = `pg-backup-${new Date().toISOString().slice(0, 10)}.json`;
       res.setHeader("Content-Type", "application/json");
@@ -305,8 +355,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/restore", requireAuth, requireAdmin, (req, res) => {
     try {
-      const { version, vps, users, asnBlocklist, asnWhitelist, logrotateConfig } = req.body;
-      if (version !== 1 || !Array.isArray(vps) || !Array.isArray(users)) {
+      const { version, vps, users, asnBlocklist, asnWhitelist, logrotateConfig, nginxConfigs, fail2banConfigs, asnBlockFiles } = req.body;
+      if ((version !== 1 && version !== 2) || !Array.isArray(vps) || !Array.isArray(users)) {
         return res.status(400).json({ error: "File backup non valido o versione non supportata" });
       }
       if (!existsSync(DATA_DIR_PATH)) mkdirSync(DATA_DIR_PATH, { recursive: true });
@@ -317,6 +367,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (logrotateConfig && typeof logrotateConfig === "object") {
         writeFileSync(LOGROTATE_CONFIG_FILE, JSON.stringify(logrotateConfig, null, 2), "utf-8");
       }
+
+      // Restore nginx configs
+      if (nginxConfigs && typeof nginxConfigs === "object") {
+        for (const [file, content] of Object.entries(nginxConfigs)) {
+          try {
+            writeFileSync(`/etc/nginx/${file}`, content as string, "utf-8");
+          } catch (e: any) {
+            console.error(`[Restore] Failed to write /etc/nginx/${file}:`, e.message);
+          }
+        }
+      }
+
+      // Restore fail2ban configs
+      if (fail2banConfigs && typeof fail2banConfigs === "object") {
+        for (const [file, content] of Object.entries(fail2banConfigs)) {
+          try {
+            writeFileSync(`/etc/fail2ban/${file}`, content as string, "utf-8");
+          } catch (e: any) {
+            console.error(`[Restore] Failed to write /etc/fail2ban/${file}:`, e.message);
+          }
+        }
+      }
+
+      // Restore ASN block files
+      if (asnBlockFiles && typeof asnBlockFiles === "object") {
+        if (!existsSync(FLEET_DIR)) mkdirSync(FLEET_DIR, { recursive: true });
+        for (const [file, content] of Object.entries(asnBlockFiles)) {
+          try {
+            writeFileSync(join(FLEET_DIR, file), content as string, "utf-8");
+          } catch (e: any) {
+            console.error(`[Restore] Failed to write asn-block/${file}:`, e.message);
+          }
+        }
+      }
+
       res.json({ ok: true, message: "Dati ripristinati. Il server si riavvierà tra 2 secondi." });
       // Riavvio per ricaricare vpsStore e usersStore in memoria
       setTimeout(() => process.exit(1), 2000);

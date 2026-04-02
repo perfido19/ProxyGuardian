@@ -323,7 +323,7 @@ export default function VpsManager() {
               </label>
             </div>
             <p className="text-xs text-muted-foreground mt-3">
-              Contiene: VPS + API Keys, utenti, blocklist/whitelist ASN. Non include sessioni attive.
+              Contiene: VPS + API Keys, utenti, ASN lists, config Nginx, config Fail2ban, logrotate. Non include sessioni attive.
             </p>
           </CardContent>
         </Card>
