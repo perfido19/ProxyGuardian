@@ -275,6 +275,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ─── Backup / Restore ─────────────────────────────────────────────────────
 
   const DATA_DIR_PATH = join(process.cwd(), "data");
+  const LOGROTATE_CONFIG_FILE = join(DATA_DIR_PATH, "logrotate-config.json");
 
   app.get("/api/admin/backup", requireAuth, requireAdmin, (_req, res) => {
     try {
@@ -289,6 +290,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         users: readData("users.json"),
         asnBlocklist: readFleetFile("asn-blocklist.txt"),
         asnWhitelist: readFleetFile("asn-whitelist.txt"),
+        logrotateConfig: (() => {
+          try {
+            return existsSync(LOGROTATE_CONFIG_FILE) ? JSON.parse(readFileSync(LOGROTATE_CONFIG_FILE, "utf-8")) : null;
+          } catch { return null; }
+        })(),
       };
       const filename = `pg-backup-${new Date().toISOString().slice(0, 10)}.json`;
       res.setHeader("Content-Type", "application/json");
@@ -299,7 +305,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/restore", requireAuth, requireAdmin, (req, res) => {
     try {
-      const { version, vps, users, asnBlocklist, asnWhitelist } = req.body;
+      const { version, vps, users, asnBlocklist, asnWhitelist, logrotateConfig } = req.body;
       if (version !== 1 || !Array.isArray(vps) || !Array.isArray(users)) {
         return res.status(400).json({ error: "File backup non valido o versione non supportata" });
       }
@@ -308,9 +314,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       writeFileSync(join(DATA_DIR_PATH, "users.json"), JSON.stringify(users, null, 2), "utf-8");
       if (typeof asnBlocklist === "string") writeFleetFile("asn-blocklist.txt", asnBlocklist);
       if (typeof asnWhitelist === "string") writeFleetFile("asn-whitelist.txt", asnWhitelist);
+      if (logrotateConfig && typeof logrotateConfig === "object") {
+        writeFileSync(LOGROTATE_CONFIG_FILE, JSON.stringify(logrotateConfig, null, 2), "utf-8");
+      }
       res.json({ ok: true, message: "Dati ripristinati. Il server si riavvierà tra 2 secondi." });
       // Riavvio per ricaricare vpsStore e usersStore in memoria
       setTimeout(() => process.exit(1), 2000);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Logrotate config
+  app.get("/api/admin/logrotate-config", requireAuth, requireAdmin, (_req, res) => {
+    try {
+      if (existsSync(LOGROTATE_CONFIG_FILE)) {
+        const data = JSON.parse(readFileSync(LOGROTATE_CONFIG_FILE, "utf-8"));
+        res.json(data);
+      } else {
+        res.json(null);
+      }
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/admin/logrotate-config", requireAuth, requireAdmin, (req, res) => {
+    try {
+      const config = req.body;
+      if (!config || typeof config !== "object") {
+        return res.status(400).json({ error: "Configurazione non valida" });
+      }
+      if (!existsSync(DATA_DIR_PATH)) mkdirSync(DATA_DIR_PATH, { recursive: true });
+      writeFileSync(LOGROTATE_CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
+      res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 

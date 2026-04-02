@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -149,14 +149,46 @@ export default function Logrotate() {
     staleTime: 30000,
   });
 
+  const { data: savedConfig } = useQuery<ConfigMap | null>({
+    queryKey: ["/api/admin/logrotate-config"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/logrotate-config");
+      return res.json();
+    },
+    staleTime: 60000,
+  });
+
+  useEffect(() => {
+    if (savedConfig) {
+      setConfig(savedConfig);
+    }
+  }, [savedConfig]);
+
+  const saveTimer = useRef<NodeJS.Timeout | null>(null);
+  const saveConfig = useCallback(async (configToSave: ConfigMap) => {
+    try {
+      await apiRequest("POST", "/api/admin/logrotate-config", configToSave);
+    } catch (e) {
+      console.error("Failed to save logrotate config:", e);
+    }
+  }, []);
+
   const updateGroup = (id: string, patch: Partial<GroupConfig>) => {
-    setConfig(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+    setConfig(prev => {
+      const newConfig = { ...prev, [id]: { ...prev[id], ...patch } };
+      // Debounce save
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => saveConfig(newConfig), 1000);
+      return newConfig;
+    });
   };
 
   const applyLogrotate = async (vpsIds: string[]) => {
     const next: Record<string, "idle" | "running" | "ok" | "error"> = { ...applying };
     vpsIds.forEach(id => { next[id] = "running"; });
     setApplying(next);
+    // Save config immediately before applying
+    await saveConfig(config);
     try {
       const conf = generateLogrotateConf(config);
       const res = await apiRequest("POST", "/api/fleet/logrotate/setup", { vpsIds, config: conf });
