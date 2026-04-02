@@ -103,7 +103,10 @@ function buildDefaultConfig(): ConfigMap {
 function generateLogrotateConf(config: ConfigMap): string {
   const blocks: string[] = [];
   for (const group of LOG_GROUPS) {
-    const c = config[group.id];
+    const c = config[group.id] ?? {
+      enabled: false, rotate: group.defaultRotate, frequency: "daily" as const,
+      compress: true, delaycompress: true, missingok: true, notifempty: true
+    };
     if (!c?.enabled) continue;
     const lines: string[] = [];
     lines.push(group.paths.join("\n"));
@@ -160,7 +163,15 @@ export default function Logrotate() {
 
   useEffect(() => {
     if (savedConfig) {
-      setConfig(savedConfig);
+      setConfig(prev => {
+        const merged = { ...prev };
+        for (const g of LOG_GROUPS) {
+          if (savedConfig[g.id]) {
+            merged[g.id] = { ...prev[g.id], ...savedConfig[g.id] };
+          }
+        }
+        return merged;
+      });
     }
   }, [savedConfig]);
 
@@ -303,7 +314,10 @@ export default function Logrotate() {
         </CardHeader>
         <CardContent className="space-y-4">
           {LOG_GROUPS.map(group => {
-            const c = config[group.id];
+            const c = config[group.id] ?? {
+              enabled: false, rotate: group.defaultRotate, frequency: "daily" as const,
+              compress: true, delaycompress: true, missingok: true, notifempty: true
+            };
             return (
               <div key={group.id} className={`border rounded-lg p-4 transition-colors ${c.enabled ? "border-border" : "border-border/50 opacity-60"}`}>
                 <div className="flex items-start justify-between gap-4">
