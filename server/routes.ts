@@ -823,6 +823,540 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ token });
   });
 
+  // ─── Deploy VPS ───────────────────────────────────────────────────────────────
+
+  app.post("/api/deploy/generate-script", requireAuth, requireAdmin, (_req, res) => {
+    try {
+      const { backendIp, backendPort, proxyPort, vpsName } = _req.body;
+      const bIp = backendIp || "main.netbird.cloud";
+      const bPort = backendPort || 8880;
+      const pPort = proxyPort || 8880;
+      const name = vpsName || "nuovo-proxy";
+
+      const nginxTemplate = readFileSync(NGINX_TEMPLATE_PATH, "utf-8");
+      const nginxConf = nginxTemplate
+        .replace(/__STREAM_CACHE_SIZE__/g, "5g")
+        .replace(/main\.netbird\.cloud:8880/g, `${bIp}:${bPort}`)
+        .replace(/listen 8880 reuseport/g, `listen ${pPort} reuseport`);
+
+      const modsecRelaxed = readFileSync(MODSEC_RELAXED_PATH, "utf-8");
+
+      const countryWhitelist = readFleetFile("country_whitelist.conf") || "";
+      const blockAsn = readFleetFile("block_asn.conf") || "";
+      const blockIsp = readFleetFile("block_isp.conf") || "";
+      const blockBadAgents = readFleetFile("block_badagents.conf") || "";
+      const ipWhitelist = readFleetFile("ip_whitelist.conf") || "";
+      const exclusionIp = readFleetFile("exclusion_ip.conf") || "";
+
+      const script = `#!/bin/bash
+# ╔══════════════════════════════════════════════════════════╗
+# ║  ProxyGuardian - Deploy Script                          ║
+# ║  VPS: ${name.padEnd(47)}║
+# ║  Generato: ${new Date().toISOString().slice(0, 19).padEnd(47)}║
+# ╚══════════════════════════════════════════════════════════╝
+
+set -e
+
+RED='\\033[0;31m'; GREEN='\\033[0;32m'; YELLOW='\\033[1;33m'; CYAN='\\033[0;36m'; NC='\\033[0m'
+info()  { echo -e "\${CYAN}[INFO]\${NC} \$*"; }
+ok()    { echo -e "\${GREEN}[OK]\${NC}   \$*"; }
+warn()  { echo -e "\${YELLOW}[WARN]\${NC} \$*"; }
+error() { echo -e "\${RED}[ERR]\${NC}  \$*"; exit 1; }
+
+BACKEND_IP="${bIp}"
+BACKEND_PORT="${bPort}"
+PROXY_PORT="${pPort}"
+VPS_NAME="${name}"
+numcpu=\$(nproc)
+
+echo ""
+echo -e "\${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+echo -e "\${CYAN}   ProxyGuardian Deploy - \$VPS_NAME\${NC}"
+echo -e "\${CYAN}   Backend: \$BACKEND_IP:\$BACKEND_PORT | Porta: \$PROXY_PORT\${NC}"
+echo -e "\${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+echo ""
+
+[ "\$(id -u)" -eq 0 ] || error "Esegui con sudo o come root"
+
+# ── SISTEMA BASE ───────────────────────────────────────────
+info "Updating & installing dependencies..."
+apt-get update -y
+apt-get upgrade -y
+apt-get install -y \\
+  build-essential libpcre3 libpcre3-dev zlib1g-dev libssl-dev \\
+  libxslt1-dev fail2ban mariadb-server git libtool autoconf \\
+  libxml2-dev libcurl4-openssl-dev automake pkgconf libyajl-dev \\
+  liblua5.1-0-dev wget curl
+
+add-apt-repository -y ppa:maxmind/ppa
+apt-get update -y
+apt-get install -y libmaxminddb-dev libmaxminddb0 mmdb-bin geoipupdate
+
+# ── MODSECURITY v3 ─────────────────────────────────────────
+info "Compiling ModSecurity v3..."
+cd /usr/local/src
+rm -rf ModSecurity
+git clone --depth 1 -b v3.0.12 https://github.com/SpiderLabs/ModSecurity
+cd ModSecurity
+git submodule init && git submodule update
+./build.sh && ./configure
+make -j "\$numcpu" && make install
+
+# ── MODSECURITY-NGINX CONNECTOR ────────────────────────────
+cd /usr/local/src
+rm -rf ModSecurity-nginx
+git clone --depth 1 https://github.com/SpiderLabs/ModSecurity-nginx
+
+# ── GEOIP2 MODULE ──────────────────────────────────────────
+cd /usr/local/src
+rm -rf ngx_http_geoip2_module-*
+wget -q "https://github.com/leev/ngx_http_geoip2_module/archive/refs/tags/3.4.tar.gz" -O geoip2_module.tar.gz
+tar zxf geoip2_module.tar.gz
+GEOIP2_DIR=\$(ls -d /usr/local/src/ngx_http_geoip2_module-*)
+
+# ── BUILD NGINX 1.26.2 ─────────────────────────────────────
+info "Building Nginx 1.26.2..."
+cd /usr/local/src
+rm -rf "nginx-1.26.2" "nginx-1.26.2.tar.gz"
+wget -q "http://nginx.org/download/nginx-1.26.2.tar.gz"
+tar xzf "nginx-1.26.2.tar.gz"
+cd "nginx-1.26.2"
+
+./configure \\
+  --with-cc-opt='-g -O2 -fPIE -fstack-protector-strong -Wformat -Werror=format-security -fPIC -Wdate-time -D_FORTIFY_SOURCE=2' \\
+  --with-ld-opt='-Wl,-Bsymbolic-functions -fPIE -pie -Wl,-z,relro -Wl,-z,now -fPIC' \\
+  --prefix=/usr/share/nginx --conf-path=/etc/nginx/nginx.conf \\
+  --http-log-path=/var/log/nginx/access.log --error-log-path=/var/log/nginx/error.log \\
+  --lock-path=/var/lock/nginx.lock --pid-path=/run/nginx.pid \\
+  --modules-path=/usr/lib/nginx/modules \\
+  --http-client-body-temp-path=/var/lib/nginx/body \\
+  --http-fastcgi-temp-path=/var/lib/nginx/fastcgi \\
+  --http-proxy-temp-path=/var/lib/nginx/proxy \\
+  --http-scgi-temp-path=/var/lib/nginx/scgi \\
+  --http-uwsgi-temp-path=/var/lib/nginx/uwsgi \\
+  --with-pcre-jit --with-http_ssl_module --with-http_stub_status_module \\
+  --with-http_realip_module --with-http_auth_request_module --with-http_v2_module \\
+  --with-http_dav_module --with-http_slice_module --with-threads \\
+  --with-http_addition_module --with-http_gunzip_module --with-http_gzip_static_module \\
+  --with-http_sub_module --with-http_xslt_module=dynamic --with-stream=dynamic \\
+  --with-stream_ssl_module --with-stream_ssl_preread_module --with-mail=dynamic \\
+  --with-mail_ssl_module \\
+  --add-dynamic-module=/usr/local/src/ModSecurity-nginx \\
+  --add-dynamic-module="\$GEOIP2_DIR"
+
+make -j "\$numcpu" && make install
+
+ln -sf /usr/share/nginx/sbin/nginx /usr/sbin/nginx
+ln -sf /usr/lib/nginx/modules /usr/share/nginx/modules
+mkdir -p /var/lib/nginx/body
+
+# ── NGINX.SERVICE ──────────────────────────────────────────
+cat > /lib/systemd/system/nginx.service << 'SVCEOF'
+[Unit]
+Description=The NGINX HTTP and reverse proxy server
+After=syslog.target network.target remote-fs.target nss-lookup.target
+
+[Service]
+Type=forking
+PIDFile=/run/nginx.pid
+ExecStartPre=/usr/sbin/nginx -t
+ExecStart=/usr/sbin/nginx
+ExecReload=/usr/sbin/nginx -s reload
+ExecStop=/bin/kill -s QUIT \$MAINPID
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+# ── NGINX.CONF ─────────────────────────────────────────────
+info "Installing nginx.conf..."
+cat > /etc/nginx/nginx.conf << 'NGINXEOF'
+${nginxConf}
+NGINXEOF
+
+# ── FILE CONFIG NGINX ──────────────────────────────────────
+info "Creating nginx config files..."
+
+cat > /etc/nginx/country_whitelist.conf << 'EOF'
+${countryWhitelist || "# Default: tutti i paesi bloccati"}
+EOF
+
+cat > /etc/nginx/block_asn.conf << 'EOF'
+${blockAsn || "# Blacklist ASN"}
+EOF
+
+cat > /etc/nginx/block_isp.conf << 'EOF'
+${blockIsp || "# ISP Block"}
+EOF
+
+cat > /etc/nginx/block_badagents.conf << 'EOF'
+${blockBadAgents || "# Bad Agents Block"}
+EOF
+
+cat > /etc/nginx/ip_whitelist.conf << 'EOF'
+${ipWhitelist || "# IP whitelist"}
+EOF
+
+cat > /etc/nginx/exclusion_ip.conf << 'EOF'
+${exclusionIp || "# Esclusioni country block"}
+EOF
+
+# ── MODSECURITY CONFIG ─────────────────────────────────────
+info "Configuring ModSecurity..."
+mkdir -p /etc/nginx/modsec /etc/nginx/rules /opt/log
+
+cp /usr/local/src/ModSecurity/modsecurity.conf-recommended /etc/nginx/modsec/modsecurity.conf
+cp /usr/local/src/ModSecurity/unicode.mapping /etc/nginx/modsec/
+
+sed -i "s/SecRuleEngine DetectionOnly/SecRuleEngine On/" /etc/nginx/modsec/modsecurity.conf
+sed -i "s/SecAuditLogType Serial/SecAuditLogType Concurrent/" /etc/nginx/modsec/modsecurity.conf
+sed -i "s|SecAuditLog /var/log/modsec_audit.log|SecAuditLog /opt/log/modsec_audit.log|" /etc/nginx/modsec/modsecurity.conf
+
+chmod -R 755 /opt/log
+chown -R www-data:www-data /opt/log
+
+# ── OWASP CRS v4 ───────────────────────────────────────────
+info "Installing OWASP CRS v4..."
+cd /etc/nginx/modsec
+rm -rf coreruleset
+git clone --depth 1 https://github.com/coreruleset/coreruleset.git
+cd /etc/nginx/modsec/coreruleset
+cp crs-setup.conf.example crs-setup.conf
+cp rules/*.conf /etc/nginx/rules/ 2>/dev/null || true
+cp rules/*.data /etc/nginx/rules/ 2>/dev/null || true
+
+cat > /etc/nginx/modsec_includes.conf << 'EOF'
+Include /etc/nginx/modsec/modsecurity.conf
+Include /etc/nginx/modsec/coreruleset/crs-setup.conf
+Include /etc/nginx/rules/*.conf
+EOF
+
+cat > /etc/nginx/modsec_api_relaxed.conf << 'MODECEOF'
+${modsecRelaxed}
+MODECEOF
+
+# ── FAIL2BAN ───────────────────────────────────────────────
+info "Configuring Fail2ban..."
+cat > /etc/fail2ban/jail.local << JAILEOF
+[nginx-req-limit]
+enabled  = true
+filter   = nginx-req-limit
+action   = iptables-multiport[name=ReqLimit, port="\${PROXY_PORT}", protocol=tcp]
+           banned_db[name=ReqLimit, port="\${PROXY_PORT}", protocol=tcp]
+logpath  = /var/log/nginx/*error.log
+findtime = 600
+bantime  = 7200
+maxretry = 10
+
+[nginx-4xx]
+enabled  = true
+port     = http,https
+action   = iptables-multiport[name=nginx-4xx, port="\${PROXY_PORT}", protocol=tcp]
+           banned_db[name=ReqLimit, port="\${PROXY_PORT}", protocol=tcp]
+logpath  = /var/log/nginx/access.log
+findtime = 600
+maxretry = 10
+bantime  = 7200
+
+[DEFAULT]
+ignoreip = 127.0.0.1/8 10.0.0.0/8 192.168.0.0/16 172.16.0.0/16
+JAILEOF
+
+cat > /etc/fail2ban/filter.d/nginx-req-limit.conf << 'EOF'
+[Definition]
+failregex = limiting requests, excess:.* by zone.*client: <HOST>
+ignoreregex =
+EOF
+
+cat > /etc/fail2ban/filter.d/nginx-4xx.conf << 'EOF'
+[Definition]
+failregex = ^<HOST>.*"(GET|POST).*" (404|444|403|400) .*$
+ignoreregex =
+EOF
+
+# ── DATABASE FAIL2BAN ──────────────────────────────────────
+info "Creating fail2ban database..."
+mysql -uroot -e "CREATE DATABASE IF NOT EXISTS fail2ban;"
+mysql -uroot -e "GRANT ALL ON fail2ban.* TO 'dynamo'@'%' IDENTIFIED BY 'dynamo@2018';"
+mysql -uroot -e "GRANT ALL ON fail2ban.* TO 'dynamo'@'localhost' IDENTIFIED BY 'dynamo@2018';"
+mysql -uroot -e "FLUSH PRIVILEGES;"
+
+mkdir -p ~/tmp
+cd ~/tmp
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/sql/fail2ban.mysql
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/action.d/banned_db.conf
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/bin/fail2ban_banned_db
+mysql fail2ban < ~/tmp/fail2ban.mysql
+
+cat > /root/.my.cnf-fail2ban << 'MYCNFEOF'
+[client]
+host="127.0.0.1"
+port="3306"
+user="dynamo"
+password="dynamo@2018"
+MYCNFEOF
+
+mv ~/tmp/banned_db.conf /etc/fail2ban/action.d/
+mv ~/tmp/fail2ban_banned_db /usr/local/bin/
+chmod 0550 /usr/local/bin/fail2ban_banned_db
+
+# ── GEOIP2 ─────────────────────────────────────────────────
+info "Configuring GeoIP2..."
+cat > /etc/GeoIP.conf << GEOEOF
+AccountID 768897
+LicenseKey xJBgIatxy2Iw7V9h
+EditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country
+GEOEOF
+
+echo "0 1 * * *  /usr/bin/geoipupdate" >> /etc/crontab
+geoipupdate
+
+# ── SYSCTL ─────────────────────────────────────────────────
+info "Applying sysctl settings..."
+cat >> /etc/sysctl.conf << 'EOF'
+
+# Proxy hardening
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.conf.default.secure_redirects = 0
+net.ipv4.ip_forward = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+kernel.randomize_va_space = 1
+fs.file-max = 65535
+kernel.pid_max = 65536
+net.ipv4.ip_local_port_range = 2000 65000
+net.ipv4.tcp_rmem = 4096 87380 8388608
+net.ipv4.tcp_wmem = 4096 87380 8388608
+net.core.rmem_max = 8388608
+net.core.wmem_max = 8388608
+net.core.netdev_max_backlog = 5000
+net.ipv4.tcp_window_scaling = 1
+EOF
+sysctl -p
+
+# ── IPTABLES ───────────────────────────────────────────────
+info "Applying iptables rules..."
+iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
+iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+
+# ── AVVIO SERVIZI ──────────────────────────────────────────
+info "Enabling and starting services..."
+systemctl daemon-reload
+systemctl enable nginx
+nginx -t && systemctl start nginx
+systemctl enable fail2ban
+systemctl restart fail2ban
+
+ok "Nginx 1.26.2 + ModSecurity v3 + OWASP CRS v4 installati"
+ok "Fail2ban configurato"
+ok "GeoIP2 configurato"
+
+# ═══════════════════════════════════════════════════════════
+# INSTALLAZIONE AGENT
+# ═══════════════════════════════════════════════════════════
+echo ""
+echo -e "\${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+echo -e "\${CYAN}   Installazione ProxyGuardian Agent...\${NC}"
+echo -e "\${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+
+AGENT_DIR="/opt/proxy-guardian-agent"
+AGENT_PORT="3001"
+AGENT_USER="pgagent"
+SERVICE_NAME="proxy-guardian-agent"
+AGENT_API_KEY=\$(openssl rand -hex 32)
+
+NETBIRD_IP=\$(ip addr show 2>/dev/null | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}' | grep -E '^100\\.' | head -1)
+if [ -n "\$NETBIRD_IP" ]; then
+  AGENT_BIND="\$NETBIRD_IP"
+  ok "IP NetBird rilevato: \$NETBIRD_IP"
+else
+  AGENT_BIND="0.0.0.0"
+  warn "NetBird non rilevato — agent su 0.0.0.0"
+fi
+
+PUBLIC_IP=\$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print \$1}')
+HOSTNAME=\$(hostname -f 2>/dev/null || hostname)
+
+if command -v ipset &>/dev/null && ipset list blocked_asn &>/dev/null 2>&1; then
+  ipset flush blocked_asn
+  ok "ipset blocked_asn svuotata"
+fi
+
+# Node.js 20+
+if command -v node &>/dev/null; then
+  NODE_MAJOR=\$(node -v | cut -dv -f2 | cut -d. -f1)
+  if [ "\$NODE_MAJOR" -ge 20 ]; then
+    ok "Node.js \$(node -v) già installato"
+  else
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
+    apt-get install -y nodejs >/dev/null 2>&1
+  fi
+else
+  apt-get update -qq
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
+  apt-get install -y nodejs >/dev/null 2>&1
+fi
+
+id "\$AGENT_USER" &>/dev/null || useradd -r -m -s /bin/bash "\$AGENT_USER"
+
+cat > /etc/sudoers.d/proxy-guardian-agent << 'SUDOEOF'
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl status *
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start nginx
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start fail2ban
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop fail2ban
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart fail2ban
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start mariadb
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop mariadb
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart mariadb
+pgagent ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *
+pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
+pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx
+pgagent ALL=(ALL) NOPASSWD: /usr/sbin/ipset *
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start netbird
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop netbird
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart netbird
+pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables *
+pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save
+pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save
+pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
+pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent
+SUDOEOF
+chmod 440 /etc/sudoers.d/proxy-guardian-agent
+
+usermod -aG adm "\$AGENT_USER" 2>/dev/null || true
+chmod 644 /var/log/nginx/*.log 2>/dev/null || true
+chmod 644 /var/log/fail2ban.log 2>/dev/null || true
+[ -d /etc/nginx ] && chmod o+r /etc/nginx/*.conf /etc/nginx/conf.d/*.conf 2>/dev/null || true
+if [ -f /etc/nginx/nginx.conf ]; then
+  chown root:"\$AGENT_USER" /etc/nginx/nginx.conf
+  chmod 664 /etc/nginx/nginx.conf
+fi
+
+NGINX_USER=\$(grep -oP '^user\\s+\\K\\S+(?=;)' /etc/nginx/nginx.conf 2>/dev/null || echo "www-data")
+mkdir -p /opt/log
+touch /opt/log/modsec_audit.log
+chown "\${NGINX_USER}:\${AGENT_USER}" /opt/log/modsec_audit.log
+chmod 664 /opt/log/modsec_audit.log
+chown "\${NGINX_USER}:\${AGENT_USER}" /opt/log
+chmod 775 /opt/log
+
+mkdir -p "\$AGENT_DIR"
+info "Download agent bundle..."
+curl -fsSL "https://raw.githubusercontent.com/perfido19/ProxyGuardian/main/agent/agent-bundle.js" -o "\$AGENT_DIR/index.js" || \\
+  error "Impossibile scaricare agent-bundle.js"
+chown -R "\$AGENT_USER:\$AGENT_USER" "\$AGENT_DIR"
+
+cat > "\$AGENT_DIR/.env" << ENVEOF
+AGENT_API_KEY=\$AGENT_API_KEY
+AGENT_PORT=\$AGENT_PORT
+AGENT_BIND=\$AGENT_BIND
+HOSTNAME=\$HOSTNAME
+ENVEOF
+chmod 600 "\$AGENT_DIR/.env"
+chown "\$AGENT_USER:\$AGENT_USER" "\$AGENT_DIR/.env"
+
+cat > "\$AGENT_DIR/start.sh" << 'STARTEOF'
+#!/bin/bash
+set -a
+source /opt/proxy-guardian-agent/.env
+set +a
+exec node /opt/proxy-guardian-agent/index.js
+STARTEOF
+chmod +x "\$AGENT_DIR/start.sh"
+chown "\$AGENT_USER:\$AGENT_USER" "\$AGENT_DIR/start.sh"
+
+cat > "/etc/systemd/system/\$SERVICE_NAME.service" << SVCEOF
+[Unit]
+Description=ProxyGuardian Agent
+After=network.target
+
+[Service]
+Type=simple
+User=\$AGENT_USER
+WorkingDirectory=\$AGENT_DIR
+ExecStart=\$AGENT_DIR/start.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable "\$SERVICE_NAME" >/dev/null 2>&1
+systemctl restart "\$SERVICE_NAME"
+sleep 2
+
+echo ""
+echo -e "\${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+echo -e "\${GREEN}   DEPLOY COMPLETATO ✓\${NC}"
+echo -e "\${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+echo ""
+echo -e "  VPS:        \${CYAN}\$VPS_NAME\${NC}"
+echo -e "  Host:       \${CYAN}\${NETBIRD_IP:-\$PUBLIC_IP}\${NC}"
+echo -e "  Porta:      \${CYAN}\$AGENT_PORT\${NC}"
+echo -e "  API Key:    \${YELLOW}\$AGENT_API_KEY\${NC}"
+echo ""
+echo -e "  \${YELLOW}⚠  SALVA L'API KEY ORA! Non verrà mostrata di nuovo.\${NC}"
+echo ""
+echo -e "  \${CYAN}Ora aggiungi questo VPS nella dashboard:\${NC}"
+echo -e "    Vai su VPS → Aggiungi VPS"
+echo -e "    Nome: \$VPS_NAME"
+echo -e "    Host: \${NETBIRD_IP:-\$PUBLIC_IP}"
+echo -e "    Porta: \$AGENT_PORT"
+echo -e "    API Key: (quella sopra)"
+echo ""
+if systemctl is-active --quiet "\$SERVICE_NAME"; then
+  ok "Agent attivo e funzionante"
+else
+  error "Agent non avviato. Controlla: journalctl -u \$SERVICE_NAME -n 50"
+fi
+`;
+
+      res.json({
+        script,
+        config: {
+          vpsName: name,
+          backendIp: bIp,
+          backendPort: bPort,
+          proxyPort: pPort,
+        },
+        embeddedConfigs: {
+          countryWhitelist: !!countryWhitelist && countryWhitelist.trim().length > 0,
+          blockAsn: !!blockAsn && blockAsn.trim().length > 0,
+          blockIsp: !!blockIsp && blockIsp.trim().length > 0,
+          blockBadAgents: !!blockBadAgents && blockBadAgents.trim().length > 0,
+          ipWhitelist: !!ipWhitelist && ipWhitelist.trim().length > 0,
+          exclusionIp: !!exclusionIp && exclusionIp.trim().length > 0,
+          modsecRelaxed: true,
+          nginxOptimized: true,
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: "Errore generazione script: " + e.message });
+    }
+  });
+
   const server = createServer(app);
   attachSshWebSocket(server);
   return server;
