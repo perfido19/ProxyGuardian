@@ -40,7 +40,9 @@ curl -fsSL "$REPO_URL/agent-bundle.js" -o "$AGENT_DIR/index.js" || {
   cp "$AGENT_DIR/index.js.bak" "$AGENT_DIR/index.js"
   error "Aggiornamento fallito"
 }
-chown "$AGENT_USER:$AGENT_USER" "$AGENT_DIR/index.js"
+# Copia anche come agent-bundle.js per compatibilità con vecchi start.sh
+cp "$AGENT_DIR/index.js" "$AGENT_DIR/agent-bundle.js"
+chown "$AGENT_USER:$AGENT_USER" "$AGENT_DIR/index.js" "$AGENT_DIR/agent-bundle.js"
 ok "Bundle aggiornato"
 
 # ── Aggiorna sudoers ─────────────────────────────────────────────────────────
