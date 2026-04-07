@@ -159,8 +159,10 @@ function TabPanoramica({ vpsId }: { vpsId: string }) {
   (stats?.top || []).forEach(s => {
     const num = ISO2_NUMERIC[s.countryCode];
     if (!num) return;
-    const prev = countryPackets.get(num) || { country: s.country, code2: s.countryCode, packets: 0 };
-    countryPackets.set(num, { ...prev, packets: prev.packets + s.packets });
+    // Store with both string and numeric key since geo.id type varies
+    const entry = { country: s.country, code2: s.countryCode, packets: (countryPackets.get(num)?.packets || 0) + s.packets };
+    countryPackets.set(num, entry);
+    countryPackets.set(String(Number(num)), entry);
   });
   const totalMapPackets = Array.from(countryPackets.values()).reduce((a, b) => a + b.packets, 0) || 1;
   const maxCountryPackets = Math.max(...Array.from(countryPackets.values()).map(v => v.packets), 1);

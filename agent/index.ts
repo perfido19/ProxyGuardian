@@ -104,11 +104,18 @@ app.get("/api/banned-ips", async (_req, res) => {
     const bannedIps: object[] = [];
     for (const jail of jails) {
       const { stdout } = await runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`);
-      // Match "Banned IP list:" line and extract all IPv4 addresses from it (handles any whitespace/comma separator)
       const listLine = stdout.split("\n").find(l => /banned ip list/i.test(l)) || "";
       const ips = listLine.match(/\d+\.\d+\.\d+\.\d+/g) || [];
       for (const ip of ips) {
         bannedIps.push({ ip, jail, banTime: new Date().toISOString() });
+      }
+    }
+    // Aggiungi IP da ipset iptv_ban (anti-iptv.sh)
+    var iptvR = await runCmd("sudo ipset list iptv_ban 2>/dev/null | awk '/^Members:/{found=1;next} found && /^[0-9]/{print $1}' || echo ''");
+    if (iptvR.ok && iptvR.stdout.trim()) {
+      var iptvIps = iptvR.stdout.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return /^\d+\.\d+\.\d+\.\d+$/.test(l); });
+      for (var i = 0; i < iptvIps.length; i++) {
+        bannedIps.push({ ip: iptvIps[i], jail: "anti-iptv", banTime: new Date().toISOString() });
       }
     }
     res.json(bannedIps);
@@ -121,6 +128,11 @@ app.post("/api/unban", async (req, res) => {
   const { ip, jail } = req.body;
   if (!ip || !jail) return res.status(400).json({ error: "ip and jail required" });
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return res.status(400).json({ error: "Invalid IP" });
+  if (jail === "anti-iptv") {
+    const result = await runCmd("sudo ipset del iptv_ban " + ip + " 2>&1");
+    res.json({ ok: result.ok, message: result.ok ? (ip + " rimosso da iptv_ban") : result.stderr });
+    return;
+  }
   const result = await runCmd(`sudo fail2ban-client set ${jail} unbanip ${ip}`);
   res.json({ ok: result.ok, message: result.ok ? `${ip} unbanned from ${jail}` : result.stderr });
 });
@@ -856,16 +868,17 @@ app.get("/api/fail2ban/jails", async (_req, res) => {
     const { stdout: jailList } = await runCmd("sudo fail2ban-client status | grep 'Jail list' | cut -d: -f2");
     const jailNames = jailList.split(",").map(j => j.trim()).filter(Boolean);
     const jails = await Promise.all(jailNames.map(async name => {
-      const { stdout } = await runCmd(`sudo fail2ban-client status ${name}`);
-      const banTimeMatch = stdout.match(/Ban time:\s*(\d+)/);
-      const maxRetryMatch = stdout.match(/Max retry:\s*(\d+)/);
-      const enabledMatch = stdout.match(/Status.*enabled/i);
+      const [banTimeR, maxRetryR, findTimeR] = await Promise.all([
+        runCmd("sudo fail2ban-client get " + name + " bantime 2>/dev/null || echo 600"),
+        runCmd("sudo fail2ban-client get " + name + " maxretry 2>/dev/null || echo 5"),
+        runCmd("sudo fail2ban-client get " + name + " findtime 2>/dev/null || echo 600"),
+      ]);
       return {
         name,
-        enabled: !!enabledMatch,
-        banTime: banTimeMatch ? parseInt(banTimeMatch[1]) : 600,
-        maxRetry: maxRetryMatch ? parseInt(maxRetryMatch[1]) : 5,
-        findTime: 600,
+        enabled: true,
+        banTime: parseInt(banTimeR.stdout.trim()) || 600,
+        maxRetry: parseInt(maxRetryR.stdout.trim()) || 5,
+        findTime: parseInt(findTimeR.stdout.trim()) || 600,
       };
     }));
     res.json(jails);
@@ -886,6 +899,32 @@ app.post("/api/fail2ban/jails/:name", async (req, res) => {
   res.json({ ok: true, message: `Jail ${name} updated` });
 });
 
+// ─── Anti-brute stats ────────────────────────────────────────────────────────
+
+app.get("/api/system/antibrute-stats", async (_req, res) => {
+  try {
+    var jailListR = await runCmd("sudo fail2ban-client status 2>/dev/null | grep 'Jail list' | cut -d: -f2 || echo ''");
+    var jailNames = jailListR.stdout.split(",").map(function(j) { return j.trim(); }).filter(Boolean);
+    var totalBanned = 0;
+    var jailStats: Array<{ name: string; banned: number; failed: number }> = [];
+    for (var i = 0; i < jailNames.length; i++) {
+      var jn = jailNames[i];
+      var sr = await runCmd("sudo fail2ban-client status " + jn + " 2>/dev/null || echo ''");
+      var bannedMatch = sr.stdout.match(/Currently banned:\s*(\d+)/);
+      var failedMatch = sr.stdout.match(/Currently failed:\s*(\d+)/);
+      var banned = bannedMatch ? parseInt(bannedMatch[1]) : 0;
+      var failed = failedMatch ? parseInt(failedMatch[1]) : 0;
+      totalBanned += banned;
+      jailStats.push({ name: jn, banned: banned, failed: failed });
+    }
+    var recentR = await runCmd("grep -E 'Ban |WARNING.*ban' /var/log/fail2ban.log 2>/dev/null | tail -20 || echo ''");
+    var recentBans = recentR.stdout.split("\n").filter(Boolean).reverse();
+    res.json({ totalBanned: totalBanned, jails: jailStats, recentBans: recentBans });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── ASN Block ────────────────────────────────────────────────────────────────
 
 const ASN_BLOCKLIST_FILE = "/etc/asn-blocklist.txt";
@@ -898,7 +937,7 @@ const ASN_CACHE_TTL = 5 * 60 * 1000;
 const ASN_AGENT_USER = process.env.USER || "pgagent";
 
 function spawnAsnUpdate() {
-  var child = spawn("sudo", ["bash", ASN_UPDATE_SCRIPT], { detached: true, stdio: "ignore" });
+  var child = spawn("sudo", ["env", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "bash", ASN_UPDATE_SCRIPT], { detached: true, stdio: "ignore" });
   child.unref();
 }
 
@@ -1099,7 +1138,7 @@ app.post("/api/asn/update-set", async (_req, res) => {
   if (!existsSync(ASN_UPDATE_SCRIPT)) {
     return res.status(404).json({ success: false, error: "Script update-asn-block.sh non trovato. AsnBlock non è installato su questo VPS." });
   }
-  const result = await runCmd("sudo bash " + ASN_UPDATE_SCRIPT + " 2>&1", 120000);
+  const result = await runCmd("sudo env PATH=/usr/sbin:/usr/bin:/sbin:/bin bash " + ASN_UPDATE_SCRIPT + " 2>&1", 120000);
   asnStatsCache = null;
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });

@@ -12,6 +12,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { LoadingState } from "@/components/loading-state";
 import { Search, Shield, FileText, AlertTriangle, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { IpCell } from "@/components/ip-cell";
+import { useIpBatch } from "@/hooks/use-ip-batch";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
 interface BannedIp { ip: string; jail: string; banTime?: string; }
@@ -143,6 +145,8 @@ function BannedIpsTab() {
     return out;
   }, [activeResults]);
 
+  useIpBatch(allBanned.map(b => b.ip));
+
   const filtered = useMemo(() => {
     if (!search) return allBanned;
     const q = search.toLowerCase();
@@ -260,7 +264,7 @@ function BannedIpsTab() {
                       </TableRow>
                     ) : pageRows.map((b, i) => (
                       <TableRow key={i}>
-                        <TableCell className="font-mono font-semibold text-red-400">{b.ip}</TableCell>
+                        <TableCell><IpCell ip={b.ip} className="text-red-400 font-semibold" /></TableCell>
                         <TableCell><Badge variant="outline" className="font-mono text-xs">{b.jail}</Badge></TableCell>
                         <TableCell className="text-sm text-muted-foreground">{b.vpsName}</TableCell>
                         <TableCell className="text-right">

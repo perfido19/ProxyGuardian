@@ -458,17 +458,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // IP info lookup (ASN, org) via ip-api.com con cache 24h
   const _ipInfoCache = new Map<string, { data: { asn: string; org: string; countryCode: string }; at: number }>();
   const IP_INFO_TTL = 24 * 60 * 60 * 1000;
-
-  function parseIpApiItem(item: any): { asn: string; org: string; countryCode: string } {
-    const asnFull: string = item.as || "";
-    return {
-      asn: asnFull.split(" ")[0] || "",
-      org: item.org || asnFull.split(" ").slice(1).join(" ") || "",
-      countryCode: item.countryCode || "",
-    };
-  }
-
-  // Singolo IP (fallback, usato da IpCell se non c'è il batch)
   app.get("/api/ip-info/:ip", requireAuth, async (req, res) => {
     const { ip } = req.params;
     if (!/^[\d.a-fA-F:]+$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
@@ -477,49 +466,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const r = await fetch(`http://ip-api.com/json/${ip}?fields=as,org,countryCode`);
       const d: any = await r.json();
-      const info = parseIpApiItem(d);
+      const asnFull: string = d.as || "";
+      const info = {
+        asn: asnFull.split(" ")[0] || "",
+        org: d.org || asnFull.split(" ").slice(1).join(" ") || "",
+        countryCode: d.countryCode || "",
+      };
       _ipInfoCache.set(ip, { data: info, at: Date.now() });
       res.json(info);
     } catch { res.status(502).json({ error: "Lookup fallito" }); }
-  });
-
-  // Batch IP (una sola richiesta per tabella intera)
-  app.post("/api/ip-info/batch", requireAuth, async (req, res) => {
-    const raw: string[] = Array.isArray(req.body?.ips) ? req.body.ips : [];
-    const ips = [...new Set(raw.filter((ip: string) => typeof ip === "string" && /^[\d.a-fA-F:]+$/.test(ip)))];
-    if (ips.length === 0) return res.json({});
-
-    const result: Record<string, any> = {};
-    const toFetch: string[] = [];
-
-    for (const ip of ips) {
-      const cached = _ipInfoCache.get(ip);
-      if (cached && Date.now() - cached.at < IP_INFO_TTL) {
-        result[ip] = cached.data;
-      } else {
-        toFetch.push(ip);
-      }
-    }
-
-    // ip-api.com batch: max 100 IP per request
-    for (let i = 0; i < toFetch.length; i += 100) {
-      const chunk = toFetch.slice(i, i + 100);
-      try {
-        const r = await fetch("http://ip-api.com/batch?fields=query,as,org,countryCode", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(chunk),
-        });
-        const items: any[] = await r.json();
-        for (const item of items) {
-          const info = parseIpApiItem(item);
-          _ipInfoCache.set(item.query, { data: info, at: Date.now() });
-          result[item.query] = info;
-        }
-      } catch { /* skip chunk, non bloccante */ }
-    }
-
-    res.json(result);
   });
   app.get("/api/logs/:logType", requireAuth, async (req, res) => {
     try { res.json(await storage.getLogs(req.params.logType, parseInt(req.query.lines as string) || 100)); }

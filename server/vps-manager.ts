@@ -142,6 +142,7 @@ export async function checkAllVpsHealth(): Promise<Map<string, boolean>> {
   await Promise.allSettled(enabled.map(async vps => {
     results.set(vps.id, await checkVpsHealth(vps));
   }));
+  saveVpsStore();
   return results;
 }
 

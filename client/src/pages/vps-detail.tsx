@@ -19,6 +19,8 @@ import {
   Play, Square, RotateCw, ShieldOff, Wifi, WifiOff,
   FileText, Settings, Save, AlertTriangle, Search, Plus, Trash2, Network, Radio, ArrowUpCircle,
 } from "lucide-react";
+import { IpCell } from "@/components/ip-cell";
+import { useIpBatch } from "@/hooks/use-ip-batch";
 
 interface ServiceStatus { name: string; status: string; pid?: number; uptime?: string; }
 interface BannedIp { ip: string; jail: string; banTime: string; }
@@ -382,6 +384,7 @@ export default function VpsDetail() {
   const filteredBannedIps = (bannedIps || []).filter(item =>
     !ipSearch || item.ip.includes(ipSearch) || item.jail.toLowerCase().includes(ipSearch.toLowerCase())
   );
+  useIpBatch((bannedIps || []).map(b => b.ip));
 
   const memPct = systemInfo ? Math.round((systemInfo.memory.used / systemInfo.memory.total) * 100) : 0;
   const online = vps.lastStatus === "online";
@@ -582,7 +585,7 @@ export default function VpsDetail() {
                       <TableBody>
                         {filteredBannedIps.map((item, i) => (
                           <TableRow key={i}>
-                            <TableCell className="font-mono text-sm">{item.ip}</TableCell>
+                            <TableCell><IpCell ip={item.ip} /></TableCell>
                             <TableCell><Badge variant="outline">{item.jail}</Badge></TableCell>
                             <TableCell className="text-sm text-muted-foreground">{new Date(item.banTime).toLocaleString("it-IT")}</TableCell>
                             <TableCell className="text-right">

@@ -12,7 +12,6 @@ import { Input } from "@/components/ui/input";
 import { Ban, Search } from "lucide-react";
 import type { BannedIp } from "@shared/schema";
 import { IpCell } from "@/components/ip-cell";
-import { useIpBatch } from "@/hooks/use-ip-batch";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,7 +32,6 @@ interface BannedIpsTableProps {
 export function BannedIpsTable({ bannedIps, onUnban, isUnbanning }: BannedIpsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [unbanDialog, setUnbanDialog] = useState<{ ip: string; jail: string } | null>(null);
-  useIpBatch(bannedIps.map(b => b.ip));
 
   const filteredIps = bannedIps.filter(
     (item) =>

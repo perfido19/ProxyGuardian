@@ -13,6 +13,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
+import { IpCell } from "@/components/ip-cell";
+import { useIpBatch } from "@/hooks/use-ip-batch";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; error?: string; }
 interface Vps { id: string; name: string; }
@@ -215,227 +217,95 @@ function CountriesTab({ refVps, saveTarget, totalCount }: TabProps) {
 
 // ── ASN ────────────────────────────────────────────────────────────────────────
 
-function AsnTab({ refVps, totalCount }: TabProps) {
-  const { toast } = useToast();
-  const [asns, setAsns] = useState<Array<{ asn: string; description?: string }>>([]);
+function AsnTab({ refVps, saveTarget, totalCount }: TabProps) {
+  const [asns, setAsns] = useState<Array<{ number: string; description?: string }>>([]);
   const [newAsn, setNewAsn] = useState(""); const [newDesc, setNewDesc] = useState("");
   const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<BulkResult[]>([]);
+  const saveMutation = useSaveConfig("block_asn.conf", saveTarget);
 
-  const { data: fleetData } = useQuery<{ content: string }>({
-    queryKey: ["fleet-asn-blocklist"],
-    queryFn: async () => { const r = await apiRequest("GET", "/api/fleet/asn/blocklist"); return r.json(); },
+  const { data: configData, isLoading } = useQuery<{ content: string }>({
+    queryKey: ["proxy-config-block_asn", refVps?.id],
+    queryFn: async () => { const r = await apiRequest("GET", `/api/vps/${refVps!.id}/proxy/api/config/block_asn.conf`); return r.json(); },
+    enabled: !!refVps,
   });
-
-  const saveMutation = useMutation({
-    mutationFn: async (content: string) => {
-      const r = await apiRequest("POST", "/api/fleet/asn/blocklist", { content });
-      return r.json();
-    },
-    onSuccess: (data) => {
-      const results: BulkResult[] = data.syncResults || [];
-      setSyncStatus(results);
-      const ok = results.filter(r => r.success).length;
-      const tot = results.length;
-      const failed = results.filter(r => !r.success);
-      if (failed.length > 0) {
-        toast({ title: `Salvato con errori: ${ok}/${tot} VPS`, description: failed.map(r => `${r.vpsName}: ${r.error}`).join(" • "), variant: "destructive" });
-      } else {
-        toast({ title: "Fleet ASN salvato", description: `Sincronizzato su ${ok}/${tot} VPS + repo` });
-      }
-      setHasChanges(false);
-    },
-    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
-  });
-
-  // Formato AsnBlock: "AS12345 # Descrizione"
-  function parseAsnList(content: string): Array<{ asn: string; description?: string }> {
-    return content.split("\n").map(line => {
-      const t = line.trim();
-      if (!t || t.startsWith("#")) return null;
-      const commentIdx = t.indexOf("#");
-      const asn = (commentIdx >= 0 ? t.slice(0, commentIdx) : t).trim().toUpperCase();
-      if (!/^AS\d+$/.test(asn)) return null;
-      const description = commentIdx >= 0 ? t.slice(commentIdx + 1).trim() : undefined;
-      return { asn, description };
-    }).filter(Boolean) as Array<{ asn: string; description?: string }>;
-  }
-
-  function serializeAsnList(list: Array<{ asn: string; description?: string }>): string {
-    return list.map(({ asn, description }) => description ? `${asn} # ${description}` : asn).join("\n") + "\n";
-  }
 
   useEffect(() => {
-    if (fleetData) { setAsns(parseAsnList(fleetData.content)); setHasChanges(false); }
-  }, [fleetData]);
+    if (configData) {
+      const parsed = configData.content.split("\n").map(line => {
+        const t = line.trim();
+        if (!t || t.startsWith("#")) return null;
+        // Format: "12345 1; # Description" or "12345\t1; # Description"
+        const m = t.match(/^(\d+)\s+1;\s*(?:#\s*(.*))?$/);
+        if (!m) return null;
+        return { number: m[1], description: m[2] ? m[2].trim() : undefined };
+      }).filter(Boolean) as Array<{ number: string; description?: string }>;
+      setAsns(parsed);
+      setHasChanges(false);
+    }
+  }, [configData]);
 
   const addAsn = () => {
-    const normalized = newAsn.trim().toUpperCase().startsWith("AS") ? newAsn.trim().toUpperCase() : `AS${newAsn.trim()}`;
-    if (normalized && !asns.find(a => a.asn === normalized)) {
-      setAsns([...asns, { asn: normalized, description: newDesc || undefined }]);
+    const normalized = newAsn.trim().replace(/^AS/i, "");
+    if (normalized && /^\d+$/.test(normalized) && !asns.find(a => a.number === normalized)) {
+      setAsns([...asns, { number: normalized, description: newDesc || undefined }]);
       setNewAsn(""); setNewDesc(""); setHasChanges(true);
     }
   };
 
-  const handleSave = () => { saveMutation.mutate(serializeAsnList(asns)); };
-
-  const handleImportFromVps = async () => {
-    if (!refVps) return;
-    try {
-      const r = await apiRequest("GET", `/api/fleet/asn/blocklist/import/${refVps.id}`);
-      const data = await r.json();
-      if (data.content) {
-        const parsed = parseAsnList(data.content);
-        setAsns(parsed); setHasChanges(true);
-        toast({ title: "Importato", description: `${parsed.length} ASN da ${refVps.name}` });
-      }
-    } catch (e: any) { toast({ title: "Errore", description: e.message, variant: "destructive" }); }
-  };
-
-  const handleSyncGithub = async () => {
-    try {
-      const r = await apiRequest("POST", "/api/fleet/asn/sync-github");
-      const data = await r.json();
-      const ok = (data.results || []).filter((r: BulkResult) => r.success).length;
-      toast({ title: "Sync GitHub completato", description: `${ok}/${(data.results || []).length} VPS aggiornati da AsnBlock repo` });
-    } catch (e: any) { toast({ title: "Errore sync", description: e.message, variant: "destructive" }); }
+  const handleSave = () => {
+    const content = asns.map(({ number, description }) =>
+      description ? `${number} 1; # ${description}` : `${number} 1;`
+    ).join("\n") + "\n";
+    saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
   };
 
   const filtered = search
-    ? asns.filter(a => a.asn.includes(search) || (a.description ?? "").toLowerCase().includes(search.toLowerCase()))
+    ? asns.filter(a => a.number.includes(search) || (a.description ?? "").toLowerCase().includes(search.toLowerCase()))
     : asns;
 
-  return (
-    <div className="mt-4 space-y-4">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Fleet Blacklist ASN</CardTitle>
-              <CardDescription>Blocco iptables/ipset via AsnBlock • salvato nella repo • "Sync da AsnBlock repo" scarica la lista da GitHub</CardDescription>
-            </div>
-            <div className="flex gap-2">
-              {refVps && (
-                <Button variant="outline" size="sm" onClick={handleImportFromVps}>
-                  <Download className="w-4 h-4 mr-1" />Importa da {refVps.name}
-                </Button>
-              )}
-              <Button variant="outline" size="sm" onClick={handleSyncGithub}>
-                <RefreshCw className="w-4 h-4 mr-1" />Sync da AsnBlock repo
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <Input placeholder="ASN (es. AS15169 o 15169)" value={newAsn} onChange={e => setNewAsn(e.target.value)} onKeyDown={e => e.key === "Enter" && addAsn()} />
-            <Input placeholder="Descrizione (opzionale)" value={newDesc} onChange={e => setNewDesc(e.target.value)} />
-            <Button onClick={addAsn}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
-          </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Cerca ASN o descrizione..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
-          </div>
-          {search && <p className="text-xs text-muted-foreground">{filtered.length} / {asns.length} risultati</p>}
-          {(() => {
-            const okCount = syncStatus.length > 0 ? syncStatus.filter(r => r.success).length : totalCount;
-            const totCount = syncStatus.length > 0 ? syncStatus.length : totalCount;
-            const allOk = okCount === totCount;
-            return (
-              <div className="border rounded-md">
-                <Table>
-                  <TableHeader><TableRow><TableHead>ASN</TableHead><TableHead>Descrizione</TableHead><TableHead>Copertura VPS</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {filtered.length === 0 ? (
-                      <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun ASN bloccato"}</TableCell></TableRow>
-                    ) : filtered.map(({ asn, description }) => (
-                      <TableRow key={asn}>
-                        <TableCell className="font-mono font-semibold">{asn}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{description || "—"}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={`text-xs ${allOk ? "border-green-600/40 text-green-600" : "border-yellow-500/40 text-yellow-600"}`}>
-                            {okCount}/{totCount} VPS
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right"><Button variant="ghost" size="icon" onClick={() => { setAsns(asns.filter(a => a.asn !== asn)); setHasChanges(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button></TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            );
-          })()}
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-muted-foreground">{asns.length} ASN bloccati</p>
-            <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
-              <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Sincronizzazione..." : "Salva su repo + tutti i VPS"}
-            </Button>
-          </div>
-          {syncStatus.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-1 border-t">
-              {syncStatus.map(r => (
-                <span
-                  key={r.vpsId}
-                  title={r.success ? `${r.vpsName}: OK` : `${r.vpsName}: ${r.error}`}
-                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border cursor-default ${r.success ? "border-green-600/40 text-green-600" : "border-yellow-500/40 text-yellow-600"}`}
-                >
-                  {r.success
-                    ? <CheckCircle2 className="w-3 h-3" />
-                    : <AlertTriangle className="w-3 h-3" />}
-                  {r.vpsName}
-                </span>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      <AsnWhitelistCard />
-    </div>
-  );
-}
-
-function AsnWhitelistCard() {
-  const { toast } = useToast();
-  const [content, setContent] = useState("");
-  const [hasChanges, setHasChanges] = useState(false);
-
-  const { data } = useQuery<{ content: string }>({
-    queryKey: ["fleet-asn-whitelist"],
-    queryFn: async () => { const r = await apiRequest("GET", "/api/fleet/asn/whitelist"); return r.json(); },
-  });
-
-  useEffect(() => {
-    if (data) { setContent(data.content); setHasChanges(false); }
-  }, [data]);
-
-  const saveMutation = useMutation({
-    mutationFn: async (c: string) => { const r = await apiRequest("POST", "/api/fleet/asn/whitelist", { content: c }); return r.json(); },
-    onSuccess: (data) => {
-      const ok = (data.syncResults || []).filter((r: BulkResult) => r.success).length;
-      const tot = (data.syncResults || []).length;
-      toast({ title: "Whitelist ASN salvata", description: `Sincronizzata su ${ok}/${tot} VPS + repo` });
-      setHasChanges(false);
-    },
-    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
-  });
+  if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
+  if (isLoading) return <LoadingState message="Caricamento..." />;
 
   return (
-    <Card>
+    <Card className="mt-4">
       <CardHeader>
-        <CardTitle>Fleet Whitelist ASN</CardTitle>
-        <CardDescription>CIDR e domini esclusi dal blocco • un valore per riga • sincronizzato nella repo</CardDescription>
+        <CardTitle>Blacklist ASN (nginx)</CardTitle>
+        <CardDescription>Numeri ASN bloccati a livello nginx — /etc/nginx/block_asn.conf</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Textarea
-          value={content}
-          onChange={e => { setContent(e.target.value); setHasChanges(true); }}
-          className="font-mono text-sm min-h-48"
-          placeholder={"# Esempio:\n192.168.0.0/16 # rete interna\ndomain.example.com # provider fidato"}
-        />
-        <div className="flex justify-end">
-          <Button onClick={() => saveMutation.mutate(content)} disabled={!hasChanges || saveMutation.isPending}>
-            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Sincronizzazione..." : "Salva su repo + tutti i VPS"}
+        <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <Input placeholder="Numero ASN (es. 15169)" value={newAsn} onChange={e => setNewAsn(e.target.value.replace(/\D/g, ""))} className="md:col-span-2 font-mono" onKeyDown={e => e.key === "Enter" && addAsn()} />
+          <Input placeholder="Descrizione (opzionale)" value={newDesc} onChange={e => setNewDesc(e.target.value)} />
+          <Button onClick={addAsn}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Cerca ASN o descrizione..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {asns.length} risultati</p>}
+        <div className="border rounded-md">
+          <Table>
+            <TableHeader><TableRow><TableHead>ASN</TableHead><TableHead>Descrizione</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun ASN bloccato"}</TableCell></TableRow>
+              ) : filtered.map(({ number, description }) => (
+                <TableRow key={number}>
+                  <TableCell className="font-mono font-semibold">AS{number}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{description || "—"}</TableCell>
+                  <TableCell><Badge variant="destructive">Bloccato</Badge></TableCell>
+                  <TableCell className="text-right"><Button variant="ghost" size="icon" onClick={() => { setAsns(asns.filter(a => a.number !== number)); setHasChanges(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground">{asns.length} ASN bloccati</p>
+          <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
+            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
       </CardContent>
@@ -1085,6 +955,7 @@ function ModSecTab({ refVps, saveTarget, totalCount }: TabProps) {
     queryFn: async () => { const r = await apiRequest("GET", `/api/vps/${refVps!.id}/proxy/api/modsec/log?lines=200`); return r.json(); },
     enabled: !!refVps && activeSection === "log",
   });
+  useIpBatch((logData?.events || []).map(e => e.ip).filter(Boolean));
 
   useEffect(() => { if (configData) { setConfigContent(configData.content); setConfigChanged(false); } }, [configData]);
   useEffect(() => { if (crsData) { setCrsContent(crsData.content); setCrsChanged(false); } }, [crsData]);
@@ -1255,7 +1126,7 @@ function ModSecTab({ refVps, saveTarget, totalCount }: TabProps) {
                           {logData.events.map((e, i) => (
                             <TableRow key={i}>
                               <TableCell className="text-xs font-mono whitespace-nowrap">{e.timestamp}</TableCell>
-                              <TableCell className="text-xs font-mono">{e.ip}</TableCell>
+                              <TableCell><IpCell ip={e.ip} compact /></TableCell>
                               <TableCell className="text-xs font-mono">{e.method}</TableCell>
                               <TableCell className="text-xs font-mono max-w-[200px] truncate">{e.uri}</TableCell>
                               <TableCell className="text-xs">
