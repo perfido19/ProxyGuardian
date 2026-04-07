@@ -186,6 +186,7 @@ const LOG_PATHS: Record<string, string> = {
   nginx_error: "/var/log/nginx/error.log",
   fail2ban: "/var/log/fail2ban.log",
   system: "/var/log/syslog",
+  anti_iptv: "/var/log/anti-iptv/bans.log",
 };
 
 app.get("/api/logs/:logType", async (req, res) => {

@@ -23,6 +23,7 @@ const LOG_TYPES = [
   { value: "nginx_error", label: "Nginx Error" },
   { value: "fail2ban", label: "Fail2ban" },
   { value: "system", label: "Syslog" },
+  { value: "anti_iptv", label: "Anti-IPTV Bans" },
 ];
 
 const PAGE_SIZE = 100;
