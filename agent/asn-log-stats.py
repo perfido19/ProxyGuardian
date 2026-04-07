@@ -518,9 +518,8 @@ def main():
     source = args.source
     log_file = args.log
 
-    if args.json:
-        if source == "auto":
-            source = "nginx"
+    if source == "auto":
+        source = "kern"
 
     if source == "nginx" and not log_file:
         log_file = NGINX_LOG
