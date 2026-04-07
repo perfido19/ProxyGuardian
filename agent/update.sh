@@ -40,7 +40,9 @@ curl -fsSL "$REPO_URL/agent-bundle.js" -o "$AGENT_DIR/index.js" || {
   cp "$AGENT_DIR/index.js.bak" "$AGENT_DIR/index.js"
   error "Aggiornamento fallito"
 }
-chown "$AGENT_USER:$AGENT_USER" "$AGENT_DIR/index.js"
+# Copia anche come agent-bundle.js per compatibilità con vecchi start.sh
+cp "$AGENT_DIR/index.js" "$AGENT_DIR/agent-bundle.js"
+chown "$AGENT_USER:$AGENT_USER" "$AGENT_DIR/index.js" "$AGENT_DIR/agent-bundle.js"
 ok "Bundle aggiornato"
 
 # ── Aggiorna sudoers ─────────────────────────────────────────────────────────
@@ -71,6 +73,25 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/netbird update
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /etc/systemd/system/netbird.service.d
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird.service.d/restart-nginx.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/bin/netbird-ipset-cleanup.sh
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird-cleanup.service
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod +x /usr/local/bin/netbird-ipset-cleanup.sh
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl enable netbird-cleanup.service
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl disable netbird-cleanup.service
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/sudoers.d/proxy-guardian-agent
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /root/.ssh
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee -a /root/.ssh/authorized_keys
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod 700 /root/.ssh
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod 600 /root/.ssh/authorized_keys
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /var/cache/nginx/epg /var/cache/nginx/streaming
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/epg
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/streaming
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/logrotate.d/proxyguardian
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/logrotate *
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod 644 /etc/logrotate.d/proxyguardian
 SUDOEOF
 chmod 440 "$SUDOERS_FILE"
 ok "Sudoers aggiornati"
