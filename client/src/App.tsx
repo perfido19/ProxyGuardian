@@ -8,6 +8,8 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ProtectedRoute } from "@/components/protected-route";
 import { useAuth } from "@/hooks/use-auth";
 import { UpgradeProvider, useUpgrade } from "@/contexts/upgrade-context";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { MobileShell } from "@/components/mobile/mobile-shell";
 import { UpgradeFloatPanel } from "@/components/upgrade-float-panel";
 import Dashboard from "@/pages/dashboard";
 import Services from "@/pages/services";
@@ -139,7 +141,7 @@ function Router() {
   );
 }
 
-function AppLayout() {
+function DesktopLayout() {
   return (
     <SidebarProvider style={{ "--sidebar-width": "16rem", "--sidebar-width-icon": "3rem" } as React.CSSProperties}>
       <div className="flex h-screen w-full">
@@ -155,6 +157,18 @@ function AppLayout() {
       <UpgradeFloatPanel />
     </SidebarProvider>
   );
+}
+
+function AppLayout() {
+  const isMobile = useIsMobile();
+  if (isMobile) {
+    return (
+      <MobileShell>
+        <Router />
+      </MobileShell>
+    );
+  }
+  return <DesktopLayout />;
 }
 
 export default function App() {

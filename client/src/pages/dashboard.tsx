@@ -132,7 +132,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-3">
               <Wifi className="w-3.5 h-3.5 text-green-500" />Online
             </div>
-            <p className="text-5xl font-heading font-bold text-green-500 leading-none">{totalOnline}</p>
+            <p className="text-3xl md:text-5xl font-heading font-bold text-green-500 leading-none">{totalOnline}</p>
             <p className="text-sm text-muted-foreground mt-2">{pctOnline}% della flotta</p>
           </CardContent>
         </Card>
@@ -141,7 +141,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-3">
               <WifiOff className="w-3.5 h-3.5 text-red-500" />Offline
             </div>
-            <p className="text-5xl font-heading font-bold text-red-500 leading-none">{totalOffline}</p>
+            <p className="text-3xl md:text-5xl font-heading font-bold text-red-500 leading-none">{totalOffline}</p>
             <p className="text-sm text-muted-foreground mt-2">{pctOffline}% della flotta</p>
           </CardContent>
         </Card>
@@ -152,7 +152,7 @@ export default function Dashboard() {
         <Card className="border-card-border">
           <CardContent className="pt-4 pb-4">
             <p className="text-xs font-heading uppercase tracking-wide text-muted-foreground mb-4">Dashboard Host</p>
-            <div className="flex items-stretch">
+            <div className="flex flex-col md:flex-row md:items-stretch gap-4 md:gap-0">
               <div className="flex-1 flex items-center gap-3">
                 <MemoryStick className="w-5 h-5 text-muted-foreground shrink-0" />
                 <div>
@@ -161,7 +161,8 @@ export default function Dashboard() {
                   <p className="text-xs text-muted-foreground mt-0.5">{dashSystem.memory.totalMb} MB totali</p>
                 </div>
               </div>
-              <div className="w-px bg-border mx-4" />
+              <div className="hidden md:block w-px bg-border mx-4" />
+              <div className="h-px bg-border md:hidden" />
               <div className="flex-1 flex items-center gap-3">
                 <HardDrive className="w-5 h-5 text-muted-foreground shrink-0" />
                 <div>
@@ -170,7 +171,8 @@ export default function Dashboard() {
                   <p className="text-xs text-muted-foreground mt-0.5">{dashSystem.disk.used} / {dashSystem.disk.total}</p>
                 </div>
               </div>
-              <div className="w-px bg-border mx-4" />
+              <div className="hidden md:block w-px bg-border mx-4" />
+              <div className="h-px bg-border md:hidden" />
               <div className="flex-1 flex items-center gap-3">
                 <Cpu className="w-5 h-5 text-muted-foreground shrink-0" />
                 <div>

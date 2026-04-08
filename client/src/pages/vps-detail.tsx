@@ -446,17 +446,19 @@ export default function VpsDetail() {
 
       {/* Tabs */}
       <Tabs defaultValue="services">
-        <TabsList className="flex-wrap h-auto gap-1">
-          <TabsTrigger value="services">Servizi</TabsTrigger>
-          <TabsTrigger value="banned">
-            IP Bannati {bannedIps?.length ? <span className="ml-1 bg-destructive text-white text-xs rounded-full px-1.5">{bannedIps.length}</span> : ""}
-          </TabsTrigger>
-          <TabsTrigger value="fail2ban">Fail2ban Jail</TabsTrigger>
-          <TabsTrigger value="configs">Configurazioni</TabsTrigger>
-          <TabsTrigger value="logs">Log</TabsTrigger>
-          <TabsTrigger value="ipset">IPTables</TabsTrigger>
-          <TabsTrigger value="netbird">NetBird</TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0">
+          <TabsList className="flex-nowrap md:flex-wrap h-auto gap-1 w-max md:w-auto">
+            <TabsTrigger value="services">Servizi</TabsTrigger>
+            <TabsTrigger value="banned">
+              IP Bannati {bannedIps?.length ? <span className="ml-1 bg-destructive text-white text-xs rounded-full px-1.5">{bannedIps.length}</span> : ""}
+            </TabsTrigger>
+            <TabsTrigger value="fail2ban">Fail2ban Jail</TabsTrigger>
+            <TabsTrigger value="configs">Configurazioni</TabsTrigger>
+            <TabsTrigger value="logs">Log</TabsTrigger>
+            <TabsTrigger value="ipset">IPTables</TabsTrigger>
+            <TabsTrigger value="netbird">NetBird</TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* ── Servizi ── */}
         <TabsContent value="services" className="space-y-4 pt-4">
@@ -572,7 +574,7 @@ export default function VpsDetail() {
                 ) : filteredBannedIps.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">Nessun risultato per "{ipSearch}"</p>
                 ) : (
-                  <div className="border rounded-md">
+                  <div className="border rounded-md overflow-x-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -655,7 +657,7 @@ export default function VpsDetail() {
                     </div>
                   </div>
                 ) : (
-                  <div className="border rounded-md">
+                  <div className="border rounded-md overflow-x-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>

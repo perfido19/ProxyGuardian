@@ -107,17 +107,19 @@ export default function Firewall() {
         <VpsSelector value={selectedVps} onChange={setSelectedVps} />
       </div>
       <Tabs defaultValue="countries">
-        <TabsList className="flex-wrap h-auto gap-1">
-          <TabsTrigger value="countries">Paesi</TabsTrigger>
-          <TabsTrigger value="asn">ASN</TabsTrigger>
-          <TabsTrigger value="isp">ISP</TabsTrigger>
-          <TabsTrigger value="useragent">User-Agent</TabsTrigger>
-          <TabsTrigger value="baduseragent">Bad User-Agent</TabsTrigger>
-          <TabsTrigger value="ip">IP Whitelist</TabsTrigger>
-          <TabsTrigger value="exclusion">IP Exclusion</TabsTrigger>
-          <TabsTrigger value="iptables">IPTables Banned</TabsTrigger>
-          <TabsTrigger value="modsec">ModSecurity</TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0">
+          <TabsList className="flex-nowrap md:flex-wrap h-auto gap-1 w-max md:w-auto">
+            <TabsTrigger value="countries">Paesi</TabsTrigger>
+            <TabsTrigger value="asn">ASN</TabsTrigger>
+            <TabsTrigger value="isp">ISP</TabsTrigger>
+            <TabsTrigger value="useragent">User-Agent</TabsTrigger>
+            <TabsTrigger value="baduseragent">Bad User-Agent</TabsTrigger>
+            <TabsTrigger value="ip">IP Whitelist</TabsTrigger>
+            <TabsTrigger value="exclusion">IP Exclusion</TabsTrigger>
+            <TabsTrigger value="iptables">IPTables Banned</TabsTrigger>
+            <TabsTrigger value="modsec">ModSecurity</TabsTrigger>
+          </TabsList>
+        </div>
         <TabsContent value="countries"><CountriesTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="asn"><AsnTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
         <TabsContent value="isp"><IspTab refVps={refVps} saveTarget={selectedVps} totalCount={totalCount} /></TabsContent>
@@ -189,7 +191,7 @@ function CountriesTab({ refVps, saveTarget, totalCount }: TabProps) {
           <Input placeholder="Cerca paese..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
         {search && <p className="text-xs text-muted-foreground">{filtered.length} / {countries.length} risultati</p>}
-        <div className="border rounded-md">
+        <div className="border rounded-md overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead>Codice</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
@@ -285,7 +287,7 @@ function AsnTab({ refVps, saveTarget, totalCount }: TabProps) {
           <Input placeholder="Cerca ASN o descrizione..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
         {search && <p className="text-xs text-muted-foreground">{filtered.length} / {asns.length} risultati</p>}
-        <div className="border rounded-md">
+        <div className="border rounded-md overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead>ASN</TableHead><TableHead>Descrizione</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
@@ -374,7 +376,7 @@ function IspTab({ refVps, saveTarget, totalCount }: TabProps) {
           <Input placeholder="Cerca ISP..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
         {search && <p className="text-xs text-muted-foreground">{filtered.length} / {isps.length} risultati</p>}
-        <div className="border rounded-md">
+        <div className="border rounded-md overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead>ISP</TableHead><TableHead>Tipo</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
@@ -458,7 +460,7 @@ function UserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
           <Input placeholder="Cerca pattern..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
         {search && <p className="text-xs text-muted-foreground">{filtered.length} / {patterns.length} risultati</p>}
-        <div className="border rounded-md">
+        <div className="border rounded-md overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead>Pattern</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
@@ -541,7 +543,7 @@ function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
           <Input placeholder="Cerca pattern..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
         {search && <p className="text-xs text-muted-foreground">{filtered.length} / {patterns.length} risultati</p>}
-        <div className="border rounded-md">
+        <div className="border rounded-md overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead>Pattern</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
@@ -621,7 +623,7 @@ function IpWhitelistTab({ refVps, saveTarget, totalCount }: TabProps) {
           <Input placeholder="Cerca IP o range..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 font-mono" />
         </div>
         {search && <p className="text-xs text-muted-foreground">{filtered.length} / {ips.length} risultati</p>}
-        <div className="border rounded-md">
+        <div className="border rounded-md overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead>IP / Range</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
@@ -701,7 +703,7 @@ function ExclusionIpTab({ refVps, saveTarget, totalCount }: TabProps) {
           <Input placeholder="Cerca IP o range..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 font-mono" />
         </div>
         {search && <p className="text-xs text-muted-foreground">{filtered.length} / {ips.length} risultati</p>}
-        <div className="border rounded-md">
+        <div className="border rounded-md overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead>IP / Range</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
@@ -784,7 +786,7 @@ function IpTablesSearchTab() {
         </div>
         {search && <p className="text-xs text-muted-foreground">{filtered.length} / {bannedEntries.length} risultati</p>}
         {isLoading ? <LoadingState message="Caricamento regole..." /> : (
-          <div className="border rounded-md">
+          <div className="border rounded-md overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -863,7 +865,7 @@ function IpSetViewTab() {
           filtered.map((r: any) => (
             <div key={r.vpsId} className="space-y-2">
               <p className="text-sm font-semibold">{r.vpsName}</p>
-              <div className="border rounded-md">
+              <div className="border rounded-md overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
