@@ -95,7 +95,7 @@ export function deleteVps(id: string): void {
 const REQUEST_TIMEOUT = 10000;
 export const SLOW_REQUEST_TIMEOUT = 120000;
 
-export const SLOW_PATHS = ["/api/asn/update-lists", "/api/asn/update-set"];
+export const SLOW_PATHS = ["/api/asn/update-lists", "/api/asn/update-set", "/api/unban-all", "/api/unban-jail"];
 
 async function agentFetch(vps: VpsConfig, path: string, options: RequestInit = {}, timeout = REQUEST_TIMEOUT): Promise<Response> {
   const url = `http://${vps.host}:${vps.port}${path}`;

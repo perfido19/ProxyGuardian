@@ -76,6 +76,7 @@ export default function VpsDetail() {
   const [logType, setLogType] = useState("nginx_access");
   const [editingJail, setEditingJail] = useState<Jail | null>(null);
   const [ipSearch, setIpSearch] = useState("");
+  const [jailFilter, setJailFilter] = useState("");
   const [logSearch, setLogSearch] = useState("");
   const [debouncedLogSearch, setDebouncedLogSearch] = useState("");
   const [selectedIpset, setSelectedIpset] = useState("");
@@ -193,6 +194,19 @@ export default function VpsDetail() {
     onSuccess: (data: any) => {
       refetchBanned();
       toast({ title: "Tutti gli IP sbloccati", description: `${data.unbannedCount} IP sbloccati` });
+    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const unbanJailMutation = useMutation({
+    mutationFn: async (jail: string) => {
+      const r = await apiRequest("POST", proxy("/api/unban-jail"), { jail });
+      return r.json();
+    },
+    onSuccess: (data: any, jail: string) => {
+      refetchBanned();
+      setJailFilter("");
+      toast({ title: `Jail "${jail}" svuotata`, description: `${data.unbannedCount || 0} IP sbloccati` });
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
@@ -381,8 +395,10 @@ export default function VpsDetail() {
     !ipsetSearch || ip.includes(ipsetSearch)
   );
 
+  const uniqueJails = [...new Set((bannedIps || []).map(b => b.jail))];
   const filteredBannedIps = (bannedIps || []).filter(item =>
-    !ipSearch || item.ip.includes(ipSearch) || item.jail.toLowerCase().includes(ipSearch.toLowerCase())
+    (!jailFilter || item.jail === jailFilter) &&
+    (!ipSearch || item.ip.includes(ipSearch) || item.jail.toLowerCase().includes(ipSearch.toLowerCase()))
   );
   useIpBatch((bannedIps || []).map(b => b.ip));
 
@@ -539,17 +555,36 @@ export default function VpsDetail() {
                     <CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />IP Bannati</CardTitle>
                     <CardDescription>{bannedIps?.length || 0} IP bannati attualmente</CardDescription>
                   </div>
-                  {(bannedIps?.length ?? 0) > 0 && (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => ipSearch ? unbanFilteredMutation.mutate(filteredBannedIps) : unbanAllMutation.mutate()}
-                      disabled={ipSearch ? unbanFilteredMutation.isPending : unbanAllMutation.isPending}
-                    >
-                      <ShieldOff className="w-4 h-4 mr-1" />
-                      {ipSearch ? `Sblocca filtrati (${filteredBannedIps.length})` : "Sblocca tutti"}
-                    </Button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {uniqueJails.length > 1 && (
+                      <Select value={jailFilter} onValueChange={setJailFilter}>
+                        <SelectTrigger className="h-8 w-[140px] text-xs">
+                          <SelectValue placeholder="Tutte le jail" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Tutte le jail</SelectItem>
+                          {uniqueJails.map(j => (
+                            <SelectItem key={j} value={j}>{j}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    {(bannedIps?.length ?? 0) > 0 && (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => {
+                          if (ipSearch) unbanFilteredMutation.mutate(filteredBannedIps);
+                          else if (jailFilter) unbanJailMutation.mutate(jailFilter);
+                          else unbanAllMutation.mutate();
+                        }}
+                        disabled={ipSearch ? unbanFilteredMutation.isPending : jailFilter ? unbanJailMutation.isPending : unbanAllMutation.isPending}
+                      >
+                        <ShieldOff className="w-4 h-4 mr-1" />
+                        {ipSearch ? `Sblocca filtrati (${filteredBannedIps.length})` : jailFilter ? `Sblocca jail "${jailFilter}"` : "Sblocca tutti"}
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">

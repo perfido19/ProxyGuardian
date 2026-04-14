@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { totalmem, freemem, cpus } from "os";
 import { execSync } from "child_process";
 import { storage } from "./storage";
-import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
+import { serviceActionSchema, unbanRequestSchema, unbanJailRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
 import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
@@ -453,6 +453,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { res.status(500).json({ error: "Errore" }); }
   });
   app.post("/api/unban-all", requireAuth, requireOperator, async (_req, res) => { try { res.json(await storage.unbanAll()); } catch { res.status(500).json({ error: "Errore" }); } });
+  app.post("/api/unban-jail", requireAuth, requireOperator, async (req, res) => {
+    try {
+      const r = unbanJailRequestSchema.safeParse(req.body);
+      if (!r.success) return res.status(400).json({ error: "Parametri non validi" });
+      res.json(await storage.unbanJail(r.data.jail));
+    } catch { res.status(500).json({ error: "Errore" }); }
+  });
   app.get("/api/stats", requireAuth, async (_req, res) => { try { res.json(await storage.getStats()); } catch { res.status(500).json({ error: "Errore" }); } });
 
   // IP info lookup (ASN, org) via ip-api.com con cache 24h

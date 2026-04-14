@@ -94,6 +94,7 @@ export interface IStorage {
   // Banned IPs
   getBannedIps(): Promise<BannedIp[]>;
   unbanIp(ip: string, jail: string): Promise<void>;
+  unbanJail(jail: string): Promise<{ unbannedCount: number }>;
   
   // Statistics
   getStats(): Promise<Stats>;
@@ -414,6 +415,38 @@ export class MemStorage implements IStorage {
     }
 
     await execAsync(`fail2ban-client set ${jail} unbanip ${ip}`, { timeout: 5000 });
+  }
+
+  async unbanJail(jail: string): Promise<{ unbannedCount: number }> {
+    await this.caps.detect();
+
+    if (!this.caps.hasFail2ban) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      console.log(`[Mock] Unban jail: ${jail}`);
+      return { unbannedCount: 5 };
+    }
+
+    let unbannedCount = 0;
+    try {
+      const { stdout: jailStatus } = await execAsync(`fail2ban-client status ${jail}`, { timeout: 5000 });
+      const ipListMatch = jailStatus.match(/Banned IP list:\s*(.+)/);
+      if (ipListMatch) {
+        const ips = ipListMatch[1].trim().split(/\s+/).filter(ip => ip);
+        for (const ip of ips) {
+          try {
+            await execAsync(`fail2ban-client set ${jail} unbanip ${ip}`, { timeout: 3000 });
+            unbannedCount++;
+          } catch (error) {
+            console.error(`Error unbanning ${ip} from ${jail}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Error unbanning jail ${jail}:`, error);
+      throw new Error(`Errore durante lo sblocco della jail ${jail}`);
+    }
+
+    return { unbannedCount };
   }
 
   async unbanAll(): Promise<{ unbannedCount: number; jailsProcessed: number }> {

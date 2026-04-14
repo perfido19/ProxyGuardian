@@ -35,6 +35,12 @@ export const unbanRequestSchema = z.object({
 
 export type UnbanRequest = z.infer<typeof unbanRequestSchema>;
 
+export const unbanJailRequestSchema = z.object({
+  jail: z.string().min(1),
+});
+
+export type UnbanJailRequest = z.infer<typeof unbanJailRequestSchema>;
+
 // Statistics
 export const statsSchema = z.object({
   totalBans24h: z.number(),

@@ -138,21 +138,29 @@ app.post("/api/unban", async (req, res) => {
 });
 
 app.post("/api/unban-all", async (_req, res) => {
-  const { stdout: jailList } = await runCmd("sudo fail2ban-client status | grep 'Jail list' | cut -d: -f2");
-  const jails = jailList.split(",").map(j => j.trim()).filter(Boolean);
-  let total = 0;
-  for (const jail of jails) {
-    const { stdout } = await runCmd(`sudo fail2ban-client status ${jail}`);
-    const match = stdout.match(/Banned IP list:\s*([\d\.\s,]+)/);
-    if (match) {
-      const ips = match[1].split(/[\s,]+/).filter(ip => /^\d+\.\d+\.\d+\.\d+$/.test(ip));
-      for (const ip of ips) {
-        await runCmd(`sudo fail2ban-client set ${jail} unbanip ${ip}`);
-        total++;
-      }
-    }
+  const { stdout, ok } = await runCmd("sudo fail2ban-client unban --all 2>&1");
+  if (!ok) return res.status(500).json({ error: stdout });
+  const unbannedCount = parseInt(stdout.trim()) || 0;
+  res.json({ ok: true, unbannedCount });
+});
+
+app.post("/api/unban-jail", async (req, res) => {
+  var jail = req.body.jail;
+  if (!jail) return res.status(400).json({ error: "jail required" });
+  if (!/^[\w-]+$/.test(jail)) return res.status(400).json({ error: "Invalid jail name" });
+  if (jail === "anti-iptv") {
+    var result = await runCmd("sudo ipset flush iptv_ban 2>&1");
+    return res.json({ ok: result.ok, unbannedCount: 0 });
   }
-  res.json({ ok: true, unbannedCount: total, jailsProcessed: jails.length });
+  var jailStatus = await runCmd("sudo fail2ban-client status " + jail + " 2>&1");
+  var ipListMatch = jailStatus.stdout.match(/Banned IP list:\s*(.+)/);
+  var ips = ipListMatch ? ipListMatch[1].trim().split(/\s+/).filter(function(ip: string) { return ip; }) : [];
+  var unbannedCount = 0;
+  for (var i = 0; i < ips.length; i++) {
+    var r = await runCmd("sudo fail2ban-client set " + jail + " unbanip " + ips[i] + " 2>&1");
+    if (r.ok) unbannedCount++;
+  }
+  res.json({ ok: true, unbannedCount });
 });
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
