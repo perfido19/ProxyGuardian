@@ -24482,6 +24482,7 @@ var import_promises = require("fs/promises");
 var import_fs = require("fs");
 var import_path = __toESM(require("path"), 1);
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
+var CMD_MAX_BUFFER = 16 * 1024 * 1024;
 var app = (0, import_express.default)();
 app.use(import_express.default.json());
 var AGENT_VERSION = "1.3.3";
@@ -24503,7 +24504,7 @@ app.get("/health", (_req, res) => {
 });
 async function runCmd(cmd, timeout = 1e4) {
   try {
-    const { stdout, stderr } = await execAsync(cmd, { timeout });
+    const { stdout, stderr } = await execAsync(cmd, { timeout, maxBuffer: CMD_MAX_BUFFER });
     return { stdout: stdout.trim(), stderr: stderr.trim(), ok: true };
   } catch (err) {
     return { stdout: err.stdout ? err.stdout.trim() : "", stderr: err.stderr ? err.stderr.trim() : err.message, ok: false };
@@ -24831,7 +24832,7 @@ function parseIpsetList(output) {
 }
 app.get("/api/ipset", async (_req, res) => {
   try {
-    const { stdout, ok } = await runCmd("sudo ipset list");
+    const { stdout, ok } = await runCmd("sudo ipset list -t");
     if (!ok) return res.status(500).json({ error: "ipset non disponibile" });
     const sets = parseIpsetList(stdout);
     res.json(sets.map(({ members, ...meta }) => ({ ...meta, count: members.length })));

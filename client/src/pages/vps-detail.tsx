@@ -164,9 +164,11 @@ export default function VpsDetail() {
   });
 
   // Keep textarea in sync with fetched data (only when not editing)
-  if (configData && configContent === null) {
-    setConfigContent(configData.content);
-  }
+  useEffect(() => {
+    if (configData && configContent === null) {
+      setConfigContent(configData.content);
+    }
+  }, [configData]);
 
   const serviceActionMutation = useMutation({
     mutationFn: async ({ service, action }: { service: string; action: string }) => {
@@ -381,6 +383,8 @@ export default function VpsDetail() {
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
+  useIpBatch((bannedIps || []).map(b => b.ip));
+
   if (!vpsList) return <LoadingState message="Caricamento..." />;
   if (!vps) {
     return (
@@ -400,7 +404,6 @@ export default function VpsDetail() {
     (!jailFilter || item.jail === jailFilter) &&
     (!ipSearch || item.ip.includes(ipSearch) || item.jail.toLowerCase().includes(ipSearch.toLowerCase()))
   );
-  useIpBatch((bannedIps || []).map(b => b.ip));
 
   const memPct = systemInfo ? Math.round((systemInfo.memory.used / systemInfo.memory.total) * 100) : 0;
   const online = vps.lastStatus === "online";
@@ -557,12 +560,12 @@ export default function VpsDetail() {
                   </div>
                   <div className="flex items-center gap-2">
                     {uniqueJails.length > 1 && (
-                      <Select value={jailFilter} onValueChange={setJailFilter}>
+                      <Select value={jailFilter || "__all__"} onValueChange={v => setJailFilter(v === "__all__" ? "" : v)}>
                         <SelectTrigger className="h-8 w-[140px] text-xs">
                           <SelectValue placeholder="Tutte le jail" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Tutte le jail</SelectItem>
+                          <SelectItem value="__all__">Tutte le jail</SelectItem>
                           {uniqueJails.map(j => (
                             <SelectItem key={j} value={j}>{j}</SelectItem>
                           ))}
@@ -622,7 +625,7 @@ export default function VpsDetail() {
                       <TableBody>
                         {filteredBannedIps.map((item, i) => (
                           <TableRow key={i}>
-                            <TableCell><IpCell ip={item.ip} /></TableCell>
+                            <TableCell><IpCell ip={item.ip} deferFetch /></TableCell>
                             <TableCell><Badge variant="outline">{item.jail}</Badge></TableCell>
                             <TableCell className="text-sm text-muted-foreground">{new Date(item.banTime).toLocaleString("it-IT")}</TableCell>
                             <TableCell className="text-right">

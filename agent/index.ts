@@ -6,6 +6,7 @@ import { constants, existsSync } from "fs";
 import path from "path";
 
 const execAsync = promisify(exec);
+const CMD_MAX_BUFFER = 16 * 1024 * 1024;
 
 const app = express();
 app.use(express.json());
@@ -40,7 +41,7 @@ app.get("/health", (_req, res) => {
 
 async function runCmd(cmd: string, timeout = 10000): Promise<{ stdout: string; stderr: string; ok: boolean }> {
   try {
-    const { stdout, stderr } = await execAsync(cmd, { timeout });
+    const { stdout, stderr } = await execAsync(cmd, { timeout, maxBuffer: CMD_MAX_BUFFER });
     return { stdout: stdout.trim(), stderr: stderr.trim(), ok: true };
   } catch (err: any) {
     return { stdout: err.stdout ? err.stdout.trim() : "", stderr: err.stderr ? err.stderr.trim() : err.message, ok: false };
@@ -418,7 +419,7 @@ function parseIpsetList(output: string): Array<{ name: string; type: string; cou
 
 app.get("/api/ipset", async (_req, res) => {
   try {
-    const { stdout, ok } = await runCmd("sudo ipset list");
+    const { stdout, ok } = await runCmd("sudo ipset list -t");
     if (!ok) return res.status(500).json({ error: "ipset non disponibile" });
     const sets = parseIpsetList(stdout);
     res.json(sets.map(({ members, ...meta }) => ({ ...meta, count: members.length })));

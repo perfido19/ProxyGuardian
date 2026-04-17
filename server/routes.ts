@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { totalmem, freemem, cpus } from "os";
 import { execSync } from "child_process";
+import { randomBytes } from "crypto";
+import { open as openMaxMind, type Reader, validate as validateIp } from "maxmind";
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, unbanJailRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
@@ -10,25 +12,230 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import session from "express-session";
+import createFileStore from "session-file-store";
 import { startUpgradeJob, subscribeToJob, getJobSnapshot, getJobLogs, getActiveJob } from "./fleet-upgrade";
 import { generateSshToken, attachSshWebSocket } from "./ssh-console";
+
+const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), "data");
+const SESSION_SECRET_FILE = join(DATA_DIR, ".session-secret");
+const SESSION_DIR = join(DATA_DIR, "sessions");
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const FileStore = createFileStore(session);
+const GEOLITE2_ASN_DB_PATH = process.env.GEOLITE2_ASN_DB_PATH?.trim() || "/var/lib/GeoIP/GeoLite2-ASN.mmdb";
+const GEOLITE2_COUNTRY_DB_PATH = process.env.GEOLITE2_COUNTRY_DB_PATH?.trim() || "/var/lib/GeoIP/GeoLite2-Country.mmdb";
+const IP_API_TIMEOUT_MS = parseInt(process.env.IP_API_TIMEOUT_MS || "1500", 10);
+const IP_API_BACKOFF_MS = parseInt(process.env.IP_API_BACKOFF_MS || "60000", 10);
+
+type IpInfo = { asn: string; org: string; countryCode: string };
+type IpInfoCacheEntry = { data: IpInfo; at: number };
+type DeferredIpInfo = {
+  promise: Promise<IpInfo>;
+  resolve: (data: IpInfo) => void;
+  reject: (error?: unknown) => void;
+};
+
+let asnReaderPromise: Promise<Reader<any> | null> | null = null;
+let countryReaderPromise: Promise<Reader<any> | null> | null = null;
+let ipApiBackoffUntil = 0;
+const ipInfoCache = new Map<string, IpInfoCacheEntry>();
+const ipInfoInFlight = new Map<string, Promise<IpInfo>>();
+const IP_INFO_TTL = 48 * 60 * 60 * 1000;
 
 // Percorsi proxy che un operator può modificare (POST)
 const OPERATOR_WRITE_PATHS = [
   /^\/api\/services\/[^/]+\/action$/,
   /^\/api\/unban$/,
   /^\/api\/unban-all$/,
+  /^\/api\/unban-jail$/,
 ];
 
 function isOperatorAllowedPost(path: string): boolean {
   return OPERATOR_WRITE_PATHS.some(r => r.test(path));
 }
 
+function getSessionSecret(): string {
+  const fromEnv = process.env.SESSION_SECRET?.trim();
+  if (fromEnv) return fromEnv;
+
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+
+  if (existsSync(SESSION_SECRET_FILE)) {
+    const existing = readFileSync(SESSION_SECRET_FILE, "utf-8").trim();
+    if (existing) return existing;
+  }
+
+  const generated = randomBytes(32).toString("hex");
+  writeFileSync(SESSION_SECRET_FILE, `${generated}\n`, { mode: 0o600 });
+  console.warn(`[Session] SESSION_SECRET non impostato: secret persistente generato in ${SESSION_SECRET_FILE}`);
+  return generated;
+}
+
+async function loadMaxMindReader(path: string): Promise<Reader<any> | null> {
+  if (!existsSync(path)) return null;
+  try {
+    return await openMaxMind(path);
+  } catch (error) {
+    console.warn(`[GeoIP] Impossibile aprire database MaxMind ${path}:`, error);
+    return null;
+  }
+}
+
+async function getAsnReader(): Promise<Reader<any> | null> {
+  asnReaderPromise ??= loadMaxMindReader(GEOLITE2_ASN_DB_PATH);
+  return asnReaderPromise;
+}
+
+async function getCountryReader(): Promise<Reader<any> | null> {
+  countryReaderPromise ??= loadMaxMindReader(GEOLITE2_COUNTRY_DB_PATH);
+  return countryReaderPromise;
+}
+
+function normalizeIpInfo(data?: Partial<IpInfo> | null): IpInfo | null {
+  if (!data) return null;
+  const normalized: IpInfo = {
+    asn: data.asn?.trim() || "",
+    org: data.org?.trim() || "",
+    countryCode: data.countryCode?.trim() || "",
+  };
+  return normalized.asn || normalized.org || normalized.countryCode ? normalized : null;
+}
+
+async function lookupMaxMindIpInfo(ip: string): Promise<IpInfo | null> {
+  if (!validateIp(ip)) return null;
+
+  const [asnReader, countryReader] = await Promise.all([getAsnReader(), getCountryReader()]);
+  const asnData = asnReader?.get(ip) as any;
+  const countryData = countryReader?.get(ip) as any;
+
+  return normalizeIpInfo({
+    asn: asnData?.autonomous_system_number ? `AS${asnData.autonomous_system_number}` : "",
+    org: asnData?.autonomous_system_organization || "",
+    countryCode: countryData?.country?.iso_code || countryData?.registered_country?.iso_code || "",
+  });
+}
+
+function mergeIpInfo(primary?: IpInfo | null, fallback?: IpInfo | null): IpInfo | null {
+  return normalizeIpInfo({
+    asn: primary?.asn || fallback?.asn || "",
+    org: primary?.org || fallback?.org || "",
+    countryCode: primary?.countryCode || fallback?.countryCode || "",
+  });
+}
+
+function shouldUseIpApi(): boolean {
+  return Date.now() >= ipApiBackoffUntil;
+}
+
+function noteIpApiFailure(): void {
+  ipApiBackoffUntil = Date.now() + IP_API_BACKOFF_MS;
+}
+
+function noteIpApiSuccess(): void {
+  ipApiBackoffUntil = 0;
+}
+
+function getCachedIpInfo(ip: string): IpInfo | null {
+  const cached = ipInfoCache.get(ip);
+  if (!cached || Date.now() - cached.at >= IP_INFO_TTL) return null;
+  return cached.data;
+}
+
+function setCachedIpInfo(ip: string, data: IpInfo): void {
+  ipInfoCache.set(ip, { data, at: Date.now() });
+}
+
+function createDeferredIpInfo(ip: string): DeferredIpInfo {
+  let resolve!: (data: IpInfo) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<IpInfo>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  const trackedPromise = promise.finally(() => {
+    if (ipInfoInFlight.get(ip) === trackedPromise) {
+      ipInfoInFlight.delete(ip);
+    }
+  });
+  ipInfoInFlight.set(ip, trackedPromise);
+  return { promise: trackedPromise, resolve, reject };
+}
+
+async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = IP_API_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function lookupIpApiInfo(ip: string): Promise<IpInfo | null> {
+  if (!shouldUseIpApi()) return null;
+  const r = await fetchWithTimeout(`http://ip-api.com/json/${ip}?fields=status,as,org,isp,countryCode`);
+  const item = await r.json() as any;
+  if (item?.status && item.status !== "success") return null;
+  return normalizeIpInfo({
+    asn: item?.as || "",
+    org: item?.org || item?.isp || "",
+    countryCode: item?.countryCode || "",
+  });
+}
+
+async function lookupIpInfo(ip: string): Promise<IpInfo> {
+  const maxMindInfoPromise = lookupMaxMindIpInfo(ip);
+  let ipApiInfo: IpInfo | null = null;
+  try {
+    ipApiInfo = await lookupIpApiInfo(ip);
+    if (ipApiInfo) noteIpApiSuccess();
+  } catch {
+    noteIpApiFailure();
+    ipApiInfo = null;
+  }
+
+  if (ipApiInfo?.asn && ipApiInfo.org && ipApiInfo.countryCode) {
+    return ipApiInfo;
+  }
+
+  const maxMindInfo = await maxMindInfoPromise;
+  return mergeIpInfo(ipApiInfo, maxMindInfo) || { asn: "", org: "", countryCode: "" };
+}
+
+async function getOrLoadIpInfo(ip: string): Promise<IpInfo> {
+  const cached = getCachedIpInfo(ip);
+  if (cached) return cached;
+
+  const existing = ipInfoInFlight.get(ip);
+  if (existing) return existing;
+
+  const deferred = createDeferredIpInfo(ip);
+  try {
+    const data = await lookupIpInfo(ip);
+    setCachedIpInfo(ip, data);
+    deferred.resolve(data);
+    return data;
+  } catch (error) {
+    deferred.reject(error);
+    throw error;
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
+  if (!existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+
+  const sessionStore = new FileStore({
+    path: SESSION_DIR,
+    ttl: Math.floor(SESSION_TTL_MS / 1000),
+    reapInterval: Math.floor(SESSION_TTL_MS / 1000),
+    retries: 0,
+    logFn: () => {},
+  });
+
   app.use(session({
-    secret: process.env.SESSION_SECRET || "proxydashboard_dev_secret",
+    secret: getSessionSecret(),
+    store: sessionStore,
     resave: false, saveUninitialized: false,
-    cookie: { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 8 * 60 * 60 * 1000 },
+    cookie: { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: SESSION_TTL_MS },
   }));
 
   // Auth
@@ -462,68 +669,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   app.get("/api/stats", requireAuth, async (_req, res) => { try { res.json(await storage.getStats()); } catch { res.status(500).json({ error: "Errore" }); } });
 
-  // IP info lookup (ASN, org) via ip-api.com con cache 24h
-  const _ipInfoCache = new Map<string, { data: { asn: string; org: string; countryCode: string }; at: number }>();
-  const IP_INFO_TTL = 24 * 60 * 60 * 1000;
-
-  function parseIpApiItem(item: any): { asn: string; org: string; countryCode: string } {
-    const asnFull: string = item.as || "";
-    return {
-      asn: asnFull.split(" ")[0] || "",
-      org: item.org || asnFull.split(" ").slice(1).join(" ") || "",
-      countryCode: item.countryCode || "",
-    };
-  }
-
-  // Singolo IP (fallback, usato da IpCell se non c'è il batch)
+  // Singolo IP
   app.get("/api/ip-info/:ip", requireAuth, async (req, res) => {
-    const { ip } = req.params;
-    if (!/^[\d.a-fA-F:]+$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
-    const cached = _ipInfoCache.get(ip);
-    if (cached && Date.now() - cached.at < IP_INFO_TTL) return res.json(cached.data);
-    try {
-      const r = await fetch(`http://ip-api.com/json/${ip}?fields=as,org,countryCode`);
-      const d: any = await r.json();
-      const info = parseIpApiItem(d);
-      _ipInfoCache.set(ip, { data: info, at: Date.now() });
-      res.json(info);
-    } catch { res.status(502).json({ error: "Lookup fallito" }); }
+    const ip = req.params.ip;
+    if (!validateIp(ip)) return res.status(400).json({ error: "IP non valido" });
+    const data = await getOrLoadIpInfo(ip);
+    res.json(data);
   });
 
-  // Batch IP (una sola richiesta per tabella intera)
+  // Batch IP (max 100, cache 48h)
   app.post("/api/ip-info/batch", requireAuth, async (req, res) => {
-    const raw: string[] = Array.isArray(req.body?.ips) ? req.body.ips : [];
-    const ips = [...new Set(raw.filter((ip: string) => typeof ip === "string" && /^[\d.a-fA-F:]+$/.test(ip)))];
-    if (ips.length === 0) return res.json({});
-
-    const result: Record<string, any> = {};
-    const toFetch: string[] = [];
+    const ips: string[] = Array.isArray(req.body?.ips)
+      ? req.body.ips.filter((ip: unknown): ip is string => typeof ip === "string" && validateIp(ip)).slice(0, 100)
+      : [];
+    const result: Record<string, { asn: string; org: string; countryCode: string }> = {};
+    const owned = new Map<string, DeferredIpInfo>();
+    const shared = new Map<string, Promise<IpInfo>>();
 
     for (const ip of ips) {
-      const cached = _ipInfoCache.get(ip);
-      if (cached && Date.now() - cached.at < IP_INFO_TTL) {
-        result[ip] = cached.data;
-      } else {
-        toFetch.push(ip);
+      const cached = getCachedIpInfo(ip);
+      if (cached) {
+        result[ip] = cached;
+        continue;
+      }
+
+      const existing = ipInfoInFlight.get(ip);
+      if (existing) {
+        shared.set(ip, existing);
+        continue;
+      }
+
+      owned.set(ip, createDeferredIpInfo(ip));
+    }
+
+    const ownedIps = [...owned.keys()];
+    if (ownedIps.length > 0) {
+      try {
+        const maxMindByIp = new Map<string, IpInfo | null>(
+          await Promise.all(ownedIps.map(async ip => [ip, await lookupMaxMindIpInfo(ip)] as const))
+        );
+        const unresolved = new Set(ownedIps);
+
+        if (shouldUseIpApi()) {
+          try {
+            const r = await fetchWithTimeout("http://ip-api.com/batch?fields=status,query,as,org,isp,countryCode", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(ownedIps.map(q => ({ query: q }))),
+            });
+            const items = await r.json() as any[];
+            noteIpApiSuccess();
+            for (const item of items) {
+              const ip = item?.query;
+              if (!ip || !owned.has(ip)) continue;
+              unresolved.delete(ip);
+              const data = mergeIpInfo(
+                normalizeIpInfo({
+                  asn: item?.status === "success" ? item.as || "" : "",
+                  org: item?.status === "success" ? item.org || item.isp || "" : "",
+                  countryCode: item?.status === "success" ? item.countryCode || "" : "",
+                }),
+                maxMindByIp.get(ip) || null,
+              ) || { asn: "", org: "", countryCode: "" };
+              setCachedIpInfo(ip, data);
+              owned.get(ip)?.resolve(data);
+              result[ip] = data;
+            }
+          } catch {
+            noteIpApiFailure();
+          }
+        }
+
+        for (const ip of unresolved) {
+          const data = maxMindByIp.get(ip) || { asn: "", org: "", countryCode: "" };
+          setCachedIpInfo(ip, data);
+          owned.get(ip)?.resolve(data);
+          result[ip] = data;
+        }
+      } catch (error) {
+        for (const ip of ownedIps) {
+          owned.get(ip)?.reject(error);
+        }
+        throw error;
       }
     }
 
-    // ip-api.com batch: max 100 IP per request
-    for (let i = 0; i < toFetch.length; i += 100) {
-      const chunk = toFetch.slice(i, i + 100);
-      try {
-        const r = await fetch("http://ip-api.com/batch?fields=query,as,org,countryCode", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(chunk),
-        });
-        const items: any[] = await r.json();
-        for (const item of items) {
-          const info = parseIpApiItem(item);
-          _ipInfoCache.set(item.query, { data: info, at: Date.now() });
-          result[item.query] = info;
-        }
-      } catch { /* skip chunk, non bloccante */ }
+    if (shared.size > 0) {
+      const sharedResults = await Promise.all(
+        [...shared.entries()].map(async ([ip, promise]) => [ip, await promise] as const)
+      );
+      for (const [ip, data] of sharedResults) {
+        result[ip] = data;
+      }
     }
 
     res.json(result);
@@ -921,6 +1158,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const blockBadAgents = readFleetFile("block_badagents.conf") || "";
       const ipWhitelist = readFleetFile("ip_whitelist.conf") || "";
       const exclusionIp = readFleetFile("exclusion_ip.conf") || "";
+      const geoIpAccountId = process.env.GEOIP_ACCOUNT_ID?.trim();
+      const geoIpLicenseKey = process.env.GEOIP_LICENSE_KEY?.trim();
+
+      const fail2banDbSetup = `# ── DATABASE FAIL2BAN ──────────────────────────────────────
+info "Creating fail2ban database..."
+FAIL2BAN_DB_NAME="fail2ban"
+FAIL2BAN_DB_USER="f2b_\$(openssl rand -hex 4)"
+FAIL2BAN_DB_PASSWORD="\$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 24)"
+
+mysql -uroot -e "CREATE DATABASE IF NOT EXISTS \${FAIL2BAN_DB_NAME};"
+mysql -uroot -e "CREATE USER IF NOT EXISTS '\${FAIL2BAN_DB_USER}'@'localhost' IDENTIFIED BY '\${FAIL2BAN_DB_PASSWORD}';"
+mysql -uroot -e "CREATE USER IF NOT EXISTS '\${FAIL2BAN_DB_USER}'@'127.0.0.1' IDENTIFIED BY '\${FAIL2BAN_DB_PASSWORD}';"
+mysql -uroot -e "GRANT ALL ON \${FAIL2BAN_DB_NAME}.* TO '\${FAIL2BAN_DB_USER}'@'localhost';"
+mysql -uroot -e "GRANT ALL ON \${FAIL2BAN_DB_NAME}.* TO '\${FAIL2BAN_DB_USER}'@'127.0.0.1';"
+mysql -uroot -e "FLUSH PRIVILEGES;"
+
+mkdir -p ~/tmp
+cd ~/tmp
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/sql/fail2ban.mysql
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/action.d/banned_db.conf
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/bin/fail2ban_banned_db
+mysql \${FAIL2BAN_DB_NAME} < ~/tmp/fail2ban.mysql
+
+cat > /root/.my.cnf-fail2ban << 'MYCNFEOF'
+[client]
+host="127.0.0.1"
+port="3306"
+user="\${FAIL2BAN_DB_USER}"
+password="\${FAIL2BAN_DB_PASSWORD}"
+MYCNFEOF
+
+mv ~/tmp/banned_db.conf /etc/fail2ban/action.d/
+mv ~/tmp/fail2ban_banned_db /usr/local/bin/
+chmod 0550 /usr/local/bin/fail2ban_banned_db`;
+
+      const geoIpSetup = geoIpAccountId && geoIpLicenseKey
+        ? `# ── GEOIP2 ─────────────────────────────────────────────────
+info "Configuring GeoIP2..."
+cat > /etc/GeoIP.conf << GEOEOF
+AccountID ${geoIpAccountId}
+LicenseKey ${geoIpLicenseKey}
+EditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country
+GEOEOF
+
+echo "0 1 * * *  /usr/bin/geoipupdate" >> /etc/crontab
+geoipupdate`
+        : `# ── GEOIP2 ─────────────────────────────────────────────────
+warn "GEOIP_ACCOUNT_ID / GEOIP_LICENSE_KEY non impostati: configurazione GeoIP2 saltata"`;
 
       const script = `#!/bin/bash
 # ╔══════════════════════════════════════════════════════════╗
@@ -1149,42 +1434,9 @@ failregex = ^<HOST>.*"(GET|POST).*" (404|444|403|400) .*$
 ignoreregex =
 EOF
 
-# ── DATABASE FAIL2BAN ──────────────────────────────────────
-info "Creating fail2ban database..."
-mysql -uroot -e "CREATE DATABASE IF NOT EXISTS fail2ban;"
-mysql -uroot -e "GRANT ALL ON fail2ban.* TO 'dynamo'@'%' IDENTIFIED BY 'dynamo@2018';"
-mysql -uroot -e "GRANT ALL ON fail2ban.* TO 'dynamo'@'localhost' IDENTIFIED BY 'dynamo@2018';"
-mysql -uroot -e "FLUSH PRIVILEGES;"
+${fail2banDbSetup}
 
-mkdir -p ~/tmp
-cd ~/tmp
-wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/sql/fail2ban.mysql
-wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/action.d/banned_db.conf
-wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/bin/fail2ban_banned_db
-mysql fail2ban < ~/tmp/fail2ban.mysql
-
-cat > /root/.my.cnf-fail2ban << 'MYCNFEOF'
-[client]
-host="127.0.0.1"
-port="3306"
-user="dynamo"
-password="dynamo@2018"
-MYCNFEOF
-
-mv ~/tmp/banned_db.conf /etc/fail2ban/action.d/
-mv ~/tmp/fail2ban_banned_db /usr/local/bin/
-chmod 0550 /usr/local/bin/fail2ban_banned_db
-
-# ── GEOIP2 ─────────────────────────────────────────────────
-info "Configuring GeoIP2..."
-cat > /etc/GeoIP.conf << GEOEOF
-AccountID 768897
-LicenseKey xJBgIatxy2Iw7V9h
-EditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country
-GEOEOF
-
-echo "0 1 * * *  /usr/bin/geoipupdate" >> /etc/crontab
-geoipupdate
+${geoIpSetup}
 
 # ── SYSCTL ─────────────────────────────────────────────────
 info "Applying sysctl settings..."

@@ -388,8 +388,8 @@ echo " "
 sleep 2
 touch /etc/GeoIP.conf
 echo $geoipupdate | base64 -d > /etc/GeoIP.conf
-sed -i "s/AccountID 599825/AccountID $account_id/g" /etc/GeoIP.conf
-sed -i "s/LicenseKey OBjc2YuVuGRiVzRy/LicenseKey $license_key/g" /etc/GeoIP.conf
+sed -i "s/AccountID __ACCOUNT_ID__/AccountID $account_id/g" /etc/GeoIP.conf
+sed -i "s/LicenseKey __LICENSE_KEY__/LicenseKey $license_key/g" /etc/GeoIP.conf
 echo "0 1 * * *  /usr/bin/geoipupdate" >> /etc/crontab
 
 echo ""
@@ -422,5 +422,4 @@ echo ""
 echo ""
 echo " To unban use this sintax : fail2ban-client set nginx-req-limit unbanip IP_ADDRESS_HERE"
 echo ""
-
 

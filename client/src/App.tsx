@@ -1,4 +1,5 @@
 import { Switch, Route, useLocation } from "wouter";
+import { Component, type ReactNode } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -11,6 +12,26 @@ import { UpgradeProvider, useUpgrade } from "@/contexts/upgrade-context";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileShell } from "@/components/mobile/mobile-shell";
 import { UpgradeFloatPanel } from "@/components/upgrade-float-panel";
+
+class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-8 space-y-3">
+          <p className="text-destructive font-semibold">Errore pagina</p>
+          <pre className="text-xs font-mono bg-muted p-4 rounded overflow-auto max-h-64">{this.state.error.message}{"\n"}{this.state.error.stack}</pre>
+          <button className="text-sm underline" onClick={() => { this.setState({ error: null }); window.location.reload(); }}>Ricarica</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import Dashboard from "@/pages/dashboard";
 import Services from "@/pages/services";
 import Firewall from "@/pages/firewall";
@@ -150,7 +171,9 @@ function DesktopLayout() {
           <Header />
           <UpgradeBanner />
           <main className="flex-1 overflow-auto p-8 bg-background">
-            <Router />
+            <PageErrorBoundary>
+              <Router />
+            </PageErrorBoundary>
           </main>
         </div>
       </div>
@@ -164,7 +187,9 @@ function AppLayout() {
   if (isMobile) {
     return (
       <MobileShell>
-        <Router />
+        <PageErrorBoundary>
+          <Router />
+        </PageErrorBoundary>
       </MobileShell>
     );
   }

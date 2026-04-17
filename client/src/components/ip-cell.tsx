@@ -13,10 +13,12 @@ interface IpCellProps {
   /** Mostra ASN e link sulla stessa riga invece che su due righe */
   compact?: boolean;
   className?: string;
+  /** Usa solo dati gia' in cache, senza lanciare una richiesta singola */
+  deferFetch?: boolean;
 }
 
-export function IpCell({ ip, compact = false, className }: IpCellProps) {
-  const { data } = useQuery<IpInfo>({
+export function IpCell({ ip, compact = false, className, deferFetch = false }: IpCellProps) {
+  const { data, isError } = useQuery<IpInfo>({
     queryKey: ["ip-info", ip],
     queryFn: async () => {
       const r = await apiRequest("GET", `/api/ip-info/${ip}`);
@@ -24,7 +26,8 @@ export function IpCell({ ip, compact = false, className }: IpCellProps) {
     },
     staleTime: 24 * 60 * 60 * 1000,
     retry: false,
-    enabled: !!ip,
+    enabled: !!ip && !deferFetch,
+    throwOnError: false,
   });
 
   const link = (
@@ -40,9 +43,13 @@ export function IpCell({ ip, compact = false, className }: IpCellProps) {
     </a>
   );
 
-  const asnBadge = data?.asn ? (
+  const asnBadge = !isError && data?.asn ? (
     <span className="text-muted-foreground font-mono" style={{ fontSize: 11 }}>
       {data.asn}{data.org ? ` · ${data.org}` : ""}
+    </span>
+  ) : !isError && data?.org ? (
+    <span className="text-muted-foreground font-mono" style={{ fontSize: 11 }}>
+      {data.org}
     </span>
   ) : null;
 
