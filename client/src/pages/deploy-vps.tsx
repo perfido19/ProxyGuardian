@@ -105,7 +105,7 @@ export default function DeployVps() {
       <div>
         <h1 className="text-2xl font-heading font-bold tracking-tight">Deploy VPS</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Genera script completo per installare Nginx + ModSecurity + Fail2ban + Agent su un nuovo VPS
+          Genera script completo per installare Nginx + ModSecurity + Fail2ban + NetBird + Agent su un nuovo VPS
         </p>
       </div>
 
@@ -116,10 +116,18 @@ export default function DeployVps() {
             Configurazione Deploy
           </CardTitle>
           <CardDescription>
-            Parametri per il nuovo VPS proxy. Il backend IP è l'indirizzo del server Xtream.
+            Parametri per il nuovo VPS proxy. Il backend IP è l'indirizzo del server Xtream e NetBird verra` installato/joinato automaticamente.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <Alert>
+            <Info className="w-4 h-4" />
+            <AlertTitle>NetBird obbligatorio</AlertTitle>
+            <AlertDescription>
+              Lo script installa NetBird usando la setup key del dashboard e si interrompe se non ottiene un IP mesh `100.x.x.x`.
+            </AlertDescription>
+          </Alert>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Nome VPS</Label>
@@ -268,13 +276,15 @@ export default function DeployVps() {
                     <li>Trasferiscilo sul nuovo VPS (scp, sftp, o copia-incolla)</li>
                     <li>Rendi eseguibile: <code className="bg-muted px-1.5 py-0.5 rounded text-xs">chmod +x deploy-*.sh</code></li>
                     <li>Esegui come root: <code className="bg-muted px-1.5 py-0.5 rounded text-xs">sudo ./deploy-*.sh</code></li>
+                    <li>Lo script installa e connette NetBird prima dell'agent</li>
+                    <li>Se NetBird non si connette o non compare un IP `100.x.x.x`, il deploy si ferma</li>
                     <li>Al termine, lo script mostrerà l'IP NetBird e l'API Key generata</li>
                   </ol>
                   <Alert>
                     <Info className="w-4 h-4" />
                     <AlertTitle>Tempo stimato</AlertTitle>
                     <AlertDescription>
-                      L'installazione richiede 10-20 minuti su una VPS pulita Ubuntu 22.04 LTS.
+                        L'installazione richiede 10-20 minuti su una VPS pulita Ubuntu 20.04/22.04.
                     </AlertDescription>
                   </Alert>
                 </TabsContent>
@@ -283,7 +293,7 @@ export default function DeployVps() {
                     <li>Vai su <strong>VPS</strong> nella sidebar</li>
                     <li>Clicca <strong>"Aggiungi VPS"</strong></li>
                     <li>Inserisci il nome del VPS</li>
-                    <li>Inserisci l'IP NetBird (100.x.x.x) mostrato dallo script</li>
+                    <li>Inserisci l'IP NetBird (100.x.x.x) mostrato dallo script, non l'IP pubblico</li>
                     <li>Porta: <strong>3001</strong> (default dell'agent)</li>
                     <li>Incolla l'API Key mostrata dallo script</li>
                     <li>Clicca <strong>"Aggiungi VPS"</strong> e verifica la connessione</li>

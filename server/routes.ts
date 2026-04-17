@@ -49,8 +49,147 @@ const OPERATOR_WRITE_PATHS = [
   /^\/api\/unban-jail$/,
 ];
 
+const NETBIRD_SETUP_KEY = process.env.NETBIRD_SETUP_KEY?.trim() || "";
+const DEPLOY_VPS_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 .()_-]{0,79}$/;
+const DEPLOY_HOST_RE = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
+const DEPLOY_NETBIRD_RESTART_NGINX_CONF = "[Service]\nExecStartPost=/bin/bash -c 'sleep 3 && systemctl restart nginx'\n";
+const DEPLOY_NETBIRD_IPSET_CLEANUP_SH = [
+  "#!/bin/bash",
+  "declare -A CHAIN_TABLE=(",
+  "    [NETBIRD-ACL-INPUT]=filter",
+  "    [NETBIRD-RT-FWD-IN]=filter",
+  "    [NETBIRD-RT-FWD-OUT]=filter",
+  "    [NETBIRD-RT-NAT]=nat",
+  "    [NETBIRD-RT-RDR]=nat",
+  "    [NETBIRD-RT-PRE]=mangle",
+  "    [NETBIRD-RT-MSSCLAMP]=mangle",
+  ")",
+  'for chain in "${!CHAIN_TABLE[@]}"; do',
+  '    table="${CHAIN_TABLE[$chain]}"',
+  '    iptables -t "$table" -S | grep "$chain" | grep "^-A" | while read -r rule; do',
+  '        iptables -t "$table" ${rule/-A/-D} 2>/dev/null',
+  '    done',
+  '    iptables -t "$table" -F "$chain" 2>/dev/null',
+  '    iptables -t "$table" -X "$chain" 2>/dev/null',
+  'done',
+  'for ipset in $(ipset list -n 2>/dev/null | grep -i netbird); do',
+  '    ipset flush "$ipset" 2>/dev/null',
+  '    ipset destroy "$ipset" 2>/dev/null',
+  'done',
+  "",
+].join("\n");
+const DEPLOY_NETBIRD_CLEANUP_SERVICE = [
+  "[Unit]",
+  "Description=Cleanup orphaned NetBird ipsets before start",
+  "Before=netbird.service",
+  "DefaultDependencies=no",
+  "After=network-pre.target",
+  "",
+  "[Service]",
+  "Type=oneshot",
+  "ExecStart=/usr/local/bin/netbird-ipset-cleanup.sh",
+  "RemainAfterExit=yes",
+  "",
+  "[Install]",
+  "WantedBy=multi-user.target",
+  "",
+].join("\n");
+const DEPLOY_AGENT_SUDOERS = [
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl status *",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start fail2ban",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop fail2ban",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart fail2ban",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start mariadb",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop mariadb",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart mariadb",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/ipset *",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start netbird",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop netbird",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart netbird",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /etc/systemd/system/netbird.service.d",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird.service.d/restart-nginx.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/bin/netbird-ipset-cleanup.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird-cleanup.service",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod +x /usr/local/bin/netbird-ipset-cleanup.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable netbird-cleanup.service",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable netbird-cleanup.service",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/sudoers.d/proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /root/.ssh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee -a /root/.ssh/authorized_keys",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 700 /root/.ssh",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 600 /root/.ssh/authorized_keys",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /var/cache/nginx/epg /var/cache/nginx/streaming",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/epg",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/streaming",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/logrotate.d/proxyguardian",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/logrotate *",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 644 /etc/logrotate.d/proxyguardian",
+  "",
+].join("\n");
+const DEPLOY_LOGROTATE_CONF = [
+  "/var/log/nginx/access.log",
+  "/var/log/nginx/error.log",
+  "/opt/log/modsec_audit.log",
+  "{",
+  "    daily",
+  "    rotate 3",
+  "    missingok",
+  "    notifempty",
+  "    compress",
+  "    delaycompress",
+  "    sharedscripts",
+  "    postrotate",
+  "        [ -f /var/run/nginx.pid ] && kill -USR1 $(cat /var/run/nginx.pid) 2>/dev/null || true",
+  "    endscript",
+  "}",
+  "",
+  "/var/log/fail2ban.log {",
+  "    daily",
+  "    rotate 3",
+  "    missingok",
+  "    notifempty",
+  "    compress",
+  "    delaycompress",
+  "    postrotate",
+  "        fail2ban-client flushlogs 2>/dev/null || true",
+  "    endscript",
+  "}",
+].join("\n");
+
 function isOperatorAllowedPost(path: string): boolean {
   return OPERATOR_WRITE_PATHS.some(r => r.test(path));
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function isValidDeployHost(value: string): boolean {
+  return validateIp(value) || DEPLOY_HOST_RE.test(value);
+}
+
+function parseDeployPort(value: unknown, fallback: number): number | null {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim().length > 0
+      ? parseInt(value, 10)
+      : fallback;
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : null;
 }
 
 function getSessionSecret(): string {
@@ -1136,13 +1275,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ─── Deploy VPS ───────────────────────────────────────────────────────────────
 
-  app.post("/api/deploy/generate-script", requireAuth, requireAdmin, (_req, res) => {
+  app.post("/api/deploy/generate-script", requireAuth, requireAdmin, (req, res) => {
     try {
-      const { backendIp, backendPort, proxyPort, vpsName } = _req.body;
-      const bIp = backendIp || "main.netbird.cloud";
-      const bPort = backendPort || 8880;
-      const pPort = proxyPort || 8880;
-      const name = vpsName || "nuovo-proxy";
+      if (!NETBIRD_SETUP_KEY) {
+        return res.status(503).json({ error: "NETBIRD_SETUP_KEY non configurata sul dashboard" });
+      }
+
+      const rawName = typeof req.body?.vpsName === "string" ? req.body.vpsName.trim() : "";
+      const rawBackendIp = typeof req.body?.backendIp === "string" ? req.body.backendIp.trim() : "";
+      const bPort = parseDeployPort(req.body?.backendPort, 8880);
+      const pPort = parseDeployPort(req.body?.proxyPort, 8880);
+
+      if (!rawName || !DEPLOY_VPS_NAME_RE.test(rawName)) {
+        return res.status(400).json({ error: "Nome VPS non valido: usa solo lettere, numeri, spazi e .()_-" });
+      }
+      if (!rawBackendIp || !isValidDeployHost(rawBackendIp)) {
+        return res.status(400).json({ error: "Backend IP / hostname non valido" });
+      }
+      if (bPort === null || pPort === null) {
+        return res.status(400).json({ error: "Porta non valida: usa un valore tra 1 e 65535" });
+      }
+
+      const gitHead = (() => {
+        try {
+          return execSync(`git -C "${process.cwd()}" rev-parse HEAD`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+        } catch {
+          return "";
+        }
+      })();
+
+      const name = rawName;
+      const bIp = rawBackendIp;
+      const agentBundleUrl = `https://raw.githubusercontent.com/perfido19/ProxyGuardian/${gitHead || "main"}/agent/agent-bundle.js`;
+      const bannerName = name.length > 47 ? `${name.slice(0, 44)}...` : name.padEnd(47);
+      const bannerGeneratedAt = new Date().toISOString().slice(0, 19).padEnd(47);
 
       const nginxTemplate = readFileSync(NGINX_TEMPLATE_PATH, "utf-8");
       const nginxConf = nginxTemplate
@@ -1202,19 +1368,23 @@ LicenseKey ${geoIpLicenseKey}
 EditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country
 GEOEOF
 
-echo "0 1 * * *  /usr/bin/geoipupdate" >> /etc/crontab
+chmod 600 /etc/GeoIP.conf
+cat > /etc/cron.d/proxyguardian-geoipupdate << 'CRONEOF'
+0 1 * * * root /usr/bin/geoipupdate >/var/log/geoipupdate.log 2>&1
+CRONEOF
+chmod 644 /etc/cron.d/proxyguardian-geoipupdate
 geoipupdate`
         : `# ── GEOIP2 ─────────────────────────────────────────────────
 warn "GEOIP_ACCOUNT_ID / GEOIP_LICENSE_KEY non impostati: configurazione GeoIP2 saltata"`;
 
-      const script = `#!/bin/bash
+      const script = `#!/usr/bin/env bash
 # ╔══════════════════════════════════════════════════════════╗
 # ║  ProxyGuardian - Deploy Script                          ║
-# ║  VPS: ${name.padEnd(47)}║
-# ║  Generato: ${new Date().toISOString().slice(0, 19).padEnd(47)}║
+# ║  VPS: ${bannerName}║
+# ║  Generato: ${bannerGeneratedAt}║
 # ╚══════════════════════════════════════════════════════════╝
 
-set -e
+set -euo pipefail
 
 RED='\\033[0;31m'; GREEN='\\033[0;32m'; YELLOW='\\033[1;33m'; CYAN='\\033[0;36m'; NC='\\033[0m'
 info()  { echo -e "\${CYAN}[INFO]\${NC} \$*"; }
@@ -1222,10 +1392,12 @@ ok()    { echo -e "\${GREEN}[OK]\${NC}   \$*"; }
 warn()  { echo -e "\${YELLOW}[WARN]\${NC} \$*"; }
 error() { echo -e "\${RED}[ERR]\${NC}  \$*"; exit 1; }
 
-BACKEND_IP="${bIp}"
-BACKEND_PORT="${bPort}"
-PROXY_PORT="${pPort}"
-VPS_NAME="${name}"
+BACKEND_IP=${shellQuote(bIp)}
+BACKEND_PORT=${bPort}
+PROXY_PORT=${pPort}
+VPS_NAME=${shellQuote(name)}
+NETBIRD_SETUP_KEY=${shellQuote(NETBIRD_SETUP_KEY)}
+AGENT_BUNDLE_URL=${shellQuote(agentBundleUrl)}
 numcpu=\$(nproc)
 
 echo ""
@@ -1245,7 +1417,7 @@ apt-get install -y \\
   build-essential libpcre3 libpcre3-dev zlib1g-dev libssl-dev \\
   libxslt1-dev fail2ban mariadb-server git libtool autoconf \\
   libxml2-dev libcurl4-openssl-dev automake pkgconf libyajl-dev \\
-  liblua5.1-0-dev wget curl
+  liblua5.1-0-dev wget curl ca-certificates gnupg software-properties-common
 
 add-apt-repository -y ppa:maxmind/ppa
 apt-get update -y
@@ -1277,7 +1449,7 @@ GEOIP2_DIR=\$(ls -d /usr/local/src/ngx_http_geoip2_module-*)
 info "Building Nginx 1.26.2..."
 cd /usr/local/src
 rm -rf "nginx-1.26.2" "nginx-1.26.2.tar.gz"
-wget -q "http://nginx.org/download/nginx-1.26.2.tar.gz"
+wget -q "https://nginx.org/download/nginx-1.26.2.tar.gz"
 tar xzf "nginx-1.26.2.tar.gz"
 cd "nginx-1.26.2"
 
@@ -1307,7 +1479,8 @@ make -j "\$numcpu" && make install
 
 ln -sf /usr/share/nginx/sbin/nginx /usr/sbin/nginx
 ln -sf /usr/lib/nginx/modules /usr/share/nginx/modules
-mkdir -p /var/lib/nginx/body
+mkdir -p /var/lib/nginx/body /var/cache/nginx/epg /var/cache/nginx/streaming
+chown -R www-data:www-data /var/cache/nginx/epg /var/cache/nginx/streaming
 
 # ── NGINX.SERVICE ──────────────────────────────────────────
 cat > /lib/systemd/system/nginx.service << 'SVCEOF'
@@ -1440,8 +1613,7 @@ ${geoIpSetup}
 
 # ── SYSCTL ─────────────────────────────────────────────────
 info "Applying sysctl settings..."
-cat >> /etc/sysctl.conf << 'EOF'
-
+cat > /etc/sysctl.d/99-proxyguardian.conf << 'EOF'
 # Proxy hardening
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
@@ -1470,13 +1642,13 @@ net.core.wmem_max = 8388608
 net.core.netdev_max_backlog = 5000
 net.ipv4.tcp_window_scaling = 1
 EOF
-sysctl -p
+sysctl --system >/dev/null
 
 # ── IPTABLES ───────────────────────────────────────────────
 info "Applying iptables rules..."
-iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
-iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
-iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+iptables -C INPUT -p tcp --tcp-flags ALL NONE -j DROP 2>/dev/null || iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+iptables -C INPUT -p tcp ! --syn -m state --state NEW -j DROP 2>/dev/null || iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
+iptables -C INPUT -p tcp --tcp-flags ALL ALL -j DROP 2>/dev/null || iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
 
 # ── AVVIO SERVIZI ──────────────────────────────────────────
 info "Enabling and starting services..."
@@ -1489,6 +1661,49 @@ systemctl restart fail2ban
 ok "Nginx 1.26.2 + ModSecurity v3 + OWASP CRS v4 installati"
 ok "Fail2ban configurato"
 ok "GeoIP2 configurato"
+
+# ── NETBIRD ────────────────────────────────────────────────
+info "Installing / updating NetBird..."
+curl -fsSL https://pkgs.netbird.io/install.sh | bash
+systemctl enable netbird || true
+
+mkdir -p /etc/systemd/system/netbird.service.d
+cat > /usr/local/bin/netbird-ipset-cleanup.sh << 'EOF'
+${DEPLOY_NETBIRD_IPSET_CLEANUP_SH}
+EOF
+chmod +x /usr/local/bin/netbird-ipset-cleanup.sh
+
+cat > /etc/systemd/system/netbird-cleanup.service << 'EOF'
+${DEPLOY_NETBIRD_CLEANUP_SERVICE}
+EOF
+
+cat > /etc/systemd/system/netbird.service.d/restart-nginx.conf << 'EOF'
+${DEPLOY_NETBIRD_RESTART_NGINX_CONF}
+EOF
+
+systemctl daemon-reload
+systemctl enable netbird-cleanup.service >/dev/null 2>&1 || true
+
+if netbird status 2>/dev/null | grep -q "Management: Connected"; then
+  ok "NetBird già connesso"
+else
+  info "Connecting NetBird..."
+  netbird up --setup-key "\$NETBIRD_SETUP_KEY"
+fi
+
+systemctl restart netbird
+
+for _ in \$(seq 1 15); do
+  if netbird status 2>/dev/null | grep -q "Management: Connected"; then
+    break
+  fi
+  sleep 2
+done
+
+netbird status 2>/dev/null | grep -q "Management: Connected" || error "NetBird non connesso"
+NETBIRD_IP=\$(ip -4 addr show 2>/dev/null | awk '/inet 100\./ {print \$2; exit}' | cut -d/ -f1)
+[ -n "\$NETBIRD_IP" ] || error "IP NetBird 100.x non rilevato"
+ok "IP NetBird rilevato: \$NETBIRD_IP"
 
 # ═══════════════════════════════════════════════════════════
 # INSTALLAZIONE AGENT
@@ -1503,17 +1718,7 @@ AGENT_PORT="3001"
 AGENT_USER="pgagent"
 SERVICE_NAME="proxy-guardian-agent"
 AGENT_API_KEY=\$(openssl rand -hex 32)
-
-NETBIRD_IP=\$(ip addr show 2>/dev/null | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}' | grep -E '^100\\.' | head -1)
-if [ -n "\$NETBIRD_IP" ]; then
-  AGENT_BIND="\$NETBIRD_IP"
-  ok "IP NetBird rilevato: \$NETBIRD_IP"
-else
-  AGENT_BIND="0.0.0.0"
-  warn "NetBird non rilevato — agent su 0.0.0.0"
-fi
-
-PUBLIC_IP=\$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print \$1}')
+AGENT_BIND="\$NETBIRD_IP"
 HOSTNAME=\$(hostname -f 2>/dev/null || hostname)
 
 if command -v ipset &>/dev/null && ipset list blocked_asn &>/dev/null 2>&1; then
@@ -1539,31 +1744,7 @@ fi
 id "\$AGENT_USER" &>/dev/null || useradd -r -m -s /bin/bash "\$AGENT_USER"
 
 cat > /etc/sudoers.d/proxy-guardian-agent << 'SUDOEOF'
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl status *
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start nginx
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start fail2ban
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop fail2ban
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart fail2ban
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start mariadb
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop mariadb
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart mariadb
-pgagent ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/ipset *
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start netbird
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop netbird
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart netbird
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables *
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save
-pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
-pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent
+${DEPLOY_AGENT_SUDOERS}
 SUDOEOF
 chmod 440 /etc/sudoers.d/proxy-guardian-agent
 
@@ -1577,16 +1758,17 @@ if [ -f /etc/nginx/nginx.conf ]; then
 fi
 
 NGINX_USER=\$(grep -oP '^user\\s+\\K\\S+(?=;)' /etc/nginx/nginx.conf 2>/dev/null || echo "www-data")
-mkdir -p /opt/log
+mkdir -p /opt/log /var/cache/nginx/epg /var/cache/nginx/streaming
 touch /opt/log/modsec_audit.log
 chown "\${NGINX_USER}:\${AGENT_USER}" /opt/log/modsec_audit.log
 chmod 664 /opt/log/modsec_audit.log
 chown "\${NGINX_USER}:\${AGENT_USER}" /opt/log
 chmod 775 /opt/log
+chown -R "\${NGINX_USER}:\${NGINX_USER}" /var/cache/nginx/epg /var/cache/nginx/streaming
 
 mkdir -p "\$AGENT_DIR"
 info "Download agent bundle..."
-curl -fsSL "https://raw.githubusercontent.com/perfido19/ProxyGuardian/main/agent/agent-bundle.js" -o "\$AGENT_DIR/index.js" || \\
+curl -fsSL "\$AGENT_BUNDLE_URL" -o "\$AGENT_DIR/agent-bundle.js" || \\
   error "Impossibile scaricare agent-bundle.js"
 chown -R "\$AGENT_USER:\$AGENT_USER" "\$AGENT_DIR"
 
@@ -1604,10 +1786,15 @@ cat > "\$AGENT_DIR/start.sh" << 'STARTEOF'
 set -a
 source /opt/proxy-guardian-agent/.env
 set +a
-exec node /opt/proxy-guardian-agent/index.js
+exec node /opt/proxy-guardian-agent/agent-bundle.js
 STARTEOF
 chmod +x "\$AGENT_DIR/start.sh"
 chown "\$AGENT_USER:\$AGENT_USER" "\$AGENT_DIR/start.sh"
+
+cat > "/etc/logrotate.d/proxyguardian" << 'LOGEOF'
+${DEPLOY_LOGROTATE_CONF}
+LOGEOF
+chmod 644 /etc/logrotate.d/proxyguardian
 
 cat > "/etc/systemd/system/\$SERVICE_NAME.service" << SVCEOF
 [Unit]
@@ -1639,7 +1826,7 @@ echo -e "\${GREEN}   DEPLOY COMPLETATO ✓\${NC}"
 echo -e "\${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
 echo ""
 echo -e "  VPS:        \${CYAN}\$VPS_NAME\${NC}"
-echo -e "  Host:       \${CYAN}\${NETBIRD_IP:-\$PUBLIC_IP}\${NC}"
+echo -e "  Host:       \${CYAN}\$NETBIRD_IP\${NC}"
 echo -e "  Porta:      \${CYAN}\$AGENT_PORT\${NC}"
 echo -e "  API Key:    \${YELLOW}\$AGENT_API_KEY\${NC}"
 echo ""
@@ -1648,7 +1835,7 @@ echo ""
 echo -e "  \${CYAN}Ora aggiungi questo VPS nella dashboard:\${NC}"
 echo -e "    Vai su VPS → Aggiungi VPS"
 echo -e "    Nome: \$VPS_NAME"
-echo -e "    Host: \${NETBIRD_IP:-\$PUBLIC_IP}"
+echo -e "    Host: \$NETBIRD_IP"
 echo -e "    Porta: \$AGENT_PORT"
 echo -e "    API Key: (quella sopra)"
 echo ""

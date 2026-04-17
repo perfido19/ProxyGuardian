@@ -187,6 +187,7 @@ La configurazione template si trova in `server/nginx-template.conf` ed è ottimi
 | `SESSION_SECRET` | — | Segreto per cookie di sessione (obbligatorio in produzione) |
 | `PORT` | `5000` | Porta HTTP dashboard |
 | `DATA_DIR` | `./data` | Directory persistenza JSON |
+| `NETBIRD_SETUP_KEY` | — | Setup key usata da Deploy VPS per installare/joinare NetBird |
 
 ### Agent (`/opt/proxy-guardian-agent/.env`)
 
