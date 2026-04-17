@@ -50,6 +50,7 @@ const OPERATOR_WRITE_PATHS = [
 ];
 
 const NETBIRD_SETUP_KEY = process.env.NETBIRD_SETUP_KEY?.trim() || "";
+const DEPLOY_AGENT_GIT_REF = process.env.DEPLOY_AGENT_GIT_REF?.trim() || "main";
 const DEPLOY_VPS_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 .()_-]{0,79}$/;
 const DEPLOY_HOST_RE = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
 const DEPLOY_NETBIRD_RESTART_NGINX_CONF = "[Service]\nExecStartPost=/bin/bash -c 'sleep 3 && systemctl restart nginx'\n";
@@ -1296,17 +1297,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Porta non valida: usa un valore tra 1 e 65535" });
       }
 
-      const gitHead = (() => {
-        try {
-          return execSync(`git -C "${process.cwd()}" rev-parse HEAD`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
-        } catch {
-          return "";
-        }
-      })();
-
       const name = rawName;
       const bIp = rawBackendIp;
-      const agentBundleUrl = `https://raw.githubusercontent.com/perfido19/ProxyGuardian/${gitHead || "main"}/agent/agent-bundle.js`;
+      const agentBundleUrl = `https://raw.githubusercontent.com/perfido19/ProxyGuardian/${DEPLOY_AGENT_GIT_REF}/agent/agent-bundle.js`;
       const bannerName = name.length > 47 ? `${name.slice(0, 44)}...` : name.padEnd(47);
       const bannerGeneratedAt = new Date().toISOString().slice(0, 19).padEnd(47);
 

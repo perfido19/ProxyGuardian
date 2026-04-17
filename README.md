@@ -188,6 +188,7 @@ La configurazione template si trova in `server/nginx-template.conf` ed è ottimi
 | `PORT` | `5000` | Porta HTTP dashboard |
 | `DATA_DIR` | `./data` | Directory persistenza JSON |
 | `NETBIRD_SETUP_KEY` | — | Setup key usata da Deploy VPS per installare/joinare NetBird |
+| `DEPLOY_AGENT_GIT_REF` | `main` | Ref GitHub usato da Deploy VPS per scaricare `agent-bundle.js` |
 
 ### Agent (`/opt/proxy-guardian-agent/.env`)
 
