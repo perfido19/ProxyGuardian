@@ -219,6 +219,7 @@ Note operative:
 - `dashboard-backup.sh --include-sessions` include anche `data/sessions`
 - `dashboard-restore.sh --dry-run` valida l'archivio senza modificare il server
 - NetBird va comunque collegato sul nuovo VPS prima dei test verso gli agent
+- La checklist completa di cutover si trova in `DASHBOARD_CUTOVER_CHECKLIST.md`
 
 ---
 
