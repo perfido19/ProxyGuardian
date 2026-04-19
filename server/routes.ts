@@ -118,6 +118,8 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent",
@@ -171,6 +173,54 @@ const DEPLOY_LOGROTATE_CONF = [
   "    endscript",
   "}",
 ].join("\n");
+const DEPLOY_IPSET_RESTORE_SERVICE = [
+  "[Unit]",
+  "Description=Restore ipset rules",
+  "Before=network-pre.target iptables-restore.service netfilter-persistent.service",
+  "Wants=network-pre.target",
+  "",
+  "[Service]",
+  "Type=oneshot",
+  "ExecStart=/bin/bash -c 'if [ -s /etc/ipset.conf ]; then /sbin/ipset restore -exist -file /etc/ipset.conf; else echo \"ipset-restore: /etc/ipset.conf non trovato o vuoto, skip.\"; fi'",
+  "RemainAfterExit=yes",
+  "SuccessExitStatus=0",
+  "",
+  "[Install]",
+  "WantedBy=multi-user.target",
+  "",
+].join("\n");
+const DEPLOY_WHITELIST_WATCHER_SERVICE = [
+  "[Unit]",
+  "Description=Aggiorna ipset blocked_asn quando cambia la whitelist",
+  "After=network.target ipset-restore.service",
+  "",
+  "[Service]",
+  "Type=simple",
+  "ExecStartPre=/usr/bin/apt-get install -y inotify-tools",
+  "ExecStart=/usr/local/bin/whitelist-watcher.sh",
+  "Restart=always",
+  "RestartSec=5",
+  "",
+  "[Install]",
+  "WantedBy=multi-user.target",
+  "",
+].join("\n");
+const DEPLOY_ANTI_IPTV_SERVICE = [
+  "[Unit]",
+  "Description=ProxyGuardian Anti-IPTV watcher",
+  "After=network.target nginx.service",
+  "Wants=nginx.service",
+  "",
+  "[Service]",
+  "Type=simple",
+  "ExecStart=/usr/local/sbin/anti-iptv.sh",
+  "Restart=always",
+  "RestartSec=5",
+  "",
+  "[Install]",
+  "WantedBy=multi-user.target",
+  "",
+].join("\n");
 
 function isOperatorAllowedPost(path: string): boolean {
   return OPERATOR_WRITE_PATHS.some(r => r.test(path));
@@ -191,6 +241,16 @@ function parseDeployPort(value: unknown, fallback: number): number | null {
       ? parseInt(value, 10)
       : fallback;
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : null;
+}
+
+function parseDeployToggle(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
 }
 
 function getSessionSecret(): string {
@@ -1066,6 +1126,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const NGINX_TEMPLATE_PATH = join(process.cwd(), "server", "nginx-template.conf");
   const MODSEC_RELAXED_PATH = join(process.cwd(), "server", "modsec_api_relaxed.conf");
+  const AGENT_ASN_LOG_STATS_PATH = join(process.cwd(), "agent", "asn-log-stats.py");
+  const ASN_TO_IPSET_PATH = join(process.cwd(), "scripts", "asn-to-ipset.py");
+  const UPDATE_ASN_BLOCK_PATH = join(process.cwd(), "scripts", "update-asn-block.sh");
+  const UPDATE_LISTS_PATH = join(process.cwd(), "scripts", "update-lists.sh");
+  const WHITELIST_WATCHER_PATH = join(process.cwd(), "scripts", "whitelist-watcher.sh");
+  const ANTI_IPTV_PY_PATH = join(process.cwd(), "scripts", "anti-iptv.py");
+  const ANTI_IPTV_SH_PATH = join(process.cwd(), "scripts", "anti-iptv.sh");
 
   function isNginxOptimized(config: string): { optimized: boolean; checks: Record<string, boolean>; cacheSize?: string } {
     // Cache: verifica che sia presente un valore valido (non placeholder) >= 5g
@@ -1286,6 +1353,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const rawBackendIp = typeof req.body?.backendIp === "string" ? req.body.backendIp.trim() : "";
       const bPort = parseDeployPort(req.body?.backendPort, 8880);
       const pPort = parseDeployPort(req.body?.proxyPort, 8880);
+      const installAsnBlock = parseDeployToggle(req.body?.installAsnBlock, true);
+      const installAntiIptv = parseDeployToggle(req.body?.installAntiIptv, false);
 
       if (!rawName || !DEPLOY_VPS_NAME_RE.test(rawName)) {
         return res.status(400).json({ error: "Nome VPS non valido: usa solo lettere, numeri, spazi e .()_-" });
@@ -1312,13 +1381,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const modsecRelaxed = readFileSync(MODSEC_RELAXED_PATH, "utf-8");
 
       const countryWhitelist = readFleetFile("country_whitelist.conf") || "";
-      const blockAsn = readFleetFile("block_asn.conf") || "";
+      const blockAsn = installAsnBlock ? (readFleetFile("block_asn.conf") || "") : "";
       const blockIsp = readFleetFile("block_isp.conf") || "";
       const blockBadAgents = readFleetFile("block_badagents.conf") || "";
       const ipWhitelist = readFleetFile("ip_whitelist.conf") || "";
       const exclusionIp = readFleetFile("exclusion_ip.conf") || "";
+      const asnBlocklist = installAsnBlock ? (readFleetFile("asn-blocklist.txt") || "# Fleet ASN Blocklist — nessuna entry configurata") : "";
+      const asnWhitelist = installAsnBlock ? (readFleetFile("asn-whitelist.txt") || "# Fleet ASN Whitelist — nessuna entry configurata") : "";
+      const agentAsnLogStats = readFileSync(AGENT_ASN_LOG_STATS_PATH, "utf-8");
+      const asnToIpsetPy = installAsnBlock ? readFileSync(ASN_TO_IPSET_PATH, "utf-8") : "";
+      const updateAsnBlockScript = installAsnBlock ? readFileSync(UPDATE_ASN_BLOCK_PATH, "utf-8") : "";
+      const updateListsScript = installAsnBlock ? readFileSync(UPDATE_LISTS_PATH, "utf-8") : "";
+      const whitelistWatcherScript = installAsnBlock ? readFileSync(WHITELIST_WATCHER_PATH, "utf-8") : "";
+      const antiIptvPy = installAntiIptv ? readFileSync(ANTI_IPTV_PY_PATH, "utf-8") : "";
+      const antiIptvSh = installAntiIptv ? readFileSync(ANTI_IPTV_SH_PATH, "utf-8") : "";
       const geoIpAccountId = process.env.GEOIP_ACCOUNT_ID?.trim();
       const geoIpLicenseKey = process.env.GEOIP_LICENSE_KEY?.trim();
+      const optionalPackages = Array.from(new Set([
+        ...(installAsnBlock ? ["ipset", "inotify-tools", "python3-maxminddb"] : []),
+        ...(installAntiIptv ? ["conntrack", "ipset"] : []),
+      ]));
+      const optionalPackageSetup = optionalPackages.length > 0
+        ? `# ── OPTIONAL PACKAGES ──────────────────────────────────────
+info "Installing optional packages..."
+apt-get install -y ${optionalPackages.join(" ")}`
+        : "";
 
       const fail2banDbSetup = `# ── DATABASE FAIL2BAN ──────────────────────────────────────
 info "Creating fail2ban database..."
@@ -1369,6 +1456,86 @@ chmod 644 /etc/cron.d/proxyguardian-geoipupdate
 geoipupdate`
         : `# ── GEOIP2 ─────────────────────────────────────────────────
 warn "GEOIP_ACCOUNT_ID / GEOIP_LICENSE_KEY non impostati: configurazione GeoIP2 saltata"`;
+
+      const asnBlockSetup = installAsnBlock
+        ? `# ── ASN BLOCK ──────────────────────────────────────────────
+info "Installing ASN block support..."
+mkdir -p /etc/iptables
+touch /etc/ipset.conf /var/log/update-asn-block.log
+
+cat > /etc/asn-blocklist.txt << 'ASNBLKEOF'
+${asnBlocklist}
+ASNBLKEOF
+
+cat > /etc/asn-whitelist-nets.txt << 'ASNWLEOF'
+${asnWhitelist}
+ASNWLEOF
+
+cat > /usr/local/bin/asn-to-ipset.py << 'ASNTOIPSETEOF'
+${asnToIpsetPy}
+ASNTOIPSETEOF
+
+cat > /usr/local/bin/update-asn-block.sh << 'UPDATEASNBLKEOF'
+${updateAsnBlockScript}
+UPDATEASNBLKEOF
+
+cat > /usr/local/bin/update-lists.sh << 'UPDATELISTSEOF'
+${updateListsScript}
+UPDATELISTSEOF
+
+cat > /usr/local/bin/whitelist-watcher.sh << 'WHITELISTWATCHEREOF'
+${whitelistWatcherScript}
+WHITELISTWATCHEREOF
+
+chmod 755 /usr/local/bin/asn-to-ipset.py /usr/local/bin/update-asn-block.sh /usr/local/bin/update-lists.sh /usr/local/bin/whitelist-watcher.sh
+
+cat > /etc/systemd/system/ipset-restore.service << 'IPSETRESTOREEOF'
+${DEPLOY_IPSET_RESTORE_SERVICE}
+IPSETRESTOREEOF
+
+cat > /etc/systemd/system/whitelist-watcher.service << 'WHITELISTWATCHERSVCEOF'
+${DEPLOY_WHITELIST_WATCHER_SERVICE}
+WHITELISTWATCHERSVCEOF
+
+ipset create blocked_asn hash:net family inet maxelem 1048576 -exist
+iptables -C INPUT -m set --match-set blocked_asn src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[ASN-BLOCK] " --log-level 4 2>/dev/null || \
+  iptables -I INPUT 1 -m set --match-set blocked_asn src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[ASN-BLOCK] " --log-level 4
+iptables -C INPUT -m set --match-set blocked_asn src -j DROP 2>/dev/null || \
+  iptables -I INPUT 2 -m set --match-set blocked_asn src -j DROP
+ipset save > /etc/ipset.conf
+
+if grep -Eq '^[[:space:]]*AS[0-9]+' /etc/asn-blocklist.txt; then
+  /usr/local/bin/update-asn-block.sh >> /var/log/update-asn-block.log 2>&1 || warn "Aggiornamento iniziale ASN block fallito"
+else
+  warn "ASN blocklist vuota: installazione completata senza popolamento iniziale"
+fi`
+        : `# ── ASN BLOCK ──────────────────────────────────────────────
+info "ASN block disabilitato per questo deploy"`;
+
+      const antiIptvSetup = installAntiIptv
+        ? `# ── ANTI-IPTV ──────────────────────────────────────────────
+info "Installing Anti-IPTV support..."
+mkdir -p /var/log/anti-iptv
+touch /var/log/anti-iptv/bans.log
+
+cat > /usr/local/sbin/anti-iptv.py << 'ANTIIPTVPYEOF'
+${antiIptvPy}
+ANTIIPTVPYEOF
+
+cat > /usr/local/sbin/anti-iptv.sh << 'ANTIIPTVSHEOF'
+${antiIptvSh}
+ANTIIPTVSHEOF
+
+chmod 755 /usr/local/sbin/anti-iptv.py /usr/local/sbin/anti-iptv.sh
+chown root:adm /var/log/anti-iptv /var/log/anti-iptv/bans.log 2>/dev/null || true
+chmod 750 /var/log/anti-iptv 2>/dev/null || true
+chmod 640 /var/log/anti-iptv/bans.log 2>/dev/null || true
+
+cat > /etc/systemd/system/anti-iptv.service << 'ANTIIPTVSVCEOF'
+${DEPLOY_ANTI_IPTV_SERVICE}
+ANTIIPTVSVCEOF`
+        : `# ── ANTI-IPTV ──────────────────────────────────────────────
+info "Anti-IPTV disabilitato per questo deploy"`;
 
       const script = `#!/usr/bin/env bash
 # ╔══════════════════════════════════════════════════════════╗
@@ -1508,7 +1675,7 @@ ${countryWhitelist || "# Default: tutti i paesi bloccati"}
 EOF
 
 cat > /etc/nginx/block_asn.conf << 'EOF'
-${blockAsn || "# Blacklist ASN"}
+${blockAsn || "# ASN block disabilitato per questo VPS"}
 EOF
 
 cat > /etc/nginx/block_isp.conf << 'EOF'
@@ -1603,6 +1770,12 @@ EOF
 ${fail2banDbSetup}
 
 ${geoIpSetup}
+
+${optionalPackageSetup}
+
+${asnBlockSetup}
+
+${antiIptvSetup}
 
 # ── SYSCTL ─────────────────────────────────────────────────
 info "Applying sysctl settings..."
@@ -1749,6 +1922,14 @@ if [ -f /etc/nginx/nginx.conf ]; then
   chown root:"\$AGENT_USER" /etc/nginx/nginx.conf
   chmod 664 /etc/nginx/nginx.conf
 fi
+if [ -f /etc/asn-blocklist.txt ]; then
+  chown root:"\$AGENT_USER" /etc/asn-blocklist.txt /etc/asn-whitelist-nets.txt 2>/dev/null || true
+  chmod 664 /etc/asn-blocklist.txt /etc/asn-whitelist-nets.txt 2>/dev/null || true
+fi
+if [ -f /var/log/update-asn-block.log ]; then
+  chown root:adm /var/log/update-asn-block.log 2>/dev/null || true
+  chmod 640 /var/log/update-asn-block.log 2>/dev/null || true
+fi
 
 NGINX_USER=\$(grep -oP '^user\\s+\\K\\S+(?=;)' /etc/nginx/nginx.conf 2>/dev/null || echo "www-data")
 mkdir -p /opt/log /var/cache/nginx/epg /var/cache/nginx/streaming
@@ -1763,6 +1944,12 @@ mkdir -p "\$AGENT_DIR"
 info "Download agent bundle..."
 curl -fsSL "\$AGENT_BUNDLE_URL" -o "\$AGENT_DIR/agent-bundle.js" || \\
   error "Impossibile scaricare agent-bundle.js"
+
+cat > /usr/local/bin/asn-log-stats.py << 'ASNLOGSTATSEOF'
+${agentAsnLogStats}
+ASNLOGSTATSEOF
+chmod 755 /usr/local/bin/asn-log-stats.py
+
 chown -R "\$AGENT_USER:\$AGENT_USER" "\$AGENT_DIR"
 
 cat > "\$AGENT_DIR/.env" << ENVEOF
@@ -1811,6 +1998,11 @@ SVCEOF
 systemctl daemon-reload
 systemctl enable "\$SERVICE_NAME" >/dev/null 2>&1
 systemctl restart "\$SERVICE_NAME"
+${installAsnBlock ? `systemctl enable ipset-restore whitelist-watcher >/dev/null 2>&1 || true
+systemctl start ipset-restore >/dev/null 2>&1 || true
+systemctl restart whitelist-watcher >/dev/null 2>&1 || true` : ""}
+${installAntiIptv ? `systemctl enable anti-iptv >/dev/null 2>&1 || true
+systemctl restart anti-iptv >/dev/null 2>&1 || true` : ""}
 sleep 2
 
 echo ""
@@ -1846,14 +2038,17 @@ fi
           backendIp: bIp,
           backendPort: bPort,
           proxyPort: pPort,
+          installAsnBlock,
+          installAntiIptv,
         },
         embeddedConfigs: {
           countryWhitelist: !!countryWhitelist && countryWhitelist.trim().length > 0,
-          blockAsn: !!blockAsn && blockAsn.trim().length > 0,
+          blockAsn: installAsnBlock,
           blockIsp: !!blockIsp && blockIsp.trim().length > 0,
           blockBadAgents: !!blockBadAgents && blockBadAgents.trim().length > 0,
           ipWhitelist: !!ipWhitelist && ipWhitelist.trim().length > 0,
           exclusionIp: !!exclusionIp && exclusionIp.trim().length > 0,
+          antiIptv: installAntiIptv,
           modsecRelaxed: true,
           nginxOptimized: true,
         },

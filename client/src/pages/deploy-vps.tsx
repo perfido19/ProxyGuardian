@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +30,8 @@ export default function DeployVps() {
   const [copied, setCopied] = useState(false);
   const [showScript, setShowScript] = useState(false);
   const [embeddedConfigs, setEmbeddedConfigs] = useState<Record<string, boolean>>({});
+  const [installAsnBlock, setInstallAsnBlock] = useState(true);
+  const [installAntiIptv, setInstallAntiIptv] = useState(false);
 
   const handleGenerate = async () => {
     if (!vpsName.trim()) {
@@ -44,6 +47,8 @@ export default function DeployVps() {
         backendIp: backendIp.trim(),
         backendPort: parseInt(backendPort) || 8880,
         proxyPort: parseInt(proxyPort) || 8880,
+        installAsnBlock,
+        installAntiIptv,
       });
       const data = await res.json();
       setScript(data.script);
@@ -82,6 +87,7 @@ export default function DeployVps() {
     { key: "modsecRelaxed", label: "ModSec relaxed (API)", icon: Shield },
     { key: "countryWhitelist", label: "Country whitelist", icon: Globe },
     { key: "blockAsn", label: "ASN blacklist", icon: AlertTriangle },
+    { key: "antiIptv", label: "Anti-IPTV", icon: Shield },
     { key: "blockIsp", label: "ISP blacklist", icon: AlertTriangle },
     { key: "blockBadAgents", label: "Bad agents block", icon: Shield },
     { key: "ipWhitelist", label: "IP whitelist", icon: FileText },
@@ -160,10 +166,31 @@ export default function DeployVps() {
                 value={proxyPort}
                 onChange={e => setProxyPort(e.target.value)}
                 placeholder="8880"
-                type="number"
-              />
+                  type="number"
+                />
+              </div>
             </div>
-          </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-lg border p-4 bg-muted/20">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <Checkbox checked={installAsnBlock} onCheckedChange={checked => setInstallAsnBlock(checked === true)} />
+                <div className="space-y-1">
+                  <div className="text-sm font-medium leading-none">Installa ASN Block</div>
+                  <p className="text-xs text-muted-foreground">
+                    Preconfigura gli script e i servizi AsnBlock sul nuovo VPS.
+                  </p>
+                </div>
+              </label>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <Checkbox checked={installAntiIptv} onCheckedChange={checked => setInstallAntiIptv(checked === true)} />
+                <div className="space-y-1">
+                  <div className="text-sm font-medium leading-none">Installa Anti-IPTV</div>
+                  <p className="text-xs text-muted-foreground">
+                    Selezione per installare lo script anti-IPTV.
+                  </p>
+                </div>
+              </label>
+            </div>
 
           <Button onClick={handleGenerate} disabled={generating} className="w-full md:w-auto">
             {generating ? (
@@ -189,7 +216,7 @@ export default function DeployVps() {
                     Script Generato
                   </CardTitle>
                   <CardDescription>
-                    Script autocontenuto con tutte le config attuali della dashboard
+                    Script autocontenuto con le config e i componenti selezionati per questo VPS
                   </CardDescription>
                 </div>
                 <div className="flex gap-2">
@@ -231,7 +258,7 @@ export default function DeployVps() {
                 Configurazioni Embeddate
               </CardTitle>
               <CardDescription>
-                Queste configurazioni sono state incluse automaticamente dallo stato attuale della dashboard
+                Queste configurazioni e componenti saranno inclusi nello script generato
               </CardDescription>
             </CardHeader>
             <CardContent>

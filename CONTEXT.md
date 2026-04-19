@@ -43,6 +43,17 @@ cd agent && npm run build  # Rebuild agent bundle
 - Dashboard: SSH su `185.229.236.50` → `/root/proxy-dashboard/`
 - Deploy: `git pull && npm run build && pm2 restart proxy-dashboard`
 - Agent: `curl -fsSL https://raw.githubusercontent.com/perfido19/ProxyGuardian/main/agent/install.sh | sudo bash`
+- Hot deploy manuale dashboard: `scp` dei file modificati su `/root/proxy-dashboard/`, poi `npm run build && pm2 restart proxy-dashboard`
+
+## Recent Notes
+- `Deploy VPS` ha due checkbox opzionali:
+  - `Installa ASN Block` → default `true`
+  - `Installa Anti-IPTV` → default `false`
+- Il testo UI sotto `Installa Anti-IPTV` e`: `Selezione per installare lo script anti-IPTV.`
+- Il deploy VPS non mostra nomi di VPS sorgente per ASN Block / Anti-IPTV.
+- Se `Installa ASN Block` e` attivo, il deploy installa anche gli asset AsnBlock (`asn-to-ipset.py`, `update-asn-block.sh`, `update-lists.sh`, `whitelist-watcher.sh`, service systemd, file ASN whitelist/blocklist e `asn-log-stats.py`).
+- Se `Installa Anti-IPTV` e` attivo, il deploy installa `anti-iptv.py`, `anti-iptv.sh`, `anti-iptv.service` e i log in `/var/log/anti-iptv`.
+- `dynadoctor` aveva una versione vecchia di `/usr/local/bin/asn-log-stats.py` che non supportava `--source nginx`; fix applicato live insieme a `PATH` corretto per `update-asn-block.sh`.
 
 ## VPS List
 | Name | IP (NetBird) | Disk |
