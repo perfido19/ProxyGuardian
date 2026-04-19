@@ -730,6 +730,8 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent",
@@ -1096,7 +1098,7 @@ app.get("/api/asn/stats", async (_req, res) => {
       return res.json(asnStatsCache.data);
     }
     const [statsResult, prefixResult] = await Promise.all([
-      runCmd("python3 /usr/local/bin/asn-log-stats.py --source nginx --top 50 --json 2>/dev/null", 15000),
+      runCmd("python3 /usr/local/bin/asn-log-stats.py --source nginx --top 50 --json 2>/dev/null || python3 /usr/local/bin/asn-log-stats.py --top 50 --json 2>/dev/null", 15000),
       runCmd("sudo ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0"),
     ]);
     let top: any[] = [];
@@ -1202,7 +1204,7 @@ app.post("/api/asn/update-lists", async (_req, res) => {
   if (!existsSync("/usr/local/bin/update-lists.sh")) {
     return res.status(404).json({ success: false, error: "Script update-lists.sh non trovato. AsnBlock non è installato su questo VPS." });
   }
-  const result = await runCmd("sudo bash /usr/local/bin/update-lists.sh 2>&1", 60000);
+  const result = await runCmd("sudo /usr/local/bin/update-lists.sh 2>&1", 60000);
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
 
@@ -1210,7 +1212,7 @@ app.post("/api/asn/update-set", async (_req, res) => {
   if (!existsSync(ASN_UPDATE_SCRIPT)) {
     return res.status(404).json({ success: false, error: "Script update-asn-block.sh non trovato. AsnBlock non è installato su questo VPS." });
   }
-  const result = await runCmd("sudo env PATH=/usr/sbin:/usr/bin:/sbin:/bin bash " + ASN_UPDATE_SCRIPT + " 2>&1", 120000);
+  const result = await runCmd("sudo " + ASN_UPDATE_SCRIPT + " 2>&1", 120000);
   asnStatsCache = null;
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });

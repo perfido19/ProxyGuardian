@@ -108,6 +108,8 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables *
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/netbird update
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent
@@ -170,6 +172,16 @@ else
   cp "$(dirname "$0")/agent-bundle.js" "$AGENT_DIR/index.js"
 fi
 ok "Agent bundle installato"
+
+info "Installazione script ASN stats..."
+if [ ! -f "$(dirname "$0")/asn-log-stats.py" ]; then
+  curl -fsSL "$REPO_URL/asn-log-stats.py" -o "/usr/local/bin/asn-log-stats.py" || \
+    error "Impossibile scaricare asn-log-stats.py da $REPO_URL/asn-log-stats.py"
+else
+  cp "$(dirname "$0")/asn-log-stats.py" "/usr/local/bin/asn-log-stats.py"
+fi
+chmod 755 "/usr/local/bin/asn-log-stats.py"
+ok "Script ASN stats installato"
 
 chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_DIR"
 
