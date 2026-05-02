@@ -53,7 +53,7 @@ const NETBIRD_SETUP_KEY = process.env.NETBIRD_SETUP_KEY?.trim() || "";
 const DEPLOY_AGENT_GIT_REF = process.env.DEPLOY_AGENT_GIT_REF?.trim() || "main";
 const DEPLOY_VPS_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 .()_-]{0,79}$/;
 const DEPLOY_HOST_RE = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
-const DEPLOY_NETBIRD_RESTART_NGINX_CONF = "[Service]\nExecStartPost=/bin/bash -c 'sleep 3 && systemctl restart nginx'\n";
+const DEPLOY_NETBIRD_RESTART_NGINX_CONF = "[Service]\nExecStartPost=/bin/bash -c 'sleep 3 && systemctl restart nginx || true'\n";
 const DEPLOY_NETBIRD_IPSET_CLEANUP_SH = [
   "#!/bin/bash",
   "declare -A CHAIN_TABLE=(",
@@ -1492,10 +1492,12 @@ chmod 0550 /usr/local/bin/fail2ban_banned_db`;
       const geoIpSetup = geoIpAccountId && geoIpLicenseKey
         ? `# ── GEOIP2 ─────────────────────────────────────────────────
 info "Configuring GeoIP2..."
+mkdir -p /usr/share/GeoIP
 cat > /etc/GeoIP.conf << GEOEOF
 AccountID ${geoIpAccountId}
 LicenseKey ${geoIpLicenseKey}
 EditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country
+DatabaseDirectory /usr/share/GeoIP
 GEOEOF
 
 chmod 600 /etc/GeoIP.conf
@@ -1503,9 +1505,10 @@ cat > /etc/cron.d/proxyguardian-geoipupdate << 'CRONEOF'
 0 1 * * * root /usr/bin/geoipupdate >/var/log/geoipupdate.log 2>&1
 CRONEOF
 chmod 644 /etc/cron.d/proxyguardian-geoipupdate
-geoipupdate`
+geoipupdate -v || error "geoipupdate fallito — verifica credenziali MaxMind in .env"
+[ -f /usr/share/GeoIP/GeoLite2-Country.mmdb ] || error "Database GeoIP2 non trovato dopo geoipupdate"`
         : `# ── GEOIP2 ─────────────────────────────────────────────────
-warn "GEOIP_ACCOUNT_ID / GEOIP_LICENSE_KEY non impostati: configurazione GeoIP2 saltata"`;
+error "GEOIP_ACCOUNT_ID / GEOIP_LICENSE_KEY non impostati — richiesti per nginx. Configurali nel .env del dashboard e rigenera lo script."`;
 
       const asnBlockSetup = installAsnBlock
         ? `# ── ASN BLOCK ──────────────────────────────────────────────
@@ -1629,9 +1632,14 @@ apt-get install -y \\
   libxml2-dev libcurl4-openssl-dev automake pkgconf libyajl-dev \\
   liblua5.1-0-dev wget curl ca-certificates gnupg software-properties-common
 
-add-apt-repository -y ppa:maxmind/ppa
-apt-get update -y
-apt-get install -y libmaxminddb-dev libmaxminddb0 mmdb-bin geoipupdate
+apt-get install -y libmaxminddb-dev libmaxminddb0 mmdb-bin
+
+# geoipupdate da GitHub releases (PPA maxmind spesso irraggiungibile)
+GEOIPUPDATE_VER="6.1.0"
+wget -q "https://github.com/maxmind/geoipupdate/releases/download/v\${GEOIPUPDATE_VER}/geoipupdate_\${GEOIPUPDATE_VER}_linux_amd64.deb" -O /tmp/geoipupdate.deb \\
+  && dpkg -i /tmp/geoipupdate.deb >/dev/null 2>&1 \\
+  && rm -f /tmp/geoipupdate.deb \\
+  || warn "geoipupdate install fallito — GeoIP2 non disponibile"
 
 # ── MODSECURITY v3 ─────────────────────────────────────────
 info "Compiling ModSecurity v3..."
