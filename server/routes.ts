@@ -1477,13 +1477,14 @@ wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/action.d/b
 wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/bin/fail2ban_banned_db
 mysql \${FAIL2BAN_DB_NAME} < ~/tmp/fail2ban.mysql
 
-cat > /root/.my.cnf-fail2ban << 'MYCNFEOF'
+cat > /root/.my.cnf-fail2ban << MYCNFEOF
 [client]
 host="127.0.0.1"
 port="3306"
 user="\${FAIL2BAN_DB_USER}"
 password="\${FAIL2BAN_DB_PASSWORD}"
 MYCNFEOF
+chmod 600 /root/.my.cnf-fail2ban
 
 mv ~/tmp/banned_db.conf /etc/fail2ban/action.d/
 mv ~/tmp/fail2ban_banned_db /usr/local/bin/
