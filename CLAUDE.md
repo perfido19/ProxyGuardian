@@ -118,6 +118,12 @@ ProxyGuardian/
   - installa stack AsnBlock completo dai file in `scripts/`
   - installa stack Anti-IPTV completo dai file in `scripts/`
   - copia anche `agent/asn-log-stats.py` sul VPS nuovo
+- Deploy VPS: `main.netbird.cloud:8880` resta l'upstream backend. Lo script deve connettere NetBird prima del primo `nginx -t`, poi risolvere `main.netbird.cloud` dalla network map NetBird e scriverlo in `/etc/hosts`.
+- Deploy VPS: Fail2Ban deve installare il template Dynadoctor da `scripts/fail2ban/jail.local` e i filtri `404-0`, `block22`, `nginx-abuse`, `xtream`, `xtream-api`.
+- Deploy VPS: ASN Block usa le liste fleet in `asn-block/asn-blocklist.txt` e `asn-block/asn-whitelist.txt`, gli script ASN in `scripts/`, e installa/allinea `maxminddb==2.6.3`.
+- ASN Block dashboard: la sorgente operativa modificabile e' `asn-block/asn-blocklist.txt`; il tab `ASN Block` -> `Blocklist ASN` salva il file centrale, lo copia su tutti i VPS abilitati e rigenera `blocked_asn`.
+- Agent: `/api/ipset/:name` deve limitare i membri di default (per `blocked_asn` molto grandi) e `/api/asn/stats` deve usare `asn-log-stats.py --source auto` con fallback `kern`.
+- Importante: nuovi deploy scaricano `agent/agent-bundle.js` da GitHub `main`; dopo modifiche agent bisogna committare e pushare il bundle o i nuovi VPS scaricheranno agent vecchio.
 - Per dashboard production (`185.229.236.50`, path `/root/proxy-dashboard`) va bene anche un hot deploy manuale: copiare i file cambiati, poi `cd /root/proxy-dashboard && npm run build && pm2 restart proxy-dashboard`.
 - Caso reale noto: `dynadoctor` non popolava la mappa ASN perché lo script remoto `asn-log-stats.py` era vecchio e incompatibile con `--source nginx`; fix live gia` applicato.
 - **NetBird Update**: sezione in `fleet-config.tsx` per aggiornare la fleet all'ultima versione (0.70.4). Endpoint agent `/api/netbird/version` e `/api/netbird/update`. Route fleet: `GET /api/fleet/netbird/update-status`, `POST /api/fleet/netbird/update`. Sudoers richiede: `apt install --only-upgrade netbird *`.

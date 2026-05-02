@@ -552,7 +552,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!requireVpsAccess(req.params.id, req.session.userId!)) return res.status(403).json({ error: "Accesso negato" });
     const vps = getVpsById(req.params.id);
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
-    try { res.json(await agentGet(vps, "/" + (req.params as any)[0])); }
+    const proxyPath = "/" + (req.params as any)[0];
+    const timeout = SLOW_PATHS.includes(proxyPath) ? SLOW_REQUEST_TIMEOUT : undefined;
+    try { res.json(await agentGet(vps, proxyPath, timeout)); }
     catch (e: any) { res.status(502).json({ error: e.message }); }
   });
   app.post("/api/vps/:id/proxy/*", requireAuth, requireOperator, async (req, res) => {
@@ -1135,6 +1137,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const WHITELIST_WATCHER_PATH = join(process.cwd(), "scripts", "whitelist-watcher.sh");
   const ANTI_IPTV_PY_PATH = join(process.cwd(), "scripts", "anti-iptv.py");
   const ANTI_IPTV_SH_PATH = join(process.cwd(), "scripts", "anti-iptv.sh");
+  const FAIL2BAN_TEMPLATE_DIR = join(process.cwd(), "scripts", "fail2ban");
+  const FAIL2BAN_JAIL_TEMPLATE_PATH = join(FAIL2BAN_TEMPLATE_DIR, "jail.local");
+  const FAIL2BAN_FILTER_NAMES = ["404-0", "block22", "nginx-abuse", "xtream", "xtream-api"];
 
   function isNginxOptimized(config: string): { optimized: boolean; checks: Record<string, boolean>; cacheSize?: string } {
     // Cache: verifica che sia presente un valore valido (non placeholder) >= 5g
@@ -1445,10 +1450,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const whitelistWatcherScript = installAsnBlock ? readFileSync(WHITELIST_WATCHER_PATH, "utf-8") : "";
       const antiIptvPy = installAntiIptv ? readFileSync(ANTI_IPTV_PY_PATH, "utf-8") : "";
       const antiIptvSh = installAntiIptv ? readFileSync(ANTI_IPTV_SH_PATH, "utf-8") : "";
+      const fail2banJailTemplate = readFileSync(FAIL2BAN_JAIL_TEMPLATE_PATH, "utf-8");
+      const fail2banFilters = Object.fromEntries(FAIL2BAN_FILTER_NAMES.map((name) => [
+        name,
+        readFileSync(join(FAIL2BAN_TEMPLATE_DIR, `${name}.conf`), "utf-8"),
+      ]));
       const geoIpAccountId = process.env.GEOIP_ACCOUNT_ID?.trim();
       const geoIpLicenseKey = process.env.GEOIP_LICENSE_KEY?.trim();
       const optionalPackages = Array.from(new Set([
-        ...(installAsnBlock ? ["ipset", "inotify-tools", "python3-maxminddb"] : []),
+        ...(installAsnBlock ? ["ipset", "inotify-tools", "python3-maxminddb", "python3-pip"] : []),
         ...(installAntiIptv ? ["conntrack", "ipset"] : []),
       ]));
       const optionalPackageSetup = optionalPackages.length > 0
@@ -1542,6 +1552,10 @@ ${whitelistWatcherScript}
 WHITELISTWATCHEREOF
 
 chmod 755 /usr/local/bin/asn-to-ipset.py /usr/local/bin/update-asn-block.sh /usr/local/bin/update-lists.sh /usr/local/bin/whitelist-watcher.sh
+
+pip3 install --break-system-packages maxminddb==2.6.3 >/dev/null 2>&1 || \
+  pip3 install maxminddb==2.6.3 >/dev/null 2>&1 || \
+  warn "Installazione maxminddb 2.6.3 fallita, provo con pacchetto di sistema"
 
 cat > /etc/systemd/system/ipset-restore.service << 'IPSETRESTOREEOF'
 ${DEPLOY_IPSET_RESTORE_SERVICE}
@@ -1790,41 +1804,28 @@ MODECEOF
 # ── FAIL2BAN ───────────────────────────────────────────────
 info "Configuring Fail2ban..."
 cat > /etc/fail2ban/jail.local << JAILEOF
-[nginx-req-limit]
-enabled  = true
-filter   = nginx-req-limit
-action   = iptables-multiport[name=ReqLimit, port="\${PROXY_PORT}", protocol=tcp]
-           banned_db[name=ReqLimit, port="\${PROXY_PORT}", protocol=tcp]
-logpath  = /var/log/nginx/*error.log
-findtime = 600
-bantime  = 7200
-maxretry = 10
-
-[nginx-4xx]
-enabled  = true
-port     = http,https
-action   = iptables-multiport[name=nginx-4xx, port="\${PROXY_PORT}", protocol=tcp]
-           banned_db[name=ReqLimit, port="\${PROXY_PORT}", protocol=tcp]
-logpath  = /var/log/nginx/access.log
-findtime = 600
-maxretry = 10
-bantime  = 7200
-
-[DEFAULT]
-ignoreip = 127.0.0.1/8 10.0.0.0/8 192.168.0.0/16 172.16.0.0/16
+${fail2banJailTemplate}
 JAILEOF
 
-cat > /etc/fail2ban/filter.d/nginx-req-limit.conf << 'EOF'
-[Definition]
-failregex = limiting requests, excess:.* by zone.*client: <HOST>
-ignoreregex =
-EOF
+cat > /etc/fail2ban/filter.d/404-0.conf << 'F2B404EOF'
+${fail2banFilters["404-0"]}
+F2B404EOF
 
-cat > /etc/fail2ban/filter.d/nginx-4xx.conf << 'EOF'
-[Definition]
-failregex = ^<HOST>.*"(GET|POST).*" (404|444|403|400) .*$
-ignoreregex =
-EOF
+cat > /etc/fail2ban/filter.d/block22.conf << 'F2BBLOCK22EOF'
+${fail2banFilters.block22}
+F2BBLOCK22EOF
+
+cat > /etc/fail2ban/filter.d/nginx-abuse.conf << 'F2BNGINXABUSEEOF'
+${fail2banFilters["nginx-abuse"]}
+F2BNGINXABUSEEOF
+
+cat > /etc/fail2ban/filter.d/xtream.conf << 'F2BXTREAMEOF'
+${fail2banFilters.xtream}
+F2BXTREAMEOF
+
+cat > /etc/fail2ban/filter.d/xtream-api.conf << 'F2BXTREAMAPIEOF'
+${fail2banFilters["xtream-api"]}
+F2BXTREAMAPIEOF
 
 ${fail2banDbSetup}
 
@@ -1867,7 +1868,7 @@ net.core.wmem_max = 8388608
 net.core.netdev_max_backlog = 5000
 net.ipv4.tcp_window_scaling = 1
 EOF
-sysctl --system >/dev/null
+sysctl --system >/dev/null || warn "Alcuni sysctl non sono supportati da questo kernel"
 
 # ── IPTABLES ───────────────────────────────────────────────
 info "Applying iptables rules..."
@@ -1878,6 +1879,32 @@ iptables -C INPUT -p tcp --tcp-flags ALL ALL -j DROP 2>/dev/null || iptables -A 
 # ── AVVIO SERVIZI ──────────────────────────────────────────
 info "Enabling and starting services..."
 systemctl daemon-reload
+
+# Nginx valida l'upstream main.netbird.cloud:8880: NetBird deve essere gia connesso.
+info "Installing / connecting NetBird before nginx validation..."
+curl --retry 5 --retry-delay 3 --connect-timeout 20 -fsSL https://pkgs.netbird.io/install.sh | bash
+systemctl enable netbird || true
+if netbird status 2>/dev/null | grep -q "Management: Connected"; then
+  ok "NetBird gia connesso"
+else
+  netbird up --setup-key "\$NETBIRD_SETUP_KEY"
+fi
+for _ in \$(seq 1 15); do
+  if netbird status 2>/dev/null | grep -q "Management: Connected"; then
+    break
+  fi
+  sleep 2
+done
+netbird status 2>/dev/null | grep -q "Management: Connected" || error "NetBird non connesso"
+MAIN_BACKEND_IP=\$(netbird status -d 2>/dev/null | awk '/ main\.netbird\.cloud:/{found=1} found && /NetBird IP:/{print \$3; exit}')
+if [ -n "\$MAIN_BACKEND_IP" ]; then
+  sed -i '/[[:space:]]main\.netbird\.cloud$/d' /etc/hosts
+  echo "\$MAIN_BACKEND_IP main.netbird.cloud" >> /etc/hosts
+  ok "main.netbird.cloud risolto via NetBird: \$MAIN_BACKEND_IP"
+else
+  warn "Peer main.netbird.cloud non trovato nella network map NetBird"
+fi
+
 systemctl enable nginx
 nginx -t && systemctl start nginx
 systemctl enable fail2ban
@@ -1889,7 +1916,9 @@ ok "GeoIP2 configurato"
 
 # ── NETBIRD ────────────────────────────────────────────────
 info "Installing / updating NetBird..."
-curl -fsSL https://pkgs.netbird.io/install.sh | bash
+if ! command -v netbird >/dev/null 2>&1; then
+  curl --retry 5 --retry-delay 3 --connect-timeout 20 -fsSL https://pkgs.netbird.io/install.sh | bash
+fi
 systemctl enable netbird || true
 
 mkdir -p /etc/systemd/system/netbird.service.d
@@ -1929,6 +1958,11 @@ netbird status 2>/dev/null | grep -q "Management: Connected" || error "NetBird n
 NETBIRD_IP=\$(ip -4 addr show 2>/dev/null | awk '/inet 100\./ {print \$2; exit}' | cut -d/ -f1)
 [ -n "\$NETBIRD_IP" ] || error "IP NetBird 100.x non rilevato"
 ok "IP NetBird rilevato: \$NETBIRD_IP"
+MAIN_BACKEND_IP=\$(netbird status -d 2>/dev/null | awk '/ main\.netbird\.cloud:/{found=1} found && /NetBird IP:/{print \$3; exit}')
+if [ -n "\$MAIN_BACKEND_IP" ]; then
+  sed -i '/[[:space:]]main\.netbird\.cloud$/d' /etc/hosts
+  echo "\$MAIN_BACKEND_IP main.netbird.cloud" >> /etc/hosts
+fi
 
 # ═══════════════════════════════════════════════════════════
 # INSTALLAZIONE AGENT

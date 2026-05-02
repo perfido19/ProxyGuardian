@@ -422,7 +422,7 @@ app.get("/api/ipset", async (_req, res) => {
     const { stdout, ok } = await runCmd("sudo ipset list -t");
     if (!ok) return res.status(500).json({ error: "ipset non disponibile" });
     const sets = parseIpsetList(stdout);
-    res.json(sets.map(({ members, ...meta }) => ({ ...meta, count: members.length })));
+    res.json(sets.map(({ members, ...meta }) => meta));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -432,11 +432,13 @@ app.get("/api/ipset/:name", async (req, res) => {
   const { name } = req.params;
   if (!/^[\w\-]+$/.test(name)) return res.status(400).json({ error: "Nome ipset non valido" });
   try {
+    const limit = Math.min(parseInt(String(req.query.limit || "1000"), 10) || 1000, 10000);
     const { stdout, ok } = await runCmd(`sudo ipset list ${name}`);
     if (!ok) return res.status(404).json({ error: "IPSet non trovato" });
     const sets = parseIpsetList(stdout);
     if (!sets.length) return res.status(404).json({ error: "IPSet non trovato" });
-    res.json(sets[0]);
+    const set = sets[0];
+    res.json({ ...set, totalMembers: set.count, members: set.members.slice(0, limit), truncated: set.members.length > limit });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1104,7 +1106,7 @@ app.get("/api/asn/stats", async (_req, res) => {
       return res.json(asnStatsCache.data);
     }
     const [statsResult, prefixResult] = await Promise.all([
-      runCmd("python3 /usr/local/bin/asn-log-stats.py --source nginx --top 50 --json 2>/dev/null || python3 /usr/local/bin/asn-log-stats.py --top 50 --json 2>/dev/null", 15000),
+      runCmd("python3 /usr/local/bin/asn-log-stats.py --source auto --top 50 --json 2>/dev/null || python3 /usr/local/bin/asn-log-stats.py --source kern --top 50 --json 2>/dev/null", 15000),
       runCmd("sudo ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0"),
     ]);
     let top: any[] = [];

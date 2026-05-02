@@ -1,0 +1,74 @@
+[DEFAULT]
+ignoreip = 127.0.0.1/8 ::1 10.0.0.0/8 192.168.0.0/16 172.16.0.0/16 176.120.65.20/32 116.202.118.184 51.15.0.0/16 51.254.0.0/15 100.116.0.0/16
+datepattern = \[%%d/%%b/%%Y:%%H:%%M:%%S %%z\]
+
+[sshd]
+enabled = true
+port = 22
+logpath = /var/log/auth.log
+backend = systemd
+maxretry = 1
+bantime = -1
+findtime = 24h
+action = iptables-multiport[name=sshd, port="22", protocol=tcp]
+blocktype = DROP
+
+[xtream]
+enabled = true
+port = http,https
+action = iptables-multiport[name=xtream, port="8880,8000,2096", protocol=tcp] 
+   banned_db[name=xtream, port="8880,8000,2096", protocol=tcp]
+blocktype = DROP
+logpath = /var/log/nginx/access.log
+backend   = auto
+findtime = 3600
+maxretry = 1
+bantime = 600
+
+[xtream-api]
+enabled = true
+filter = xtream-api
+action = iptables-multiport[name=xtream-api, port="http,https,8880,8000,2096", protocol=tcp]
+    banned_db[name=xtream-api, port="8880,8000,2096", protocol=tcp]
+blocktype = DROP
+logpath = /var/log/nginx/access.log
+backend   = auto
+port = http,https,8880,8000,2096
+findtime = 10
+maxretry = 10
+bantime = 300
+
+[nginx-abuse]
+enabled  = true
+filter   = nginx-abuse
+logpath  = /var/log/nginx/access.log
+backend   = auto
+action   = iptables-multiport[name=nginx-abuse,port="http,https,8000,8880,2096",protocol=tcp]
+      banned_db[name=nginx-abuse, port="8880,8000,2096", protocol=tcp]
+blocktype = DROP
+findtime = 86400
+maxretry = 1
+bantime  = 7d
+
+[block22]
+enabled = true
+port = 22
+logpath = /var/log/auth.log
+backend = systemd
+maxretry = 1
+bantime = -1
+findtime = 24h
+action = iptables-multiport[name=block22, port="22", protocol=tcp]
+blocktype = DROP
+
+[404-0]
+enabled  = true
+filter   = 404-0
+logpath  = /var/log/nginx/access.log
+backend   = auto
+action   = iptables-multiport[name=404-0,port="http,https,8000,8880,2096",protocol=tcp]
+      banned_db[name=nginx-abuse, port="8880,8000,2096", protocol=tcp]
+blocktype = DROP
+findtime = 86400
+maxretry = 2
+bantime  = 7d
