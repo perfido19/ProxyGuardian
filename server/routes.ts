@@ -1287,7 +1287,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
     const results = await Promise.allSettled(vpsList.map(async (vps) => {
       try {
-        const data = await agentPost(vps, "/api/netbird/update", {});
+        const data = await agentPost(vps, "/api/netbird/update", {}, SLOW_REQUEST_TIMEOUT);
         const versionData = await agentGet(vps, "/api/netbird/version").catch(() => null);
         return {
           vpsId: vps.id,
