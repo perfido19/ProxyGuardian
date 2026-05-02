@@ -24958,10 +24958,14 @@ app.post("/api/netbird/stop", async (_req, res) => {
   res.json({ ok: result.ok, error: result.ok ? void 0 : result.stderr });
 });
 app.post("/api/netbird/update", async (_req, res) => {
-  const result = await runCmd("apt install --only-upgrade netbird -y 2>&1");
+  const result = await runCmd("sudo apt install --only-upgrade netbird -y 2>&1");
   await new Promise((r) => setTimeout(r, 2e3));
   const status = await runCmd("systemctl is-active netbird 2>/dev/null");
   res.json({ ok: result.ok, output: result.stdout || result.stderr, running: status.stdout.trim() === "active" });
+});
+app.get("/api/netbird/version", async (_req, res) => {
+  const result = await runCmd("netbird version 2>/dev/null");
+  res.json({ version: result.stdout.trim() || null });
 });
 app.get("/api/netbird/status", async (_req, res) => {
   try {
@@ -25110,6 +25114,7 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt install --only-upgrade netbird *",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /etc/systemd/system/netbird.service.d",

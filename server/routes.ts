@@ -1256,6 +1256,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(results);
   });
 
+  // ─── Fleet NetBird Update ──────────────────────────────────────────────────────
+
+  app.get("/api/fleet/netbird/update-status", requireAuth, async (_req, res) => {
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        const [statusData, versionData] = await Promise.all([
+          agentGet(vps, "/api/netbird/status"),
+          agentGet(vps, "/api/netbird/version"),
+        ]);
+        return {
+          vpsId: vps.id,
+          vpsName: vps.name,
+          running: statusData.running,
+          connected: statusData.connected,
+          version: versionData.version || null,
+          error: null,
+        };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, running: false, connected: false, version: null, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
+  app.post("/api/fleet/netbird/update", requireAuth, requireAdmin, async (req, res) => {
+    const { vpsIds } = req.body;
+    if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds richiesto" });
+    const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const data = await agentPost(vps, "/api/netbird/update", {});
+        const versionData = await agentGet(vps, "/api/netbird/version").catch(() => null);
+        return {
+          vpsId: vps.id,
+          vpsName: vps.name,
+          ok: data.ok && data.running,
+          newVersion: versionData?.version || null,
+          output: data.output,
+          error: data.ok ? null : (data.output || "Update fallito"),
+        };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, newVersion: null, error: e.message };
+      }
+    }));
+    res.json(results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", ok: false, newVersion: null, error: "rejected" }));
+  });
+
   // ─── Fleet Logrotate ───────────────────────────────────────────────────────────
 
   app.get("/api/fleet/logrotate/status", requireAuth, async (_req, res) => {

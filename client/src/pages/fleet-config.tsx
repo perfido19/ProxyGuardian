@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 import {
   CheckCircle2, XCircle, AlertCircle, RefreshCw, Upload,
-  Key, ShieldCheck, Server, HardDrive, Zap, Network, FileCode, Flame, RotateCw
+  Key, ShieldCheck, Server, HardDrive, Zap, Network, FileCode, Flame, RotateCw, Radio
 } from "lucide-react";
 
 interface NginxCheck {
@@ -48,6 +48,15 @@ interface VpsLogrotateStatus {
   error: string | null;
 }
 
+interface VpsNetbirdUpdateStatus {
+  vpsId: string;
+  vpsName: string;
+  running: boolean;
+  connected: boolean;
+  version: string | null;
+  error: string | null;
+}
+
 const CHECK_LABELS: Record<keyof NginxCheck, { label: string; icon: React.ReactNode }> = {
   streamCacheValid:   { label: "Cache streaming",       icon: <HardDrive className="w-3.5 h-3.5" /> },
   modsecurityActive:  { label: "ModSecurity attivo",    icon: <ShieldCheck className="w-3.5 h-3.5" /> },
@@ -64,6 +73,7 @@ export default function FleetConfig() {
   const [installing, setInstalling] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [cleanupApplying, setCleanupApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [logrotateApplying, setLogrotateApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
+  const [netbirdUpdating, setNetbirdUpdating] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [templateOpen, setTemplateOpen] = useState(false);
 
   const { data: statuses, isLoading, refetch, isFetching } = useQuery<VpsNginxStatus[]>({
@@ -100,6 +110,15 @@ export default function FleetConfig() {
       return res.json();
     },
     staleTime: 30000,
+  });
+
+  const { data: netbirdStatuses, refetch: refetchNetbird } = useQuery<VpsNetbirdUpdateStatus[]>({
+    queryKey: ["/api/fleet/netbird/update-status"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/fleet/netbird/update-status");
+      return res.json();
+    },
+    staleTime: 60000,
   });
 
   const { data: sshKeyData } = useQuery<{ key: string }>({
@@ -200,6 +219,33 @@ export default function FleetConfig() {
     }
   };
 
+  const applyNetbirdUpdate = async (vpsIds: string[]) => {
+    const next: Record<string, "idle" | "running" | "ok" | "error"> = { ...netbirdUpdating };
+    vpsIds.forEach(id => { next[id] = "running"; });
+    setNetbirdUpdating(next);
+    try {
+      const res = await apiRequest("POST", "/api/fleet/netbird/update", { vpsIds });
+      const results: Array<{ vpsId: string; vpsName: string; ok: boolean; newVersion?: string; error?: string }> = await res.json();
+      const updated: Record<string, "idle" | "running" | "ok" | "error"> = { ...netbirdUpdating };
+      results.forEach(r => { updated[r.vpsId] = r.ok ? "ok" : "error"; });
+      setNetbirdUpdating(updated);
+      const failed = results.filter(r => !r.ok);
+      const succeeded = results.filter(r => r.ok);
+      if (failed.length === 0) {
+        const versions = succeeded.map(r => r.newVersion).filter(Boolean);
+        const uniqueVersions = [...new Set(versions)];
+        toast({ title: "NetBird aggiornato", description: `${results.length} VPS aggiornati a ${uniqueVersions.join(", ")}` });
+      } else {
+        toast({ title: "Update parziale", description: `${failed.length} VPS falliti: ${failed.map(f => f.vpsName).join(", ")}`, variant: "destructive" });
+      }
+      setTimeout(() => refetchNetbird(), 10000);
+    } catch (e: any) {
+      vpsIds.forEach(id => { next[id] = "error"; });
+      setNetbirdUpdating({ ...next });
+      toast({ title: "Errore", description: e.message, variant: "destructive" });
+    }
+  };
+
   const installSshKey = async (vpsId: string) => {
     setInstalling(prev => ({ ...prev, [vpsId]: "running" }));
     try {
@@ -282,6 +328,20 @@ export default function FleetConfig() {
             <RotateCw className="w-3.5 h-3.5" />
             Applica logrotate
           </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => {
+              const outdated = (netbirdStatuses || []).filter(n => n.version && n.version !== "0.70.4" && !n.error).map(n => n.vpsId);
+              const allIds = outdated.length > 0 ? outdated : (netbirdStatuses || []).filter(n => !n.error).map(n => n.vpsId);
+              if (allIds.length > 0) applyNetbirdUpdate(allIds);
+            }}
+            disabled={!netbirdStatuses || netbirdStatuses.filter(n => !n.error).length === 0}
+            className="gap-1.5"
+          >
+            <Radio className="w-3.5 h-3.5" />
+            Aggiorna NetBird
+          </Button>
         </div>
       </div>
 
@@ -330,6 +390,124 @@ export default function FleetConfig() {
         </Card>
       </div>
 
+      {/* NetBird Summary */}
+      {netbirdStatuses && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base font-heading flex items-center gap-2">
+                  <Radio className="w-4 h-4" />
+                  NetBird Update
+                </CardTitle>
+                <CardDescription className="text-xs mt-0.5">
+                  Versioni NetBird nella fleet - aggiorna all'ultima versione (0.70.4)
+                </CardDescription>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => refetchNetbird()}
+                className="gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Aggiorna
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-4 gap-4">
+              {(() => {
+                const versionCount: Record<string, number> = {};
+                let total = 0;
+                let outdated = 0;
+                netbirdStatuses.forEach(n => {
+                  if (n.version) {
+                    versionCount[n.version] = (versionCount[n.version] || 0) + 1;
+                    total++;
+                    if (n.version !== "0.70.4") outdated++;
+                  }
+                });
+                const sortedVersions = Object.entries(versionCount).sort((a, b) => b[1] - a[1]);
+                return (
+                  <>
+                    <Card>
+                      <CardContent className="pt-5 pb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                            <Radio className="w-5 h-5 text-blue-500" />
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold font-heading">{total}</div>
+                            <div className="text-xs text-muted-foreground">VPS totali</div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="pt-5 pb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-lg bg-green-500/10 flex items-center justify-center">
+                            <CheckCircle2 className="w-5 h-5 text-green-500" />
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold font-heading">{versionCount["0.70.4"] || 0}</div>
+                            <div className="text-xs text-muted-foreground">Alla 0.70.4</div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="pt-5 pb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center">
+                            <AlertCircle className="w-5 h-5 text-orange-500" />
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold font-heading">{outdated}</div>
+                            <div className="text-xs text-muted-foreground">Da aggiornare</div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="pt-5 pb-4">
+                        <div className="text-xs text-muted-foreground mb-2">Versioni rilevate:</div>
+                        <div className="flex flex-wrap gap-1">
+                          {sortedVersions.map(([ver, count]) => (
+                            <Badge key={ver} variant={ver === "0.70.4" ? "default" : "outline"} className="text-xs">
+                              {ver}: {count}
+                            </Badge>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </>
+                );
+              })()}
+            </div>
+            {outdated > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  {outdated} VPS hanno versioni obsolete. Clicca su "Aggiorna NetBird" in alto per aggiornare tutti.
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    const outdatedIds = netbirdStatuses.filter(n => n.version && n.version !== "0.70.4").map(n => n.vpsId);
+                    applyNetbirdUpdate(outdatedIds);
+                  }}
+                  className="gap-1.5"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  Aggiorna {outdated} VPS
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Main table */}
       <Card>
         <CardHeader className="pb-3">
@@ -377,6 +555,7 @@ export default function FleetConfig() {
                 <TableHead>Buffers</TableHead>
                 <TableHead>IPSet Cleanup</TableHead>
                 <TableHead>Logrotate</TableHead>
+                <TableHead>NetBird</TableHead>
                 <TableHead>SSH Key</TableHead>
                 <TableHead className="text-right pr-4">Azioni</TableHead>
               </TableRow>
@@ -389,6 +568,8 @@ export default function FleetConfig() {
                 const cleanupVps = cleanupStatuses?.find(c => c.vpsId === vps.vpsId);
                 const logrotateState = logrotateApplying[vps.vpsId] || "idle";
                 const logrotateVps = logrotateStatuses?.find(l => l.vpsId === vps.vpsId);
+                const netbirdState = netbirdUpdating[vps.vpsId] || "idle";
+                const netbirdVps = netbirdStatuses?.find(n => n.vpsId === vps.vpsId);
                 const isSelectable = !vps.optimized && !vps.error;
                 return (
                   <TableRow key={vps.vpsId} className={selected.has(vps.vpsId) ? "bg-muted/30" : ""}>
@@ -455,6 +636,30 @@ export default function FleetConfig() {
                         <span className="text-muted-foreground">—</span>
                       ) : (
                         <XCircle className="w-4 h-4 text-red-400" />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {netbirdState === "running" ? (
+                        <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground" />
+                      ) : netbirdState === "ok" ? (
+                        <CheckCircle2 className="w-4 h-4 text-green-500" />
+                      ) : netbirdState === "error" ? (
+                        <XCircle className="w-4 h-4 text-red-400" />
+                      ) : netbirdVps?.error ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : netbirdVps?.version ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className={`text-xs font-mono ${netbirdVps.version === "0.70.4" ? "text-green-500" : "text-orange-500"}`}>
+                            {netbirdVps.version}
+                          </span>
+                          {netbirdVps.version !== "0.70.4" && (
+                            <Badge variant="outline" className="text-[9px] h-4 px-1 gap-0.5">
+                              <AlertCircle className="w-2.5 h-2.5" /> outdated
+                            </Badge>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
                       )}
                     </TableCell>
                     <TableCell>
