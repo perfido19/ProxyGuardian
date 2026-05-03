@@ -121,6 +121,7 @@ ProxyGuardian/
 - Deploy VPS: `main.netbird.cloud:8880` resta l'upstream backend. Lo script deve connettere NetBird prima del primo `nginx -t`, poi risolvere `main.netbird.cloud` dalla network map NetBird e scriverlo in `/etc/hosts`.
 - Deploy VPS: Fail2Ban deve installare il template Dynadoctor da `scripts/fail2ban/jail.local` e i filtri `404-0`, `block22`, `nginx-abuse`, `xtream`, `xtream-api`.
 - Deploy VPS: ASN Block usa le liste fleet in `asn-block/asn-blocklist.txt` e `asn-block/asn-whitelist.txt`, gli script ASN in `scripts/`, e installa/allinea `maxminddb==2.6.3`.
+- Deploy VPS: i file nginx fleet `asn-block/country_whitelist.conf`, `asn-block/block_asn.conf`, `asn-block/block_isp.conf` devono restare allineati a `dynadoctor`; `secucam` e `PROJECT.GA` sono stati sincronizzati live con checksum identici il 2026-05-03. La whitelist paese vuota causa `403` su link `/get.php` da paesi non autorizzati.
 - ASN Block dashboard: la sorgente operativa modificabile e' `asn-block/asn-blocklist.txt`; il tab `ASN Block` -> `Blocklist ASN` salva il file centrale, lo copia su tutti i VPS abilitati e rigenera `blocked_asn`.
 - Agent: `/api/ipset/:name` deve limitare i membri di default (per `blocked_asn` molto grandi) e `/api/asn/stats` deve usare `asn-log-stats.py --source auto` con fallback `kern`.
 - Importante: nuovi deploy scaricano `agent/agent-bundle.js` da GitHub `main`; dopo modifiche agent bisogna committare e pushare il bundle o i nuovi VPS scaricheranno agent vecchio.
