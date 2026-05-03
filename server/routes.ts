@@ -600,7 +600,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ─── Fleet ASN config (repo-backed) ─────────────────────────────────────────
 
   const FLEET_DIR = join(process.cwd(), "asn-block");
+  const ASN_BLOCKLIST_EXCLUDED_VPS_NAMES = new Set(["dynamoxc"]);
 
+  function getAsnBlocklistTargetVpsIds(): string[] {
+    return getAllVps()
+      .filter(vps => vps.enabled && !ASN_BLOCKLIST_EXCLUDED_VPS_NAMES.has(vps.name.trim().toLowerCase()))
+      .map(vps => vps.id);
+  }
   function readFleetFile(name: string): string {
     const p = join(FLEET_DIR, name);
     try { return existsSync(p) ? readFileSync(p, "utf-8") : ""; } catch { return ""; }
@@ -675,9 +681,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const { content } = req.body;
     if (typeof content !== "string") return res.status(400).json({ error: "content required" });
     writeFleetFile("asn-blocklist.txt", content);
-    // Push file to all VPS, then trigger update-asn-block.sh
-    const syncResults = await bulkPost("all", "/api/config/asn-blocklist.txt", { content });
-    const applyResults = await bulkPost("all", "/api/asn/update-set", {});
+    // Push file to all eligible VPS, then trigger update-asn-block.sh.
+    // dynamoxc keeps a dedicated ASN blocklist and must not receive fleet updates.
+    const targetVpsIds = getAsnBlocklistTargetVpsIds();
+    const syncResults = await bulkPost(targetVpsIds, "/api/config/asn-blocklist.txt", { content });
+    const applyResults = await bulkPost(targetVpsIds, "/api/asn/update-set", {});
     res.json({ ok: true, syncResults, applyResults });
   });
 
@@ -725,7 +733,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Sync da AsnBlock GitHub repo su tutti i VPS
   app.post("/api/fleet/asn/sync-github", requireAuth, requireAdmin, async (_req, res) => {
-    const results = await bulkPost("all", "/api/asn/update-lists", {});
+    const results = await bulkPost(getAsnBlocklistTargetVpsIds(), "/api/asn/update-lists", {});
     res.json({ ok: true, results });
   });
 
