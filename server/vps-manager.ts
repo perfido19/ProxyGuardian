@@ -95,15 +95,7 @@ export function deleteVps(id: string): void {
 const REQUEST_TIMEOUT = 10000;
 export const SLOW_REQUEST_TIMEOUT = 120000;
 
-export const SLOW_PATHS = [
-  "/api/asn/update-lists",
-  "/api/asn/update-set",
-  "/api/unban-all",
-  "/api/unban-jail",
-  "/api/banned-ips",
-  "/api/fail2ban/jails",
-  "/api/system/antibrute-stats",
-];
+export const SLOW_PATHS = ["/api/asn/update-lists", "/api/asn/update-set"];
 
 async function agentFetch(vps: VpsConfig, path: string, options: RequestInit = {}, timeout = REQUEST_TIMEOUT): Promise<Response> {
   const url = `http://${vps.host}:${vps.port}${path}`;
@@ -150,7 +142,6 @@ export async function checkAllVpsHealth(): Promise<Map<string, boolean>> {
   await Promise.allSettled(enabled.map(async vps => {
     results.set(vps.id, await checkVpsHealth(vps));
   }));
-  saveVpsStore();
   return results;
 }
 
@@ -162,9 +153,8 @@ export async function bulkPost(vpsIds: string[] | "all", path: string, body: any
   const targets = vpsIds === "all"
     ? Array.from(vpsStore.values()).filter(v => v.enabled)
     : vpsIds.map(id => vpsStore.get(id)).filter((v): v is VpsConfig => !!v && v.enabled);
-  const timeout = SLOW_PATHS.includes(path) ? SLOW_REQUEST_TIMEOUT : undefined;
   const results = await Promise.allSettled(targets.map(async vps => {
-    try { return { vpsId: vps.id, vpsName: vps.name, success: true, data: await agentPost(vps, path, body, timeout) }; }
+    try { return { vpsId: vps.id, vpsName: vps.name, success: true, data: await agentPost(vps, path, body) }; }
     catch (e: any) { return { vpsId: vps.id, vpsName: vps.name, success: false, error: e.message }; }
   }));
   return results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", success: false, error: "rejected" });

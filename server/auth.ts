@@ -24,8 +24,6 @@ export type SafeUser = Omit<User, "passwordHash">;
 
 const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), "data");
 const USERS_FILE = join(DATA_DIR, "users.json");
-const DEFAULT_ADMIN_USERNAME = process.env.DEFAULT_ADMIN_USERNAME?.trim();
-const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD?.trim();
 
 function ensureDataDir() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
@@ -72,27 +70,19 @@ function toSafeUser(user: User): SafeUser {
 
 // Crea utente admin default al bootstrap
 function initDefaultAdmin() {
-  if (users.size > 0) return;
-
   const existing = Array.from(users.values()).find(u => u.username === "admin");
-  if (existing) return;
-
-  if (!DEFAULT_ADMIN_USERNAME || !DEFAULT_ADMIN_PASSWORD) {
-    console.warn("[Auth] Nessun utente presente e bootstrap admin disabilitato: imposta DEFAULT_ADMIN_USERNAME e DEFAULT_ADMIN_PASSWORD per inizializzare il primo admin.");
-    return;
+  if (!existing) {
+    const admin: User = {
+      id: generateId(),
+      username: "admin",
+      passwordHash: hashPassword("admin123"),
+      role: "admin",
+      enabled: true,
+      createdAt: new Date().toISOString(),
+    };
+    users.set(admin.id, admin);
+    console.log("[Auth] Default admin created (admin/admin123)");
   }
-
-  const admin: User = {
-    id: generateId(),
-    username: DEFAULT_ADMIN_USERNAME,
-    passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
-    role: "admin",
-    enabled: true,
-    createdAt: new Date().toISOString(),
-  };
-  users.set(admin.id, admin);
-  saveUsers();
-  console.log(`[Auth] Default admin created from environment (${DEFAULT_ADMIN_USERNAME})`);
 }
 
 initDefaultAdmin();
@@ -199,7 +189,7 @@ declare module "express-session" {
   }
 }
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
+// ─── Middleware ────────────────────────────────────────────────────────────────
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (!req.session?.userId) {
