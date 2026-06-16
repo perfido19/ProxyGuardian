@@ -25138,6 +25138,7 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/logrotate.d/proxyguardian",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/logrotate *",
   "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 644 /etc/logrotate.d/proxyguardian",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /var/log/anti-iptv/bans.log",
   ""
 ].join("\n");
 var LOGROTATE_CONF = [
