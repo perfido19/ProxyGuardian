@@ -45,6 +45,17 @@ cp "$AGENT_DIR/index.js" "$AGENT_DIR/agent-bundle.js"
 chown "$AGENT_USER:$AGENT_USER" "$AGENT_DIR/index.js" "$AGENT_DIR/agent-bundle.js"
 ok "Bundle aggiornato"
 
+# ── Aggiorna script ASN stats ────────────────────────────────────────────────
+info "Aggiornamento script ASN stats..."
+curl -fsSL "$REPO_URL/asn-log-stats.py" -o "/usr/local/bin/asn-log-stats.py" || {
+  warn "Download asn-log-stats.py fallito, ripristino backup bundle..."
+  cp "$AGENT_DIR/index.js.bak" "$AGENT_DIR/index.js"
+  cp "$AGENT_DIR/index.js.bak" "$AGENT_DIR/agent-bundle.js"
+  error "Aggiornamento fallito"
+}
+chmod 755 "/usr/local/bin/asn-log-stats.py"
+ok "Script ASN stats aggiornato"
+
 # ── Aggiorna sudoers ─────────────────────────────────────────────────────────
 info "Aggiornamento sudoers..."
 cat > "$SUDOERS_FILE" << SUDOEOF
@@ -70,6 +81,8 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables *
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/netbird update
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent

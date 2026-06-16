@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 import {
   CheckCircle2, XCircle, AlertCircle, RefreshCw, Upload,
-  Key, ShieldCheck, Server, HardDrive, Zap, Network, FileCode, Flame, RotateCw
+  Key, ShieldCheck, Server, HardDrive, Zap, Network, FileCode, Flame, RotateCw, Radio
 } from "lucide-react";
 
 interface NginxCheck {
@@ -48,6 +48,15 @@ interface VpsLogrotateStatus {
   error: string | null;
 }
 
+interface VpsNetbirdUpdateStatus {
+  vpsId: string;
+  vpsName: string;
+  running: boolean;
+  connected: boolean;
+  version: string | null;
+  error: string | null;
+}
+
 const CHECK_LABELS: Record<keyof NginxCheck, { label: string; icon: React.ReactNode }> = {
   streamCacheValid:   { label: "Cache streaming",       icon: <HardDrive className="w-3.5 h-3.5" /> },
   modsecurityActive:  { label: "ModSecurity attivo",    icon: <ShieldCheck className="w-3.5 h-3.5" /> },
@@ -64,6 +73,7 @@ export default function FleetConfig() {
   const [installing, setInstalling] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [cleanupApplying, setCleanupApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [logrotateApplying, setLogrotateApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
+  const [netbirdUpdating, setNetbirdUpdating] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [templateOpen, setTemplateOpen] = useState(false);
 
   const { data: statuses, isLoading, refetch, isFetching } = useQuery<VpsNginxStatus[]>({
@@ -102,6 +112,15 @@ export default function FleetConfig() {
     staleTime: 30000,
   });
 
+  const { data: netbirdStatuses, refetch: refetchNetbird } = useQuery<VpsNetbirdUpdateStatus[]>({
+    queryKey: ["/api/fleet/netbird/update-status"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/fleet/netbird/update-status");
+      return res.json();
+    },
+    staleTime: 60000,
+  });
+
   const { data: sshKeyData } = useQuery<{ key: string }>({
     queryKey: ["/api/fleet/ssh-key"],
     queryFn: async () => {
@@ -112,11 +131,11 @@ export default function FleetConfig() {
 
   const toggleAll = () => {
     if (!statuses) return;
-    const nonOptimized = statuses.filter(s => !s.optimized && !s.error).map(s => s.vpsId);
-    if (selected.size === nonOptimized.length) {
+    const selectable = statuses.filter(s => !s.error).map(s => s.vpsId);
+    if (selected.size === selectable.length) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(nonOptimized));
+      setSelected(new Set(selectable));
     }
   };
 
@@ -200,6 +219,33 @@ export default function FleetConfig() {
     }
   };
 
+  const applyNetbirdUpdate = async (vpsIds: string[]) => {
+    const next: Record<string, "idle" | "running" | "ok" | "error"> = { ...netbirdUpdating };
+    vpsIds.forEach(id => { next[id] = "running"; });
+    setNetbirdUpdating(next);
+    try {
+      const res = await apiRequest("POST", "/api/fleet/netbird/update", { vpsIds });
+      const results: Array<{ vpsId: string; vpsName: string; ok: boolean; newVersion?: string; error?: string }> = await res.json();
+      const updated: Record<string, "idle" | "running" | "ok" | "error"> = { ...netbirdUpdating };
+      results.forEach(r => { updated[r.vpsId] = r.ok ? "ok" : "error"; });
+      setNetbirdUpdating(updated);
+      const failed = results.filter(r => !r.ok);
+      const succeeded = results.filter(r => r.ok);
+      if (failed.length === 0) {
+        const versions = succeeded.map(r => r.newVersion).filter(Boolean);
+        const uniqueVersions = [...new Set(versions)];
+        toast({ title: "NetBird aggiornato", description: `${results.length} VPS aggiornati a ${uniqueVersions.join(", ")}` });
+      } else {
+        toast({ title: "Update parziale", description: `${failed.length} VPS falliti: ${failed.map(f => f.vpsName).join(", ")}`, variant: "destructive" });
+      }
+      setTimeout(() => refetchNetbird(), 10000);
+    } catch (e: any) {
+      vpsIds.forEach(id => { next[id] = "error"; });
+      setNetbirdUpdating({ ...next });
+      toast({ title: "Errore", description: e.message, variant: "destructive" });
+    }
+  };
+
   const installSshKey = async (vpsId: string) => {
     setInstalling(prev => ({ ...prev, [vpsId]: "running" }));
     try {
@@ -217,7 +263,7 @@ export default function FleetConfig() {
     }
   };
 
-  const nonOptimizedIds = (statuses || []).filter(s => !s.optimized && !s.error).map(s => s.vpsId);
+  const selectableIds = (statuses || []).filter(s => !s.error).map(s => s.vpsId);
   const optimizedCount = (statuses || []).filter(s => s.optimized).length;
   const totalCount = (statuses || []).length;
 
@@ -281,6 +327,20 @@ export default function FleetConfig() {
           >
             <RotateCw className="w-3.5 h-3.5" />
             Applica logrotate
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => {
+              const outdated = (netbirdStatuses || []).filter(n => n.version && n.version !== "0.70.4" && !n.error).map(n => n.vpsId);
+              const allIds = outdated.length > 0 ? outdated : (netbirdStatuses || []).filter(n => !n.error).map(n => n.vpsId);
+              if (allIds.length > 0) applyNetbirdUpdate(allIds);
+            }}
+            disabled={!netbirdStatuses || netbirdStatuses.filter(n => !n.error).length === 0}
+            className="gap-1.5"
+          >
+            <Radio className="w-3.5 h-3.5" />
+            Aggiorna NetBird
           </Button>
         </div>
       </div>
@@ -350,9 +410,9 @@ export default function FleetConfig() {
                 Applica config ({selected.size})
               </Button>
             )}
-            {nonOptimizedIds.length > 0 && selected.size === 0 && (
+            {selectableIds.length > 0 && selected.size === 0 && (
               <Button variant="outline" size="sm" onClick={toggleAll} className="gap-1.5">
-                Seleziona tutti da aggiornare
+                Seleziona tutti
               </Button>
             )}
           </div>
@@ -363,7 +423,7 @@ export default function FleetConfig() {
               <TableRow>
                 <TableHead className="w-10 pl-4">
                   <Checkbox
-                    checked={nonOptimizedIds.length > 0 && selected.size === nonOptimizedIds.length}
+                    checked={selectableIds.length > 0 && selected.size === selectableIds.length}
                     onCheckedChange={toggleAll}
                   />
                 </TableHead>
@@ -377,6 +437,7 @@ export default function FleetConfig() {
                 <TableHead>Buffers</TableHead>
                 <TableHead>IPSet Cleanup</TableHead>
                 <TableHead>Logrotate</TableHead>
+                <TableHead>NetBird</TableHead>
                 <TableHead>SSH Key</TableHead>
                 <TableHead className="text-right pr-4">Azioni</TableHead>
               </TableRow>
@@ -389,7 +450,9 @@ export default function FleetConfig() {
                 const cleanupVps = cleanupStatuses?.find(c => c.vpsId === vps.vpsId);
                 const logrotateState = logrotateApplying[vps.vpsId] || "idle";
                 const logrotateVps = logrotateStatuses?.find(l => l.vpsId === vps.vpsId);
-                const isSelectable = !vps.optimized && !vps.error;
+                const netbirdState = netbirdUpdating[vps.vpsId] || "idle";
+                const netbirdVps = netbirdStatuses?.find(n => n.vpsId === vps.vpsId);
+                const isSelectable = !vps.error;
                 return (
                   <TableRow key={vps.vpsId} className={selected.has(vps.vpsId) ? "bg-muted/30" : ""}>
                     <TableCell className="pl-4">
@@ -458,6 +521,25 @@ export default function FleetConfig() {
                       )}
                     </TableCell>
                     <TableCell>
+                      {netbirdState === "running" ? (
+                        <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground" />
+                      ) : netbirdState === "ok" || (netbirdVps?.version === "0.70.4" && netbirdState !== "error") ? (
+                        <div className="flex items-center gap-1">
+                          <CheckCircle2 className="w-4 h-4 text-green-500" />
+                          <span className="text-[10px] font-mono text-muted-foreground">0.70.4</span>
+                        </div>
+                      ) : netbirdState === "error" || netbirdVps?.error ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : netbirdVps?.version ? (
+                        <div className="flex items-center gap-1">
+                          <XCircle className="w-4 h-4 text-orange-500" />
+                          <span className="text-[10px] font-mono text-orange-500">{netbirdVps.version}</span>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
                       {sshState === "ok" ? (
                         <CheckCircle2 className="w-4 h-4 text-green-500" />
                       ) : sshState === "error" ? (
@@ -483,7 +565,7 @@ export default function FleetConfig() {
                           )}
                           SSH
                         </Button>
-                        {!vps.optimized && !vps.error && (
+                        {!vps.error && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -500,7 +582,27 @@ export default function FleetConfig() {
                             ) : (
                               <Upload className="w-3 h-3" />
                             )}
-                            Applica
+                            nginx
+                          </Button>
+                        )}
+                        {netbirdVps && netbirdVps.version && netbirdVps.version !== "0.70.4" && !netbirdVps.error && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1"
+                            disabled={netbirdState === "running"}
+                            onClick={() => applyNetbirdUpdate([vps.vpsId])}
+                          >
+                            {netbirdState === "running" ? (
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                            ) : netbirdState === "ok" ? (
+                              <CheckCircle2 className="w-3 h-3 text-green-500" />
+                            ) : netbirdState === "error" ? (
+                              <XCircle className="w-3 h-3 text-red-400" />
+                            ) : (
+                              <Radio className="w-3 h-3" />
+                            )}
+                            NetBird
                           </Button>
                         )}
                       </div>

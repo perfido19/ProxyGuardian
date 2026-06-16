@@ -11,7 +11,7 @@ export const serviceSchema = z.object({
 export type Service = z.infer<typeof serviceSchema>;
 
 export const serviceActionSchema = z.object({
-  service: z.string(),
+  service: z.string().regex(/^[a-zA-Z0-9_-]+$/, "Nome servizio non valido"),
   action: z.enum(['start', 'stop', 'restart', 'reload']),
 });
 
@@ -29,17 +29,11 @@ export const bannedIpSchema = z.object({
 export type BannedIp = z.infer<typeof bannedIpSchema>;
 
 export const unbanRequestSchema = z.object({
-  ip: z.string(),
-  jail: z.string(),
+  ip: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}$/, "IP non valido"),
+  jail: z.string().regex(/^[a-zA-Z0-9_-]+$/, "Nome jail non valido"),
 });
 
 export type UnbanRequest = z.infer<typeof unbanRequestSchema>;
-
-export const unbanJailRequestSchema = z.object({
-  jail: z.string().min(1),
-});
-
-export type UnbanJailRequest = z.infer<typeof unbanJailRequestSchema>;
 
 // Statistics
 export const statsSchema = z.object({
@@ -84,7 +78,7 @@ export const configFileSchema = z.object({
 export type ConfigFile = z.infer<typeof configFileSchema>;
 
 export const updateConfigRequestSchema = z.object({
-  filename: z.string(),
+  filename: z.string().regex(/^[a-zA-Z0-9_.-]+$/, "Nome file non valido"),
   content: z.string(),
 });
 
@@ -133,3 +127,43 @@ export const updateFilterRequestSchema = z.object({
 });
 
 export type UpdateFilterRequest = z.infer<typeof updateFilterRequestSchema>;
+
+// ─── User & VPS validation (security hardening) ────────────────────────────
+
+export const createUserSchema = z.object({
+  username: z.string().min(3).max(50).regex(/^[a-zA-Z0-9_-]+$/, "Username non valido"),
+  password: z.string().min(8, "Password minimo 8 caratteri"),
+  role: z.enum(["admin", "operator"]),
+  assignedVps: z.array(z.string()).optional(),
+});
+
+export const updateUserSchema = z.object({
+  password: z.string().min(8).optional(),
+  role: z.enum(["admin", "operator"]).optional(),
+  enabled: z.boolean().optional(),
+  assignedVps: z.array(z.string()).optional(),
+});
+
+const NETBIRD_IP_REGEX = /^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+const VALID_IPV4_REGEX = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+
+export const createVpsSchema = z.object({
+  name: z.string().min(1, "Nome richiesto"),
+  host: z.string().min(1, "Host richiesto").regex(VALID_IPV4_REGEX, "Host deve essere un IP valido"),
+  port: z.number().int().min(1).max(65535).optional(),
+  apiKey: z.string().min(8, "API key minimo 8 caratteri"),
+  tags: z.array(z.string()).optional(),
+});
+
+export const updateVpsSchema = z.object({
+  name: z.string().min(1).optional(),
+  host: z.string().min(1).regex(VALID_IPV4_REGEX, "Host deve essere un IP valido").optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  apiKey: z.string().min(8).optional(),
+  enabled: z.boolean().optional(),
+  tags: z.array(z.string()).optional(),
+});
+
+export const filterNameSchema = z.string().regex(/^[a-zA-Z0-9_-]+$/, "Nome filtro non valido");
+export const jailNameSchema = z.string().regex(/^[a-zA-Z0-9_-]+$/, "Nome jail non valido");
+export const ALLOWED_SERVICES = ["nginx", "fail2ban", "mariadb"] as const;

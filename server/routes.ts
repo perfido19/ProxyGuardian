@@ -5,7 +5,7 @@ import { execSync } from "child_process";
 import { randomBytes } from "crypto";
 import { open as openMaxMind, type Reader, validate as validateIp } from "maxmind";
 import { storage } from "./storage";
-import { serviceActionSchema, unbanRequestSchema, unbanJailRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
+import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
 import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
@@ -626,52 +626,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch {}
   }
 
-  // ── System config helpers for backup/restore ──
-
-  const NGINX_CONF_FILES = [
-    "country_whitelist.conf",
-    "block_asn.conf",
-    "block_isp.conf",
-    "block_badagents.conf",
-    "ip_whitelist.conf",
-    "exclusion_ip.conf",
-  ];
-
-  const FAIL2BAN_CONF_FILES = [
-    "jail.local",
-    "fail2ban.local",
-  ];
-
-  function readSystemConfigs(): Record<string, Record<string, string>> {
-    const nginxConfigs: Record<string, string> = {};
-    for (const file of NGINX_CONF_FILES) {
-      const path = `/etc/nginx/${file}`;
-      try {
-        if (existsSync(path)) nginxConfigs[file] = readFileSync(path, "utf-8");
-      } catch {}
-    }
-
-    const fail2banConfigs: Record<string, string> = {};
-    for (const file of FAIL2BAN_CONF_FILES) {
-      const path = `/etc/fail2ban/${file}`;
-      try {
-        if (existsSync(path)) fail2banConfigs[file] = readFileSync(path, "utf-8");
-      } catch {}
-    }
-
-    const asnBlockFiles: Record<string, string> = {};
-    try {
-      if (existsSync(FLEET_DIR)) {
-        for (const file of ["blocked_asn.txt", "whitelisted_asn.txt"]) {
-          const p = join(FLEET_DIR, file);
-          if (existsSync(p)) asnBlockFiles[file] = readFileSync(p, "utf-8");
-        }
-      }
-    } catch {}
-
-    return { nginxConfigs, fail2banConfigs, asnBlockFiles };
-  }
-
   // Block list (asn-blocklist.txt — AsnBlock format: "AS12345 # Description")
   app.get("/api/fleet/asn/blocklist", requireAuth, (_req, res) => {
     res.json({ content: readFleetFile("asn-blocklist.txt") });
@@ -740,7 +694,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ─── Backup / Restore ─────────────────────────────────────────────────────
 
   const DATA_DIR_PATH = join(process.cwd(), "data");
-  const LOGROTATE_CONFIG_FILE = join(DATA_DIR_PATH, "logrotate-config.json");
 
   app.get("/api/admin/backup", requireAuth, requireAdmin, (_req, res) => {
     try {
@@ -748,22 +701,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const p = join(DATA_DIR_PATH, file);
         try { return existsSync(p) ? JSON.parse(readFileSync(p, "utf-8")) : []; } catch { return []; }
       };
-      const systemConfigs = readSystemConfigs();
       const backup = {
-        version: 2,
+        version: 1,
         timestamp: new Date().toISOString(),
         vps: readData("vps.json"),
         users: readData("users.json"),
         asnBlocklist: readFleetFile("asn-blocklist.txt"),
         asnWhitelist: readFleetFile("asn-whitelist.txt"),
-        logrotateConfig: (() => {
-          try {
-            return existsSync(LOGROTATE_CONFIG_FILE) ? JSON.parse(readFileSync(LOGROTATE_CONFIG_FILE, "utf-8")) : null;
-          } catch { return null; }
-        })(),
-        nginxConfigs: systemConfigs.nginxConfigs,
-        fail2banConfigs: systemConfigs.fail2banConfigs,
-        asnBlockFiles: systemConfigs.asnBlockFiles,
       };
       const filename = `pg-backup-${new Date().toISOString().slice(0, 10)}.json`;
       res.setHeader("Content-Type", "application/json");
@@ -774,8 +718,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/restore", requireAuth, requireAdmin, (req, res) => {
     try {
-      const { version, vps, users, asnBlocklist, asnWhitelist, logrotateConfig, nginxConfigs, fail2banConfigs, asnBlockFiles } = req.body;
-      if ((version !== 1 && version !== 2) || !Array.isArray(vps) || !Array.isArray(users)) {
+      const { version, vps, users, asnBlocklist, asnWhitelist } = req.body;
+      if (version !== 1 || !Array.isArray(vps) || !Array.isArray(users)) {
         return res.status(400).json({ error: "File backup non valido o versione non supportata" });
       }
       if (!existsSync(DATA_DIR_PATH)) mkdirSync(DATA_DIR_PATH, { recursive: true });
@@ -783,71 +727,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       writeFileSync(join(DATA_DIR_PATH, "users.json"), JSON.stringify(users, null, 2), "utf-8");
       if (typeof asnBlocklist === "string") writeFleetFile("asn-blocklist.txt", asnBlocklist);
       if (typeof asnWhitelist === "string") writeFleetFile("asn-whitelist.txt", asnWhitelist);
-      if (logrotateConfig && typeof logrotateConfig === "object") {
-        writeFileSync(LOGROTATE_CONFIG_FILE, JSON.stringify(logrotateConfig, null, 2), "utf-8");
-      }
-
-      // Restore nginx configs
-      if (nginxConfigs && typeof nginxConfigs === "object") {
-        for (const [file, content] of Object.entries(nginxConfigs)) {
-          try {
-            writeFileSync(`/etc/nginx/${file}`, content as string, "utf-8");
-          } catch (e: any) {
-            console.error(`[Restore] Failed to write /etc/nginx/${file}:`, e.message);
-          }
-        }
-      }
-
-      // Restore fail2ban configs
-      if (fail2banConfigs && typeof fail2banConfigs === "object") {
-        for (const [file, content] of Object.entries(fail2banConfigs)) {
-          try {
-            writeFileSync(`/etc/fail2ban/${file}`, content as string, "utf-8");
-          } catch (e: any) {
-            console.error(`[Restore] Failed to write /etc/fail2ban/${file}:`, e.message);
-          }
-        }
-      }
-
-      // Restore ASN block files
-      if (asnBlockFiles && typeof asnBlockFiles === "object") {
-        if (!existsSync(FLEET_DIR)) mkdirSync(FLEET_DIR, { recursive: true });
-        for (const [file, content] of Object.entries(asnBlockFiles)) {
-          try {
-            writeFileSync(join(FLEET_DIR, file), content as string, "utf-8");
-          } catch (e: any) {
-            console.error(`[Restore] Failed to write asn-block/${file}:`, e.message);
-          }
-        }
-      }
-
       res.json({ ok: true, message: "Dati ripristinati. Il server si riavvierà tra 2 secondi." });
       // Riavvio per ricaricare vpsStore e usersStore in memoria
       setTimeout(() => process.exit(1), 2000);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // Logrotate config
-  app.get("/api/admin/logrotate-config", requireAuth, requireAdmin, (_req, res) => {
-    try {
-      if (existsSync(LOGROTATE_CONFIG_FILE)) {
-        const data = JSON.parse(readFileSync(LOGROTATE_CONFIG_FILE, "utf-8"));
-        res.json(data);
-      } else {
-        res.json(null);
-      }
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  app.post("/api/admin/logrotate-config", requireAuth, requireAdmin, (req, res) => {
-    try {
-      const config = req.body;
-      if (!config || typeof config !== "object") {
-        return res.status(400).json({ error: "Configurazione non valida" });
-      }
-      if (!existsSync(DATA_DIR_PATH)) mkdirSync(DATA_DIR_PATH, { recursive: true });
-      writeFileSync(LOGROTATE_CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
-      res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
@@ -872,13 +754,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { res.status(500).json({ error: "Errore" }); }
   });
   app.post("/api/unban-all", requireAuth, requireOperator, async (_req, res) => { try { res.json(await storage.unbanAll()); } catch { res.status(500).json({ error: "Errore" }); } });
-  app.post("/api/unban-jail", requireAuth, requireOperator, async (req, res) => {
-    try {
-      const r = unbanJailRequestSchema.safeParse(req.body);
-      if (!r.success) return res.status(400).json({ error: "Parametri non validi" });
-      res.json(await storage.unbanJail(r.data.jail));
-    } catch { res.status(500).json({ error: "Errore" }); }
-  });
   app.get("/api/stats", requireAuth, async (_req, res) => { try { res.json(await storage.getStats()); } catch { res.status(500).json({ error: "Errore" }); } });
 
   // Singolo IP
@@ -978,7 +853,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(result);
   });
   app.get("/api/logs/:logType", requireAuth, async (req, res) => {
-    try { res.json(await storage.getLogs(req.params.logType, parseInt(req.query.lines as string) || 100)); }
+    try {
+      const allowedLogTypes = ["nginx-access", "nginx-error", "fail2ban", "modsec", "syslog"];
+      if (!allowedLogTypes.includes(req.params.logType)) {
+        return res.status(400).json({ error: "Tipo di log non valido" });
+      }
+      const lines = Math.min(Math.max(parseInt(req.query.lines as string) || 100, 1), 10000);
+      res.json(await storage.getLogs(req.params.logType, lines));
+    }
     catch { res.status(500).json({ error: "Errore" }); }
   });
   app.get("/api/config/:filename", requireAuth, async (req, res) => {
@@ -996,6 +878,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/fail2ban/jails", requireAuth, async (_req, res) => { try { res.json(await storage.getJails()); } catch { res.status(500).json({ error: "Errore" }); } });
   app.post("/api/fail2ban/jails/:name", requireAuth, requireAdmin, async (req, res) => {
     try {
+      if (!jailNameSchema.safeParse(req.params.name).success) {
+        return res.status(400).json({ error: "Nome jail non valido" });
+      }
       const r = updateJailRequestSchema.safeParse(req.body);
       if (!r.success) return res.status(400).json({ error: "Parametri non validi" });
       await storage.updateJail(req.params.name, r.data.config);
@@ -1004,11 +889,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   app.get("/api/fail2ban/filters", requireAuth, async (_req, res) => { try { res.json(await storage.getFilters()); } catch { res.status(500).json({ error: "Errore" }); } });
   app.get("/api/fail2ban/filters/:name", requireAuth, async (req, res) => {
-    try { const f = await storage.getFilter(req.params.name); if (!f) return res.status(404).json({ error: "Non trovato" }); res.json(f); }
+    try {
+      if (!filterNameSchema.safeParse(req.params.name).success) {
+        return res.status(400).json({ error: "Nome filtro non valido" });
+      }
+      const f = await storage.getFilter(req.params.name); if (!f) return res.status(404).json({ error: "Non trovato" }); res.json(f);
+    }
     catch { res.status(500).json({ error: "Errore" }); }
   });
   app.post("/api/fail2ban/filters/:name", requireAuth, requireAdmin, async (req, res) => {
     try {
+      if (!filterNameSchema.safeParse(req.params.name).success) {
+        return res.status(400).json({ error: "Nome filtro non valido" });
+      }
       const r = updateFilterRequestSchema.safeParse(req.body);
       if (!r.success) return res.status(400).json({ error: "Parametri non validi" });
       await storage.updateFilter(req.params.name, r.data.failregex, r.data.ignoreregex);
@@ -1212,12 +1105,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const { vpsIds } = req.body;
     if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds[] richiesto" });
     let template: string;
-    let modsecRelaxed: string;
     try {
       template = readFileSync(NGINX_TEMPLATE_PATH, "utf-8");
-      modsecRelaxed = readFileSync(MODSEC_RELAXED_PATH, "utf-8");
     } catch (e: any) {
-      return res.status(500).json({ error: "Template nginx o modsec non trovato sul server" });
+      return res.status(500).json({ error: "Template nginx non trovato sul server" });
     }
     const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
     const results = await Promise.all(vpsList.map(async (vps) => {
@@ -1229,8 +1120,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Sostituisci placeholder nel template
         const config = template.replace(/__STREAM_CACHE_SIZE__/g, cacheSize);
         await agentPost(vps, "/api/system/setup-nginx-dirs", {});
-        // Distribuisci config modsec relaxed per API
-        await agentPost(vps, "/api/config/modsec_api_relaxed.conf", { content: modsecRelaxed });
         await agentPost(vps, "/api/config/nginx.conf", { content: config });
         const reload = await agentPost(vps, "/api/nginx/reload", {});
         return { vpsId: vps.id, vpsName: vps.name, ok: reload.ok !== false, cacheSize, error: reload.error };

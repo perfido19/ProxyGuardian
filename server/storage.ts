@@ -1,4 +1,4 @@
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { readFile, writeFile, access } from "fs/promises";
 import { constants } from "fs";
@@ -11,8 +11,9 @@ import type {
   JailConfig,
   Fail2banFilter,
 } from "@shared/schema";
+import { ALLOWED_SERVICES, filterNameSchema, jailNameSchema } from "@shared/schema";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // Runtime capability detection
 class SystemCapabilities {
@@ -48,7 +49,8 @@ class SystemCapabilities {
 
   private async checkCommand(command: string): Promise<boolean> {
     try {
-      await execAsync(command, { timeout: 2000 });
+      const parts = command.split(' ');
+      await execFileAsync(parts[0], parts.slice(1), { timeout: 2000 });
       return true;
     } catch {
       return false;
@@ -94,7 +96,6 @@ export interface IStorage {
   // Banned IPs
   getBannedIps(): Promise<BannedIp[]>;
   unbanIp(ip: string, jail: string): Promise<void>;
-  unbanJail(jail: string): Promise<{ unbannedCount: number }>;
   
   // Statistics
   getStats(): Promise<Stats>;
@@ -277,7 +278,7 @@ export class MemStorage implements IStorage {
     }
 
     try {
-      const { stdout } = await execAsync(`systemctl status ${name}`, { timeout: 5000 });
+      const { stdout } = await execFileAsync("systemctl", ["status", name], { timeout: 5000 });
       
       const isActive = stdout.includes('Active: active (running)');
       const isInactive = stdout.includes('Active: inactive');
@@ -340,11 +341,15 @@ export class MemStorage implements IStorage {
       throw new Error(`Azione non valida: ${action}`);
     }
 
+    if (!(ALLOWED_SERVICES as readonly string[]).includes(service)) {
+      throw new Error(`Servizio non valido: ${service}`);
+    }
+
     if (action === 'reload' && service !== 'nginx') {
       throw new Error('Reload supportato solo per nginx');
     }
 
-    await execAsync(`systemctl ${action} ${service}`, { timeout: 10000 });
+    await execFileAsync("systemctl", [action, service], { timeout: 10000 });
   }
 
   async getBannedIps(): Promise<BannedIp[]> {
@@ -358,7 +363,7 @@ export class MemStorage implements IStorage {
 
     try {
       // Get list of all active jails
-      const { stdout: statusOutput } = await execAsync('fail2ban-client status', { timeout: 5000 });
+      const { stdout: statusOutput } = await execFileAsync("fail2ban-client", ["status"], { timeout: 5000 });
       const jailListMatch = statusOutput.match(/Jail list:\s*(.+)/);
       
       if (jailListMatch) {
@@ -366,8 +371,12 @@ export class MemStorage implements IStorage {
         
         // Get banned IPs from each jail
         for (const jail of jails) {
+          if (!jailNameSchema.safeParse(jail).success) {
+            console.error(`Invalid jail name from fail2ban: ${jail}`);
+            continue;
+          }
           try {
-            const { stdout: jailStatus } = await execAsync(`fail2ban-client status ${jail}`, { timeout: 5000 });
+            const { stdout: jailStatus } = await execFileAsync("fail2ban-client", ["status", jail], { timeout: 5000 });
             const jailIps = this.parseFail2banStatus(jailStatus, jail);
             bannedIps.push(...jailIps);
           } catch (error) {
@@ -406,6 +415,14 @@ export class MemStorage implements IStorage {
   }
 
   async unbanIp(ip: string, jail: string): Promise<void> {
+    // Validate inputs to prevent command injection
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+      throw new Error('IP non valido');
+    }
+    if (!jailNameSchema.safeParse(jail).success) {
+      throw new Error('Nome jail non valido');
+    }
+
     await this.caps.detect();
     
     if (!this.caps.hasFail2ban) {
@@ -414,39 +431,7 @@ export class MemStorage implements IStorage {
       return;
     }
 
-    await execAsync(`fail2ban-client set ${jail} unbanip ${ip}`, { timeout: 5000 });
-  }
-
-  async unbanJail(jail: string): Promise<{ unbannedCount: number }> {
-    await this.caps.detect();
-
-    if (!this.caps.hasFail2ban) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      console.log(`[Mock] Unban jail: ${jail}`);
-      return { unbannedCount: 5 };
-    }
-
-    let unbannedCount = 0;
-    try {
-      const { stdout: jailStatus } = await execAsync(`fail2ban-client status ${jail}`, { timeout: 5000 });
-      const ipListMatch = jailStatus.match(/Banned IP list:\s*(.+)/);
-      if (ipListMatch) {
-        const ips = ipListMatch[1].trim().split(/\s+/).filter(ip => ip);
-        for (const ip of ips) {
-          try {
-            await execAsync(`fail2ban-client set ${jail} unbanip ${ip}`, { timeout: 3000 });
-            unbannedCount++;
-          } catch (error) {
-            console.error(`Error unbanning ${ip} from ${jail}:`, error);
-          }
-        }
-      }
-    } catch (error) {
-      console.error(`Error unbanning jail ${jail}:`, error);
-      throw new Error(`Errore durante lo sblocco della jail ${jail}`);
-    }
-
-    return { unbannedCount };
+    await execFileAsync("fail2ban-client", ["set", jail, "unbanip", ip], { timeout: 5000 });
   }
 
   async unbanAll(): Promise<{ unbannedCount: number; jailsProcessed: number }> {
@@ -463,7 +448,7 @@ export class MemStorage implements IStorage {
 
     try {
       // Get list of all active jails
-      const { stdout: statusOutput } = await execAsync('fail2ban-client status', { timeout: 5000 });
+      const { stdout: statusOutput } = await execFileAsync("fail2ban-client", ["status"], { timeout: 5000 });
       const jailListMatch = statusOutput.match(/Jail list:\s*(.+)/);
       
       if (jailListMatch) {
@@ -471,8 +456,12 @@ export class MemStorage implements IStorage {
         
         // Unban all IPs from each jail
         for (const jail of jails) {
+          if (!jailNameSchema.safeParse(jail).success) {
+            console.error(`Invalid jail name from fail2ban: ${jail}`);
+            continue;
+          }
           try {
-            const { stdout: jailStatus } = await execAsync(`fail2ban-client status ${jail}`, { timeout: 5000 });
+            const { stdout: jailStatus } = await execFileAsync("fail2ban-client", ["status", jail], { timeout: 5000 });
             const ipListMatch = jailStatus.match(/Banned IP list:\s*(.+)/);
             
             if (ipListMatch) {
@@ -480,7 +469,7 @@ export class MemStorage implements IStorage {
               
               for (const ip of ips) {
                 try {
-                  await execAsync(`fail2ban-client set ${jail} unbanip ${ip}`, { timeout: 3000 });
+                  await execFileAsync("fail2ban-client", ["set", jail, "unbanip", ip], { timeout: 3000 });
                   unbannedCount++;
                 } catch (error) {
                   console.error(`Error unbanning ${ip} from ${jail}:`, error);
@@ -535,26 +524,21 @@ export class MemStorage implements IStorage {
 
       // Try to get active connections from nginx status page
       try {
-        const { stdout } = await execAsync('curl -s http://localhost/nginx_status 2>/dev/null || echo ""', { timeout: 3000 });
+        const { stdout } = await execFileAsync("curl", ["-s", "http://localhost/nginx_status"], { timeout: 3000 });
         const match = stdout.match(/Active connections:\s*(\d+)/);
         if (match) {
           stats.activeConnections = parseInt(match[1]);
         } else {
           // Fallback: count TCP connections on port 8880
           try {
-            const { stdout: ssOutput } = await execAsync(
-              'ss -tn state established "( sport = :8880 )" 2>/dev/null | grep -c ESTAB || echo "0"',
-              { timeout: 2000 }
-            );
-            stats.activeConnections = parseInt(ssOutput.trim()) || 0;
+            const { stdout: ssOutput } = await execFileAsync("ss", ["-tn", "state", "established", "( sport = :8880 )"], { timeout: 2000 });
+              stats.activeConnections = parseInt(ssOutput.trim()) || 0;
           } catch {
             // Final fallback: try netstat
             try {
-              const { stdout: netstatOutput } = await execAsync(
-                'netstat -tn 2>/dev/null | grep ":8880" | grep -c ESTABLISHED || echo "0"',
-                { timeout: 2000 }
-              );
-              stats.activeConnections = parseInt(netstatOutput.trim()) || 0;
+              const { stdout: netstatOutput } = await execFileAsync("netstat", ["-tn"], { timeout: 2000 });
+              const estabLines = netstatOutput.split('\n').filter(l => l.includes(':8880') && l.includes('ESTABLISHED'));
+              stats.activeConnections = estabLines.length || 0;
             } catch {
               stats.activeConnections = 0;
             }
@@ -573,7 +557,7 @@ export class MemStorage implements IStorage {
       } catch {}
 
       try {
-        const { stdout } = await execAsync('wc -l < /var/log/nginx/access.log 2>/dev/null || echo "0"', { timeout: 3000 });
+        const { stdout } = await execFileAsync("wc", ["-l", "/var/log/nginx/access.log"], { timeout: 3000 });
         stats.totalRequests24h = parseInt(stdout.trim()) || 0;
       } catch {}
 
@@ -594,6 +578,14 @@ export class MemStorage implements IStorage {
   }
 
   async getLogs(logType: string, lines: number = 100): Promise<LogEntry[]> {
+    // Validate logType against allowed values
+    const allowedLogTypes = Object.keys(this.logPaths);
+    if (!allowedLogTypes.includes(logType) && logType !== "syslog") {
+      throw new Error(`Tipo di log non valido: ${logType}`);
+    }
+    // Clamp lines to prevent excessive output
+    lines = Math.min(Math.max(lines, 1), 10000);
+
     await this.caps.detect();
     
     if (!this.caps.hasLogFiles) {
@@ -608,7 +600,7 @@ export class MemStorage implements IStorage {
     try {
       // Check if log file exists
       await access(logPath, constants.R_OK);
-      const { stdout } = await execAsync(`tail -n ${lines} ${logPath} 2>/dev/null || echo ""`, { timeout: 5000 });
+      const { stdout } = await execFileAsync("tail", ["-n", String(lines), logPath], { timeout: 5000 });
       return this.parseLogEntries(stdout, logType);
     } catch (error) {
       console.log(`[Storage] Log file ${logPath} not accessible, using mock data`);
@@ -966,7 +958,7 @@ export class MemStorage implements IStorage {
       await writeFile(jailLocalPath, content, 'utf-8');
       
       // Reload fail2ban to apply changes
-      await execAsync('fail2ban-client reload', { timeout: 5000 });
+      await execFileAsync("fail2ban-client", ["reload"], { timeout: 5000 });
     } catch (error) {
       console.error(`Error updating jail ${name}:`, error);
       throw new Error('Errore nell\'aggiornamento della configurazione jail');
@@ -1006,8 +998,10 @@ export class MemStorage implements IStorage {
     
     try {
       await access(filterDir, constants.R_OK);
-      const { stdout } = await execAsync(`ls ${filterDir}/*.conf`, { timeout: 3000 });
-      const filterFiles = stdout.trim().split('\n');
+      const { stdout } = await execFileAsync("ls", ["-1", filterDir], { timeout: 3000 });
+      const filterFiles = stdout.trim().split('\n')
+        .filter(f => f.endsWith('.conf'))
+        .map(f => `${filterDir}/${f}`);
       
       for (const filterPath of filterFiles) {
         try {
@@ -1053,6 +1047,11 @@ export class MemStorage implements IStorage {
   }
 
   async updateFilter(name: string, failregex: string[], ignoreregex?: string[]): Promise<void> {
+    // Validate filter name to prevent path traversal
+    if (!filterNameSchema.safeParse(name).success) {
+      throw new Error('Nome filtro non valido');
+    }
+
     await this.caps.detect();
     
     // Validate input
@@ -1120,7 +1119,7 @@ export class MemStorage implements IStorage {
       
       // Reload fail2ban to apply changes
       try {
-        await execAsync('fail2ban-client reload', { timeout: 5000 });
+        await execFileAsync("fail2ban-client", ["reload"], { timeout: 5000 });
       } catch (reloadError) {
         // If reload fails, restore backup
         if (backupContent) {
@@ -1196,7 +1195,7 @@ export class MemStorage implements IStorage {
       await writeFile(path, content, 'utf-8');
       
       // Reload fail2ban to apply changes
-      await execAsync('fail2ban-client reload', { timeout: 5000 });
+      await execFileAsync("fail2ban-client", ["reload"], { timeout: 5000 });
     } catch (error) {
       console.error(`Error writing ${type}:`, error);
       throw new Error(`Errore nella scrittura di ${type}`);

@@ -199,7 +199,7 @@ declare module "express-session" {
   }
 }
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
+// ─── Middleware ────────────────────────────────────────────────────────────────
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (!req.session?.userId) {
