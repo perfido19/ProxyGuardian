@@ -16,7 +16,7 @@ import { LoadingState } from "@/components/loading-state";
 import { IpCell } from "@/components/ip-cell";
 import { useIpBatch } from "@/hooks/use-ip-batch";
 
-interface BulkResult { vpsId: string; vpsName: string; success: boolean; error?: string; }
+interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
 interface Vps { id: string; name: string; }
 
 function useDefaultVpsId() {

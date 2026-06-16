@@ -5,12 +5,15 @@ server/public
 vite.config.ts.*
 *.tar.gz
 data/
-agent/agent-bundle.js
 agent/package-lock.json
 agent/node_modules
 .env
 .agents/
 .claude/
+.qwen/
 .replit
+*.py[cod]
+**/__pycache__/
+mnt/user-data/outputs/
 CLAUDE.md
 mnt/user-data/outputs/*/CLAUDE.md

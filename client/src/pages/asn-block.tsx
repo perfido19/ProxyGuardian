@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useVpsList, useVpsHealth } from "@/hooks/use-vps";
@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -16,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 import {
   Plus, Trash2, Search, RefreshCw, CheckCircle, XCircle,
-  Shield, Activity, Settings, FileText, AlertTriangle, Play, Database, Copy,
+  Shield, Activity, Settings, FileText, AlertTriangle, Play, Database, Copy, Save,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -42,6 +43,24 @@ function parseAsnConfig(content: string): AsnEntry[] {
 
 function buildAsnConfig(entries: AsnEntry[]): string {
   return entries.map(({ asn, description }) => `${asn} 1;${description ? ` # ${description}` : ""}`).join("\n") + "\n";
+}
+
+function parseAsnBlocklist(content: string): AsnEntry[] {
+  return content.split("\n").map(line => {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) return null;
+    const [value, ...commentParts] = t.split("#");
+    const rawAsn = value.trim().split(/\s+/)[0]?.toUpperCase();
+    if (!/^AS\d+$/.test(rawAsn)) return null;
+    const description = commentParts.join("#").trim() || undefined;
+    return { asn: rawAsn, description };
+  }).filter(Boolean) as AsnEntry[];
+}
+
+function normalizeAsnInput(value: string): string {
+  const trimmed = value.trim().toUpperCase();
+  if (!trimmed) return "";
+  return trimmed.startsWith("AS") ? trimmed : `AS${trimmed}`;
 }
 
 function ServiceBadge({ state }: { state: string }) {
@@ -665,23 +684,34 @@ function TabLog({ vpsId }: { vpsId: string }) {
 
 // ─── Blocklist Tab (existing functionality) ───────────────────────────────────
 
-function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps }: {
+function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps, canWrite }: {
   selectedVps: string;
   setSelectedVps: (v: string) => void;
   vpsList: any[];
   onlineVps: any[];
+  canWrite: boolean;
 }) {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [newAsn, setNewAsn] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [content, setContent] = useState("");
+
+  const { data: fleetBlocklist, isLoading: blocklistLoading, refetch: refetchBlocklist } = useQuery<{ content: string }>({
+    queryKey: ["fleet-asn-blocklist"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/fleet/asn/blocklist"); return r.json(); },
+  });
+
+  useEffect(() => {
+    if (fleetBlocklist?.content !== undefined) setContent(fleetBlocklist.content);
+  }, [fleetBlocklist?.content]);
 
   const { data: bulkResults, isLoading, refetch } = useQuery<BulkResult[]>({
     queryKey: ["asn-block-all", selectedVps],
     queryFn: async () => {
       const r = await apiRequest("POST", "/api/vps/bulk/get", {
         vpsIds: onlineVps.map(v => v.id),
-        path: "/api/config/block_asn.conf",
+        path: "/api/config/asn-blocklist.txt",
       });
       return r.json();
     },
@@ -690,10 +720,15 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps }: {
   });
 
   const asnMap = new Map<string, { description?: string; presentIn: Set<string> }>();
-  const vpsConfigMap = new Map<string, AsnEntry[]>();
+  const fleetEntries = parseAsnBlocklist(content);
+  const fleetAsns = new Set(fleetEntries.map(e => e.asn));
+
+  fleetEntries.forEach(({ asn, description }) => {
+    asnMap.set(asn, { description, presentIn: new Set() });
+  });
+
   (bulkResults || []).filter(r => r.success && r.data?.content).forEach(r => {
-    const entries = parseAsnConfig(r.data.content);
-    vpsConfigMap.set(r.vpsId, entries);
+    const entries = parseAsnBlocklist(r.data.content);
     entries.forEach(({ asn, description }) => {
       if (!asnMap.has(asn)) asnMap.set(asn, { description, presentIn: new Set() });
       asnMap.get(asn)!.presentIn.add(r.vpsId);
@@ -706,44 +741,77 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps }: {
     ? allAsns.filter(e => e.asn.includes(search) || (e.description ?? "").toLowerCase().includes(search.toLowerCase()))
     : allAsns;
 
-  const saveAllMutation = useMutation({
-    mutationFn: async ({ asn, remove }: { asn: string; remove: boolean }) => {
-      return Promise.all(onlineVps.map(async vps => {
-        const current = vpsConfigMap.get(vps.id) || [];
-        let updated: AsnEntry[];
-        if (remove) {
-          updated = current.filter(e => e.asn !== asn);
-        } else {
-          if (current.find(e => e.asn === asn)) return { vpsId: vps.id, vpsName: vps.name, success: true };
-          updated = [...current, { asn, description: newDesc || undefined }];
-        }
-        const r = await apiRequest("POST", `/api/vps/${vps.id}/proxy/api/config/block_asn.conf`, { content: buildAsnConfig(updated) });
-        return r.json();
-      }));
+  const saveFleetMutation = useMutation({
+    mutationFn: async (nextContent: string) => {
+      const r = await apiRequest("POST", "/api/fleet/asn/blocklist", { content: nextContent });
+      return r.json();
     },
-    onSuccess: (_, vars) => {
+    onSuccess: (data: any) => {
       refetch();
-      const target = selectedVps === "all" ? "tutti i VPS" : onlineVps[0]?.name ?? "VPS selezionato";
-      toast({ title: vars.remove ? `ASN ${vars.asn} rimosso da ${target}` : `ASN ${vars.asn} aggiunto a ${target}` });
-      if (!vars.remove) { setNewAsn(""); setNewDesc(""); }
+      refetchBlocklist();
+      const synced = (data.syncResults || []).filter((r: BulkResult) => r.success).length;
+      const applied = (data.applyResults || []).filter((r: BulkResult) => r.success).length;
+      toast({ title: "Blocklist ASN salvata", description: `Sincronizzata su ${synced} VPS, set rigenerato su ${applied} VPS` });
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
+
+  function updateEntry(asn: string, description: string | undefined, remove = false) {
+    const normalized = normalizeAsnInput(asn);
+    if (!/^AS\d+$/.test(normalized)) {
+      toast({ title: "ASN non valido", description: "Usa il formato AS12345", variant: "destructive" });
+      return;
+    }
+    const lines = content.split("\n");
+    const exists = lines.some(line => {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) return false;
+      return t.split("#")[0].trim().split(/\s+/)[0]?.toUpperCase() === normalized;
+    });
+    const nextLines = remove
+      ? lines.filter(line => {
+          const t = line.trim();
+          if (!t || t.startsWith("#")) return true;
+          return t.split("#")[0].trim().split(/\s+/)[0]?.toUpperCase() !== normalized;
+        })
+      : exists
+        ? lines
+        : [...lines.filter((line, i) => i < lines.length - 1 || line.trim()), `${normalized}${description ? ` # ${description}` : ""}`];
+    const nextContent = nextLines.join("\n").replace(/\n*$/, "\n");
+    setContent(nextContent);
+    saveFleetMutation.mutate(nextContent);
+    if (!remove) { setNewAsn(""); setNewDesc(""); }
+  }
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground">Aggiungi ASN</CardTitle>
-          <CardDescription>{selectedVps === "all" ? "Aggiunge su tutti i VPS online" : `Solo su ${onlineVps[0]?.name ?? "VPS selezionato"}`}</CardDescription>
+          <CardTitle className="text-sm font-heading uppercase tracking-wide text-muted-foreground">Blocklist ASN fleet</CardTitle>
+          <CardDescription>Modifica il file centrale asn-blocklist.txt e sincronizza automaticamente tutti i VPS abilitati</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <div className="flex gap-2 flex-wrap">
             <Input placeholder="Numero ASN (es. 15169)" value={newAsn} onChange={e => setNewAsn(e.target.value)}
-              className="w-48 font-mono" onKeyDown={e => e.key === "Enter" && newAsn && !asnMap.has(newAsn) && saveAllMutation.mutate({ asn: newAsn, remove: false })} />
+              className="w-48 font-mono" onKeyDown={e => e.key === "Enter" && newAsn && updateEntry(newAsn, newDesc || undefined)} />
             <Input placeholder="Descrizione (opzionale)" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="flex-1" />
-            <Button onClick={() => saveAllMutation.mutate({ asn: newAsn, remove: false })} disabled={!newAsn || asnMap.has(newAsn) || saveAllMutation.isPending}>
+            <Button onClick={() => updateEntry(newAsn, newDesc || undefined)} disabled={!canWrite || !newAsn || fleetAsns.has(normalizeAsnInput(newAsn)) || saveFleetMutation.isPending}>
               <Plus className="w-4 h-4 mr-1" />Aggiungi
+            </Button>
+          </div>
+          <Textarea
+            value={content}
+            onChange={e => setContent(e.target.value)}
+            className="font-mono text-xs min-h-80"
+            disabled={!canWrite || blocklistLoading || saveFleetMutation.isPending}
+            placeholder="AS12345 # descrizione"
+          />
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-xs text-muted-foreground">
+              {fleetEntries.length} ASN nel file fleet. Il salvataggio aggiorna /etc/asn-blocklist.txt e rigenera blocked_asn su tutti i VPS abilitati.
+            </p>
+            <Button onClick={() => saveFleetMutation.mutate(content)} disabled={!canWrite || saveFleetMutation.isPending || blocklistLoading}>
+              <Save className="w-4 h-4 mr-1" />{saveFleetMutation.isPending ? "Salvataggio..." : "Salva e sincronizza"}
             </Button>
           </div>
         </CardContent>
@@ -754,7 +822,7 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps }: {
           <div className="flex items-center justify-between gap-4">
             <div>
               <CardTitle>ASN Bloccati</CardTitle>
-              <CardDescription>{allAsns.length} ASN — {selectedVps === "all" ? `${onlineVps.length} VPS online` : onlineVps[0]?.name}</CardDescription>
+              <CardDescription>{allAsns.length} ASN — copertura su {onlineVps.length} VPS online</CardDescription>
             </div>
             <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
               <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
@@ -791,8 +859,8 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps }: {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" disabled={saveAllMutation.isPending}
-                          onClick={() => saveAllMutation.mutate({ asn, remove: true })}>
+                        <Button variant="ghost" size="icon" disabled={!canWrite || saveFleetMutation.isPending}
+                          onClick={() => updateEntry(asn, undefined, true)}>
                           <Trash2 className="w-4 h-4 text-destructive" />
                         </Button>
                       </TableCell>
@@ -892,6 +960,7 @@ export default function AsnBlock() {
             setSelectedVps={setSelectedVps}
             vpsList={vpsList || []}
             onlineVps={onlineVps}
+            canWrite={user?.role === "admin"}
           />
         </TabsContent>
       </Tabs>

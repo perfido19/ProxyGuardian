@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +30,8 @@ export default function DeployVps() {
   const [copied, setCopied] = useState(false);
   const [showScript, setShowScript] = useState(false);
   const [embeddedConfigs, setEmbeddedConfigs] = useState<Record<string, boolean>>({});
+  const [installAsnBlock, setInstallAsnBlock] = useState(true);
+  const [installAntiIptv, setInstallAntiIptv] = useState(false);
 
   const handleGenerate = async () => {
     if (!vpsName.trim()) {
@@ -44,6 +47,8 @@ export default function DeployVps() {
         backendIp: backendIp.trim(),
         backendPort: parseInt(backendPort) || 8880,
         proxyPort: parseInt(proxyPort) || 8880,
+        installAsnBlock,
+        installAntiIptv,
       });
       const data = await res.json();
       setScript(data.script);
@@ -82,6 +87,7 @@ export default function DeployVps() {
     { key: "modsecRelaxed", label: "ModSec relaxed (API)", icon: Shield },
     { key: "countryWhitelist", label: "Country whitelist", icon: Globe },
     { key: "blockAsn", label: "ASN blacklist", icon: AlertTriangle },
+    { key: "antiIptv", label: "Anti-IPTV", icon: Shield },
     { key: "blockIsp", label: "ISP blacklist", icon: AlertTriangle },
     { key: "blockBadAgents", label: "Bad agents block", icon: Shield },
     { key: "ipWhitelist", label: "IP whitelist", icon: FileText },
@@ -105,7 +111,7 @@ export default function DeployVps() {
       <div>
         <h1 className="text-2xl font-heading font-bold tracking-tight">Deploy VPS</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Genera script completo per installare Nginx + ModSecurity + Fail2ban + Agent su un nuovo VPS
+          Genera script completo per installare Nginx + ModSecurity + Fail2ban + NetBird + Agent su un nuovo VPS
         </p>
       </div>
 
@@ -116,10 +122,18 @@ export default function DeployVps() {
             Configurazione Deploy
           </CardTitle>
           <CardDescription>
-            Parametri per il nuovo VPS proxy. Il backend IP è l'indirizzo del server Xtream.
+            Parametri per il nuovo VPS proxy. Il backend IP è l'indirizzo del server Xtream e NetBird verra` installato/joinato automaticamente.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <Alert>
+            <Info className="w-4 h-4" />
+            <AlertTitle>NetBird obbligatorio</AlertTitle>
+            <AlertDescription>
+              Lo script installa NetBird usando la setup key del dashboard e si interrompe se non ottiene un IP mesh `100.x.x.x`.
+            </AlertDescription>
+          </Alert>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Nome VPS</Label>
@@ -152,10 +166,31 @@ export default function DeployVps() {
                 value={proxyPort}
                 onChange={e => setProxyPort(e.target.value)}
                 placeholder="8880"
-                type="number"
-              />
+                  type="number"
+                />
+              </div>
             </div>
-          </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-lg border p-4 bg-muted/20">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <Checkbox checked={installAsnBlock} onCheckedChange={checked => setInstallAsnBlock(checked === true)} />
+                <div className="space-y-1">
+                  <div className="text-sm font-medium leading-none">Installa ASN Block</div>
+                  <p className="text-xs text-muted-foreground">
+                    Preconfigura gli script e i servizi AsnBlock sul nuovo VPS.
+                  </p>
+                </div>
+              </label>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <Checkbox checked={installAntiIptv} onCheckedChange={checked => setInstallAntiIptv(checked === true)} />
+                <div className="space-y-1">
+                  <div className="text-sm font-medium leading-none">Installa Anti-IPTV</div>
+                  <p className="text-xs text-muted-foreground">
+                    Selezione per installare lo script anti-IPTV.
+                  </p>
+                </div>
+              </label>
+            </div>
 
           <Button onClick={handleGenerate} disabled={generating} className="w-full md:w-auto">
             {generating ? (
@@ -181,7 +216,7 @@ export default function DeployVps() {
                     Script Generato
                   </CardTitle>
                   <CardDescription>
-                    Script autocontenuto con tutte le config attuali della dashboard
+                    Script autocontenuto con le config e i componenti selezionati per questo VPS
                   </CardDescription>
                 </div>
                 <div className="flex gap-2">
@@ -223,7 +258,7 @@ export default function DeployVps() {
                 Configurazioni Embeddate
               </CardTitle>
               <CardDescription>
-                Queste configurazioni sono state incluse automaticamente dallo stato attuale della dashboard
+                Queste configurazioni e componenti saranno inclusi nello script generato
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -268,13 +303,15 @@ export default function DeployVps() {
                     <li>Trasferiscilo sul nuovo VPS (scp, sftp, o copia-incolla)</li>
                     <li>Rendi eseguibile: <code className="bg-muted px-1.5 py-0.5 rounded text-xs">chmod +x deploy-*.sh</code></li>
                     <li>Esegui come root: <code className="bg-muted px-1.5 py-0.5 rounded text-xs">sudo ./deploy-*.sh</code></li>
+                    <li>Lo script installa e connette NetBird prima dell'agent</li>
+                    <li>Se NetBird non si connette o non compare un IP `100.x.x.x`, il deploy si ferma</li>
                     <li>Al termine, lo script mostrerà l'IP NetBird e l'API Key generata</li>
                   </ol>
                   <Alert>
                     <Info className="w-4 h-4" />
                     <AlertTitle>Tempo stimato</AlertTitle>
                     <AlertDescription>
-                      L'installazione richiede 10-20 minuti su una VPS pulita Ubuntu 22.04 LTS.
+                        L'installazione richiede 10-20 minuti su una VPS pulita Ubuntu 20.04/22.04.
                     </AlertDescription>
                   </Alert>
                 </TabsContent>
@@ -283,7 +320,7 @@ export default function DeployVps() {
                     <li>Vai su <strong>VPS</strong> nella sidebar</li>
                     <li>Clicca <strong>"Aggiungi VPS"</strong></li>
                     <li>Inserisci il nome del VPS</li>
-                    <li>Inserisci l'IP NetBird (100.x.x.x) mostrato dallo script</li>
+                    <li>Inserisci l'IP NetBird (100.x.x.x) mostrato dallo script, non l'IP pubblico</li>
                     <li>Porta: <strong>3001</strong> (default dell'agent)</li>
                     <li>Incolla l'API Key mostrata dallo script</li>
                     <li>Clicca <strong>"Aggiungi VPS"</strong> e verifica la connessione</li>

@@ -6,6 +6,7 @@ import { constants, existsSync } from "fs";
 import path from "path";
 
 const execAsync = promisify(exec);
+const CMD_MAX_BUFFER = 16 * 1024 * 1024;
 
 const app = express();
 app.use(express.json());
@@ -40,7 +41,7 @@ app.get("/health", (_req, res) => {
 
 async function runCmd(cmd: string, timeout = 10000): Promise<{ stdout: string; stderr: string; ok: boolean }> {
   try {
-    const { stdout, stderr } = await execAsync(cmd, { timeout });
+    const { stdout, stderr } = await execAsync(cmd, { timeout, maxBuffer: CMD_MAX_BUFFER });
     return { stdout: stdout.trim(), stderr: stderr.trim(), ok: true };
   } catch (err: any) {
     return { stdout: err.stdout ? err.stdout.trim() : "", stderr: err.stderr ? err.stderr.trim() : err.message, ok: false };
@@ -418,10 +419,10 @@ function parseIpsetList(output: string): Array<{ name: string; type: string; cou
 
 app.get("/api/ipset", async (_req, res) => {
   try {
-    const { stdout, ok } = await runCmd("sudo ipset list");
+    const { stdout, ok } = await runCmd("sudo ipset list -t");
     if (!ok) return res.status(500).json({ error: "ipset non disponibile" });
     const sets = parseIpsetList(stdout);
-    res.json(sets.map(({ members, ...meta }) => ({ ...meta, count: members.length })));
+    res.json(sets.map(({ members, ...meta }) => meta));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -431,11 +432,13 @@ app.get("/api/ipset/:name", async (req, res) => {
   const { name } = req.params;
   if (!/^[\w\-]+$/.test(name)) return res.status(400).json({ error: "Nome ipset non valido" });
   try {
+    const limit = Math.min(parseInt(String(req.query.limit || "1000"), 10) || 1000, 10000);
     const { stdout, ok } = await runCmd(`sudo ipset list ${name}`);
     if (!ok) return res.status(404).json({ error: "IPSet non trovato" });
     const sets = parseIpsetList(stdout);
     if (!sets.length) return res.status(404).json({ error: "IPSet non trovato" });
-    res.json(sets[0]);
+    const set = sets[0];
+    res.json({ ...set, totalMembers: set.count, members: set.members.slice(0, limit), truncated: set.members.length > limit });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -562,10 +565,15 @@ app.post("/api/netbird/stop", async (_req, res) => {
 });
 
 app.post("/api/netbird/update", async (_req, res) => {
-  const result = await runCmd("apt install --only-upgrade netbird -y 2>&1");
+  const result = await runCmd("sudo apt install --only-upgrade netbird -y 2>&1", 120000);
   await new Promise(r => setTimeout(r, 2000));
   const status = await runCmd("systemctl is-active netbird 2>/dev/null");
   res.json({ ok: result.ok, output: result.stdout || result.stderr, running: status.stdout.trim() === "active" });
+});
+
+app.get("/api/netbird/version", async (_req, res) => {
+  const result = await runCmd("netbird version 2>/dev/null");
+  res.json({ version: result.stdout.trim() || null });
 });
 
 app.get("/api/netbird/status", async (_req, res) => {
@@ -729,7 +737,10 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt install --only-upgrade netbird *",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /etc/systemd/system/netbird.service.d",
@@ -1095,7 +1106,7 @@ app.get("/api/asn/stats", async (_req, res) => {
       return res.json(asnStatsCache.data);
     }
     const [statsResult, prefixResult] = await Promise.all([
-      runCmd("python3 /usr/local/bin/asn-log-stats.py --source nginx --top 50 --json 2>/dev/null", 15000),
+      runCmd("python3 /usr/local/bin/asn-log-stats.py --source auto --top 50 --json 2>/dev/null || python3 /usr/local/bin/asn-log-stats.py --source kern --top 50 --json 2>/dev/null", 15000),
       runCmd("sudo ipset list blocked_asn 2>/dev/null | grep -c '/' || echo 0"),
     ]);
     let top: any[] = [];
@@ -1201,7 +1212,7 @@ app.post("/api/asn/update-lists", async (_req, res) => {
   if (!existsSync("/usr/local/bin/update-lists.sh")) {
     return res.status(404).json({ success: false, error: "Script update-lists.sh non trovato. AsnBlock non è installato su questo VPS." });
   }
-  const result = await runCmd("sudo bash /usr/local/bin/update-lists.sh 2>&1", 60000);
+  const result = await runCmd("sudo /usr/local/bin/update-lists.sh 2>&1", 60000);
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
 
@@ -1209,7 +1220,7 @@ app.post("/api/asn/update-set", async (_req, res) => {
   if (!existsSync(ASN_UPDATE_SCRIPT)) {
     return res.status(404).json({ success: false, error: "Script update-asn-block.sh non trovato. AsnBlock non è installato su questo VPS." });
   }
-  const result = await runCmd("sudo env PATH=/usr/sbin:/usr/bin:/sbin:/bin bash " + ASN_UPDATE_SCRIPT + " 2>&1", 120000);
+  const result = await runCmd("sudo " + ASN_UPDATE_SCRIPT + " 2>&1", 120000);
   asnStatsCache = null;
   res.json({ success: result.ok, output: result.stdout || result.stderr });
 });

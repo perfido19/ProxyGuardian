@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { totalmem, freemem, cpus } from "os";
 import { execSync } from "child_process";
+import { randomBytes } from "crypto";
+import { open as openMaxMind, type Reader, validate as validateIp } from "maxmind";
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, unbanJailRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
@@ -10,25 +12,432 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import session from "express-session";
+import createFileStore from "session-file-store";
 import { startUpgradeJob, subscribeToJob, getJobSnapshot, getJobLogs, getActiveJob } from "./fleet-upgrade";
 import { generateSshToken, attachSshWebSocket } from "./ssh-console";
+
+const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), "data");
+const SESSION_SECRET_FILE = join(DATA_DIR, ".session-secret");
+const SESSION_DIR = join(DATA_DIR, "sessions");
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const FileStore = createFileStore(session);
+const GEOLITE2_ASN_DB_PATH = process.env.GEOLITE2_ASN_DB_PATH?.trim() || "/var/lib/GeoIP/GeoLite2-ASN.mmdb";
+const GEOLITE2_COUNTRY_DB_PATH = process.env.GEOLITE2_COUNTRY_DB_PATH?.trim() || "/var/lib/GeoIP/GeoLite2-Country.mmdb";
+const IP_API_TIMEOUT_MS = parseInt(process.env.IP_API_TIMEOUT_MS || "1500", 10);
+const IP_API_BACKOFF_MS = parseInt(process.env.IP_API_BACKOFF_MS || "60000", 10);
+
+type IpInfo = { asn: string; org: string; countryCode: string };
+type IpInfoCacheEntry = { data: IpInfo; at: number };
+type DeferredIpInfo = {
+  promise: Promise<IpInfo>;
+  resolve: (data: IpInfo) => void;
+  reject: (error?: unknown) => void;
+};
+
+let asnReaderPromise: Promise<Reader<any> | null> | null = null;
+let countryReaderPromise: Promise<Reader<any> | null> | null = null;
+let ipApiBackoffUntil = 0;
+const ipInfoCache = new Map<string, IpInfoCacheEntry>();
+const ipInfoInFlight = new Map<string, Promise<IpInfo>>();
+const IP_INFO_TTL = 48 * 60 * 60 * 1000;
 
 // Percorsi proxy che un operator può modificare (POST)
 const OPERATOR_WRITE_PATHS = [
   /^\/api\/services\/[^/]+\/action$/,
   /^\/api\/unban$/,
   /^\/api\/unban-all$/,
+  /^\/api\/unban-jail$/,
 ];
+
+const NETBIRD_SETUP_KEY = process.env.NETBIRD_SETUP_KEY?.trim() || "";
+const DEPLOY_AGENT_GIT_REF = process.env.DEPLOY_AGENT_GIT_REF?.trim() || "main";
+const DEPLOY_VPS_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 .()_-]{0,79}$/;
+const DEPLOY_HOST_RE = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
+const DEPLOY_NETBIRD_RESTART_NGINX_CONF = "[Service]\nExecStartPost=/bin/bash -c 'sleep 3 && systemctl restart nginx || true'\n";
+const DEPLOY_NETBIRD_IPSET_CLEANUP_SH = [
+  "#!/bin/bash",
+  "declare -A CHAIN_TABLE=(",
+  "    [NETBIRD-ACL-INPUT]=filter",
+  "    [NETBIRD-RT-FWD-IN]=filter",
+  "    [NETBIRD-RT-FWD-OUT]=filter",
+  "    [NETBIRD-RT-NAT]=nat",
+  "    [NETBIRD-RT-RDR]=nat",
+  "    [NETBIRD-RT-PRE]=mangle",
+  "    [NETBIRD-RT-MSSCLAMP]=mangle",
+  ")",
+  'for chain in "${!CHAIN_TABLE[@]}"; do',
+  '    table="${CHAIN_TABLE[$chain]}"',
+  '    iptables -t "$table" -S | grep "$chain" | grep "^-A" | while read -r rule; do',
+  '        iptables -t "$table" ${rule/-A/-D} 2>/dev/null',
+  '    done',
+  '    iptables -t "$table" -F "$chain" 2>/dev/null',
+  '    iptables -t "$table" -X "$chain" 2>/dev/null',
+  'done',
+  'for ipset in $(ipset list -n 2>/dev/null | grep -i netbird); do',
+  '    ipset flush "$ipset" 2>/dev/null',
+  '    ipset destroy "$ipset" 2>/dev/null',
+  'done',
+  "",
+].join("\n");
+const DEPLOY_NETBIRD_CLEANUP_SERVICE = [
+  "[Unit]",
+  "Description=Cleanup orphaned NetBird ipsets before start",
+  "Before=netbird.service",
+  "DefaultDependencies=no",
+  "After=network-pre.target",
+  "",
+  "[Service]",
+  "Type=oneshot",
+  "ExecStart=/usr/local/bin/netbird-ipset-cleanup.sh",
+  "RemainAfterExit=yes",
+  "",
+  "[Install]",
+  "WantedBy=multi-user.target",
+  "",
+].join("\n");
+const DEPLOY_AGENT_SUDOERS = [
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl status *",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start fail2ban",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop fail2ban",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart fail2ban",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start mariadb",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop mariadb",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart mariadb",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/ipset *",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start netbird",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop netbird",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart netbird",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt install --only-upgrade netbird *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get install --only-upgrade netbird *",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /etc/systemd/system/netbird.service.d",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird.service.d/restart-nginx.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/bin/netbird-ipset-cleanup.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/netbird-cleanup.service",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod +x /usr/local/bin/netbird-ipset-cleanup.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable netbird-cleanup.service",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable netbird-cleanup.service",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/sudoers.d/proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /root/.ssh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee -a /root/.ssh/authorized_keys",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 700 /root/.ssh",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 600 /root/.ssh/authorized_keys",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /var/cache/nginx/epg /var/cache/nginx/streaming",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/epg",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/streaming",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/logrotate.d/proxyguardian",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/logrotate *",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 644 /etc/logrotate.d/proxyguardian",
+  "",
+].join("\n");
+const DEPLOY_LOGROTATE_CONF = [
+  "/var/log/nginx/access.log",
+  "/var/log/nginx/error.log",
+  "/opt/log/modsec_audit.log",
+  "{",
+  "    daily",
+  "    rotate 3",
+  "    missingok",
+  "    notifempty",
+  "    compress",
+  "    delaycompress",
+  "    sharedscripts",
+  "    postrotate",
+  "        [ -f /var/run/nginx.pid ] && kill -USR1 $(cat /var/run/nginx.pid) 2>/dev/null || true",
+  "    endscript",
+  "}",
+  "",
+  "/var/log/fail2ban.log {",
+  "    daily",
+  "    rotate 3",
+  "    missingok",
+  "    notifempty",
+  "    compress",
+  "    delaycompress",
+  "    postrotate",
+  "        fail2ban-client flushlogs 2>/dev/null || true",
+  "    endscript",
+  "}",
+].join("\n");
+const DEPLOY_IPSET_RESTORE_SERVICE = [
+  "[Unit]",
+  "Description=Restore ipset rules",
+  "Before=network-pre.target iptables-restore.service netfilter-persistent.service",
+  "Wants=network-pre.target",
+  "",
+  "[Service]",
+  "Type=oneshot",
+  "ExecStart=/bin/bash -c 'if [ -s /etc/ipset.conf ]; then /sbin/ipset restore -exist -file /etc/ipset.conf; else echo \"ipset-restore: /etc/ipset.conf non trovato o vuoto, skip.\"; fi'",
+  "RemainAfterExit=yes",
+  "SuccessExitStatus=0",
+  "",
+  "[Install]",
+  "WantedBy=multi-user.target",
+  "",
+].join("\n");
+const DEPLOY_WHITELIST_WATCHER_SERVICE = [
+  "[Unit]",
+  "Description=Aggiorna ipset blocked_asn quando cambia la whitelist",
+  "After=network.target ipset-restore.service",
+  "",
+  "[Service]",
+  "Type=simple",
+  "ExecStartPre=/usr/bin/apt-get install -y inotify-tools",
+  "ExecStart=/usr/local/bin/whitelist-watcher.sh",
+  "Restart=always",
+  "RestartSec=5",
+  "",
+  "[Install]",
+  "WantedBy=multi-user.target",
+  "",
+].join("\n");
+const DEPLOY_ANTI_IPTV_SERVICE = [
+  "[Unit]",
+  "Description=ProxyGuardian Anti-IPTV watcher",
+  "After=network.target nginx.service",
+  "Wants=nginx.service",
+  "",
+  "[Service]",
+  "Type=simple",
+  "ExecStart=/usr/local/sbin/anti-iptv.sh",
+  "Restart=always",
+  "RestartSec=5",
+  "",
+  "[Install]",
+  "WantedBy=multi-user.target",
+  "",
+].join("\n");
 
 function isOperatorAllowedPost(path: string): boolean {
   return OPERATOR_WRITE_PATHS.some(r => r.test(path));
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function isValidDeployHost(value: string): boolean {
+  return validateIp(value) || DEPLOY_HOST_RE.test(value);
+}
+
+function parseDeployPort(value: unknown, fallback: number): number | null {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim().length > 0
+      ? parseInt(value, 10)
+      : fallback;
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : null;
+}
+
+function parseDeployToggle(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
+function getSessionSecret(): string {
+  const fromEnv = process.env.SESSION_SECRET?.trim();
+  if (fromEnv) return fromEnv;
+
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+
+  if (existsSync(SESSION_SECRET_FILE)) {
+    const existing = readFileSync(SESSION_SECRET_FILE, "utf-8").trim();
+    if (existing) return existing;
+  }
+
+  const generated = randomBytes(32).toString("hex");
+  writeFileSync(SESSION_SECRET_FILE, `${generated}\n`, { mode: 0o600 });
+  console.warn(`[Session] SESSION_SECRET non impostato: secret persistente generato in ${SESSION_SECRET_FILE}`);
+  return generated;
+}
+
+async function loadMaxMindReader(path: string): Promise<Reader<any> | null> {
+  if (!existsSync(path)) return null;
+  try {
+    return await openMaxMind(path);
+  } catch (error) {
+    console.warn(`[GeoIP] Impossibile aprire database MaxMind ${path}:`, error);
+    return null;
+  }
+}
+
+async function getAsnReader(): Promise<Reader<any> | null> {
+  asnReaderPromise ??= loadMaxMindReader(GEOLITE2_ASN_DB_PATH);
+  return asnReaderPromise;
+}
+
+async function getCountryReader(): Promise<Reader<any> | null> {
+  countryReaderPromise ??= loadMaxMindReader(GEOLITE2_COUNTRY_DB_PATH);
+  return countryReaderPromise;
+}
+
+function normalizeIpInfo(data?: Partial<IpInfo> | null): IpInfo | null {
+  if (!data) return null;
+  const normalized: IpInfo = {
+    asn: data.asn?.trim() || "",
+    org: data.org?.trim() || "",
+    countryCode: data.countryCode?.trim() || "",
+  };
+  return normalized.asn || normalized.org || normalized.countryCode ? normalized : null;
+}
+
+async function lookupMaxMindIpInfo(ip: string): Promise<IpInfo | null> {
+  if (!validateIp(ip)) return null;
+
+  const [asnReader, countryReader] = await Promise.all([getAsnReader(), getCountryReader()]);
+  const asnData = asnReader?.get(ip) as any;
+  const countryData = countryReader?.get(ip) as any;
+
+  return normalizeIpInfo({
+    asn: asnData?.autonomous_system_number ? `AS${asnData.autonomous_system_number}` : "",
+    org: asnData?.autonomous_system_organization || "",
+    countryCode: countryData?.country?.iso_code || countryData?.registered_country?.iso_code || "",
+  });
+}
+
+function mergeIpInfo(primary?: IpInfo | null, fallback?: IpInfo | null): IpInfo | null {
+  return normalizeIpInfo({
+    asn: primary?.asn || fallback?.asn || "",
+    org: primary?.org || fallback?.org || "",
+    countryCode: primary?.countryCode || fallback?.countryCode || "",
+  });
+}
+
+function shouldUseIpApi(): boolean {
+  return Date.now() >= ipApiBackoffUntil;
+}
+
+function noteIpApiFailure(): void {
+  ipApiBackoffUntil = Date.now() + IP_API_BACKOFF_MS;
+}
+
+function noteIpApiSuccess(): void {
+  ipApiBackoffUntil = 0;
+}
+
+function getCachedIpInfo(ip: string): IpInfo | null {
+  const cached = ipInfoCache.get(ip);
+  if (!cached || Date.now() - cached.at >= IP_INFO_TTL) return null;
+  return cached.data;
+}
+
+function setCachedIpInfo(ip: string, data: IpInfo): void {
+  ipInfoCache.set(ip, { data, at: Date.now() });
+}
+
+function createDeferredIpInfo(ip: string): DeferredIpInfo {
+  let resolve!: (data: IpInfo) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<IpInfo>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  const trackedPromise = promise.finally(() => {
+    if (ipInfoInFlight.get(ip) === trackedPromise) {
+      ipInfoInFlight.delete(ip);
+    }
+  });
+  ipInfoInFlight.set(ip, trackedPromise);
+  return { promise: trackedPromise, resolve, reject };
+}
+
+async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = IP_API_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function lookupIpApiInfo(ip: string): Promise<IpInfo | null> {
+  if (!shouldUseIpApi()) return null;
+  const r = await fetchWithTimeout(`http://ip-api.com/json/${ip}?fields=status,as,org,isp,countryCode`);
+  const item = await r.json() as any;
+  if (item?.status && item.status !== "success") return null;
+  return normalizeIpInfo({
+    asn: item?.as || "",
+    org: item?.org || item?.isp || "",
+    countryCode: item?.countryCode || "",
+  });
+}
+
+async function lookupIpInfo(ip: string): Promise<IpInfo> {
+  const maxMindInfoPromise = lookupMaxMindIpInfo(ip);
+  let ipApiInfo: IpInfo | null = null;
+  try {
+    ipApiInfo = await lookupIpApiInfo(ip);
+    if (ipApiInfo) noteIpApiSuccess();
+  } catch {
+    noteIpApiFailure();
+    ipApiInfo = null;
+  }
+
+  if (ipApiInfo?.asn && ipApiInfo.org && ipApiInfo.countryCode) {
+    return ipApiInfo;
+  }
+
+  const maxMindInfo = await maxMindInfoPromise;
+  return mergeIpInfo(ipApiInfo, maxMindInfo) || { asn: "", org: "", countryCode: "" };
+}
+
+async function getOrLoadIpInfo(ip: string): Promise<IpInfo> {
+  const cached = getCachedIpInfo(ip);
+  if (cached) return cached;
+
+  const existing = ipInfoInFlight.get(ip);
+  if (existing) return existing;
+
+  const deferred = createDeferredIpInfo(ip);
+  try {
+    const data = await lookupIpInfo(ip);
+    setCachedIpInfo(ip, data);
+    deferred.resolve(data);
+    return data;
+  } catch (error) {
+    deferred.reject(error);
+    throw error;
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
+  if (!existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+
+  const sessionStore = new FileStore({
+    path: SESSION_DIR,
+    ttl: Math.floor(SESSION_TTL_MS / 1000),
+    reapInterval: Math.floor(SESSION_TTL_MS / 1000),
+    retries: 0,
+    logFn: () => {},
+  });
+
   app.use(session({
-    secret: process.env.SESSION_SECRET || "proxydashboard_dev_secret",
+    secret: getSessionSecret(),
+    store: sessionStore,
     resave: false, saveUninitialized: false,
-    cookie: { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 8 * 60 * 60 * 1000 },
+    cookie: { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: SESSION_TTL_MS },
   }));
 
   // Auth
@@ -143,7 +552,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!requireVpsAccess(req.params.id, req.session.userId!)) return res.status(403).json({ error: "Accesso negato" });
     const vps = getVpsById(req.params.id);
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
-    try { res.json(await agentGet(vps, "/" + (req.params as any)[0])); }
+    const proxyPath = "/" + (req.params as any)[0];
+    const timeout = SLOW_PATHS.includes(proxyPath) ? SLOW_REQUEST_TIMEOUT : undefined;
+    try { res.json(await agentGet(vps, proxyPath, timeout)); }
     catch (e: any) { res.status(502).json({ error: e.message }); }
   });
   app.post("/api/vps/:id/proxy/*", requireAuth, requireOperator, async (req, res) => {
@@ -189,7 +600,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ─── Fleet ASN config (repo-backed) ─────────────────────────────────────────
 
   const FLEET_DIR = join(process.cwd(), "asn-block");
+  const ASN_BLOCKLIST_EXCLUDED_VPS_NAMES = new Set(["dynamoxc"]);
 
+  function getAsnBlocklistTargetVpsIds(): string[] {
+    return getAllVps()
+      .filter(vps => vps.enabled && !ASN_BLOCKLIST_EXCLUDED_VPS_NAMES.has(vps.name.trim().toLowerCase()))
+      .map(vps => vps.id);
+  }
   function readFleetFile(name: string): string {
     const p = join(FLEET_DIR, name);
     try { return existsSync(p) ? readFileSync(p, "utf-8") : ""; } catch { return ""; }
@@ -264,9 +681,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const { content } = req.body;
     if (typeof content !== "string") return res.status(400).json({ error: "content required" });
     writeFleetFile("asn-blocklist.txt", content);
-    // Push file to all VPS, then trigger update-asn-block.sh
-    const syncResults = await bulkPost("all", "/api/config/asn-blocklist.txt", { content });
-    const applyResults = await bulkPost("all", "/api/asn/update-set", {});
+    // Push file to all eligible VPS, then trigger update-asn-block.sh.
+    // dynamoxc keeps a dedicated ASN blocklist and must not receive fleet updates.
+    const targetVpsIds = getAsnBlocklistTargetVpsIds();
+    const syncResults = await bulkPost(targetVpsIds, "/api/config/asn-blocklist.txt", { content });
+    const applyResults = await bulkPost(targetVpsIds, "/api/asn/update-set", {});
     res.json({ ok: true, syncResults, applyResults });
   });
 
@@ -314,7 +733,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Sync da AsnBlock GitHub repo su tutti i VPS
   app.post("/api/fleet/asn/sync-github", requireAuth, requireAdmin, async (_req, res) => {
-    const results = await bulkPost("all", "/api/asn/update-lists", {});
+    const results = await bulkPost(getAsnBlocklistTargetVpsIds(), "/api/asn/update-lists", {});
     res.json({ ok: true, results });
   });
 
@@ -462,68 +881,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   app.get("/api/stats", requireAuth, async (_req, res) => { try { res.json(await storage.getStats()); } catch { res.status(500).json({ error: "Errore" }); } });
 
-  // IP info lookup (ASN, org) via ip-api.com con cache 24h
-  const _ipInfoCache = new Map<string, { data: { asn: string; org: string; countryCode: string }; at: number }>();
-  const IP_INFO_TTL = 24 * 60 * 60 * 1000;
-
-  function parseIpApiItem(item: any): { asn: string; org: string; countryCode: string } {
-    const asnFull: string = item.as || "";
-    return {
-      asn: asnFull.split(" ")[0] || "",
-      org: item.org || asnFull.split(" ").slice(1).join(" ") || "",
-      countryCode: item.countryCode || "",
-    };
-  }
-
-  // Singolo IP (fallback, usato da IpCell se non c'è il batch)
+  // Singolo IP
   app.get("/api/ip-info/:ip", requireAuth, async (req, res) => {
-    const { ip } = req.params;
-    if (!/^[\d.a-fA-F:]+$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
-    const cached = _ipInfoCache.get(ip);
-    if (cached && Date.now() - cached.at < IP_INFO_TTL) return res.json(cached.data);
-    try {
-      const r = await fetch(`http://ip-api.com/json/${ip}?fields=as,org,countryCode`);
-      const d: any = await r.json();
-      const info = parseIpApiItem(d);
-      _ipInfoCache.set(ip, { data: info, at: Date.now() });
-      res.json(info);
-    } catch { res.status(502).json({ error: "Lookup fallito" }); }
+    const ip = req.params.ip;
+    if (!validateIp(ip)) return res.status(400).json({ error: "IP non valido" });
+    const data = await getOrLoadIpInfo(ip);
+    res.json(data);
   });
 
-  // Batch IP (una sola richiesta per tabella intera)
+  // Batch IP (max 100, cache 48h)
   app.post("/api/ip-info/batch", requireAuth, async (req, res) => {
-    const raw: string[] = Array.isArray(req.body?.ips) ? req.body.ips : [];
-    const ips = [...new Set(raw.filter((ip: string) => typeof ip === "string" && /^[\d.a-fA-F:]+$/.test(ip)))];
-    if (ips.length === 0) return res.json({});
-
-    const result: Record<string, any> = {};
-    const toFetch: string[] = [];
+    const ips: string[] = Array.isArray(req.body?.ips)
+      ? req.body.ips.filter((ip: unknown): ip is string => typeof ip === "string" && validateIp(ip)).slice(0, 100)
+      : [];
+    const result: Record<string, { asn: string; org: string; countryCode: string }> = {};
+    const owned = new Map<string, DeferredIpInfo>();
+    const shared = new Map<string, Promise<IpInfo>>();
 
     for (const ip of ips) {
-      const cached = _ipInfoCache.get(ip);
-      if (cached && Date.now() - cached.at < IP_INFO_TTL) {
-        result[ip] = cached.data;
-      } else {
-        toFetch.push(ip);
+      const cached = getCachedIpInfo(ip);
+      if (cached) {
+        result[ip] = cached;
+        continue;
+      }
+
+      const existing = ipInfoInFlight.get(ip);
+      if (existing) {
+        shared.set(ip, existing);
+        continue;
+      }
+
+      owned.set(ip, createDeferredIpInfo(ip));
+    }
+
+    const ownedIps = [...owned.keys()];
+    if (ownedIps.length > 0) {
+      try {
+        const maxMindByIp = new Map<string, IpInfo | null>(
+          await Promise.all(ownedIps.map(async ip => [ip, await lookupMaxMindIpInfo(ip)] as const))
+        );
+        const unresolved = new Set(ownedIps);
+
+        if (shouldUseIpApi()) {
+          try {
+            const r = await fetchWithTimeout("http://ip-api.com/batch?fields=status,query,as,org,isp,countryCode", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(ownedIps.map(q => ({ query: q }))),
+            });
+            const items = await r.json() as any[];
+            noteIpApiSuccess();
+            for (const item of items) {
+              const ip = item?.query;
+              if (!ip || !owned.has(ip)) continue;
+              unresolved.delete(ip);
+              const data = mergeIpInfo(
+                normalizeIpInfo({
+                  asn: item?.status === "success" ? item.as || "" : "",
+                  org: item?.status === "success" ? item.org || item.isp || "" : "",
+                  countryCode: item?.status === "success" ? item.countryCode || "" : "",
+                }),
+                maxMindByIp.get(ip) || null,
+              ) || { asn: "", org: "", countryCode: "" };
+              setCachedIpInfo(ip, data);
+              owned.get(ip)?.resolve(data);
+              result[ip] = data;
+            }
+          } catch {
+            noteIpApiFailure();
+          }
+        }
+
+        for (const ip of unresolved) {
+          const data = maxMindByIp.get(ip) || { asn: "", org: "", countryCode: "" };
+          setCachedIpInfo(ip, data);
+          owned.get(ip)?.resolve(data);
+          result[ip] = data;
+        }
+      } catch (error) {
+        for (const ip of ownedIps) {
+          owned.get(ip)?.reject(error);
+        }
+        throw error;
       }
     }
 
-    // ip-api.com batch: max 100 IP per request
-    for (let i = 0; i < toFetch.length; i += 100) {
-      const chunk = toFetch.slice(i, i + 100);
-      try {
-        const r = await fetch("http://ip-api.com/batch?fields=query,as,org,countryCode", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(chunk),
-        });
-        const items: any[] = await r.json();
-        for (const item of items) {
-          const info = parseIpApiItem(item);
-          _ipInfoCache.set(item.query, { data: info, at: Date.now() });
-          result[item.query] = info;
-        }
-      } catch { /* skip chunk, non bloccante */ }
+    if (shared.size > 0) {
+      const sharedResults = await Promise.all(
+        [...shared.entries()].map(async ([ip, promise]) => [ip, await promise] as const)
+      );
+      for (const [ip, data] of sharedResults) {
+        result[ip] = data;
+      }
     }
 
     res.json(result);
@@ -689,6 +1138,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const NGINX_TEMPLATE_PATH = join(process.cwd(), "server", "nginx-template.conf");
   const MODSEC_RELAXED_PATH = join(process.cwd(), "server", "modsec_api_relaxed.conf");
+  const AGENT_ASN_LOG_STATS_PATH = join(process.cwd(), "agent", "asn-log-stats.py");
+  const ASN_TO_IPSET_PATH = join(process.cwd(), "scripts", "asn-to-ipset.py");
+  const UPDATE_ASN_BLOCK_PATH = join(process.cwd(), "scripts", "update-asn-block.sh");
+  const UPDATE_LISTS_PATH = join(process.cwd(), "scripts", "update-lists.sh");
+  const WHITELIST_WATCHER_PATH = join(process.cwd(), "scripts", "whitelist-watcher.sh");
+  const ANTI_IPTV_PY_PATH = join(process.cwd(), "scripts", "anti-iptv.py");
+  const ANTI_IPTV_SH_PATH = join(process.cwd(), "scripts", "anti-iptv.sh");
+  const FAIL2BAN_TEMPLATE_DIR = join(process.cwd(), "scripts", "fail2ban");
+  const FAIL2BAN_JAIL_TEMPLATE_PATH = join(FAIL2BAN_TEMPLATE_DIR, "jail.local");
+  const FAIL2BAN_FILTER_NAMES = ["404-0", "block22", "nginx-abuse", "xtream", "xtream-api"];
 
   function isNginxOptimized(config: string): { optimized: boolean; checks: Record<string, boolean>; cacheSize?: string } {
     // Cache: verifica che sia presente un valore valido (non placeholder) >= 5g
@@ -812,6 +1271,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(results);
   });
 
+  // ─── Fleet NetBird Update ──────────────────────────────────────────────────────
+
+  app.get("/api/fleet/netbird/update-status", requireAuth, async (_req, res) => {
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        const [statusData, versionData] = await Promise.all([
+          agentGet(vps, "/api/netbird/status"),
+          agentGet(vps, "/api/netbird/version"),
+        ]);
+        return {
+          vpsId: vps.id,
+          vpsName: vps.name,
+          running: statusData.running,
+          connected: statusData.connected,
+          version: versionData.version || null,
+          error: null,
+        };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, running: false, connected: false, version: null, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
+  app.post("/api/fleet/netbird/update", requireAuth, requireAdmin, async (req, res) => {
+    const { vpsIds } = req.body;
+    if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds richiesto" });
+    const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const data = await agentPost(vps, "/api/netbird/update", {}, SLOW_REQUEST_TIMEOUT);
+        const versionData = await agentGet(vps, "/api/netbird/version").catch(() => null);
+        return {
+          vpsId: vps.id,
+          vpsName: vps.name,
+          ok: data.ok && data.running,
+          newVersion: versionData?.version || null,
+          output: data.output,
+          error: data.ok ? null : (data.output || "Update fallito"),
+        };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, newVersion: null, error: e.message };
+      }
+    }));
+    res.json(results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", ok: false, newVersion: null, error: "rejected" }));
+  });
+
   // ─── Fleet Logrotate ───────────────────────────────────────────────────────────
 
   app.get("/api/fleet/logrotate/status", requireAuth, async (_req, res) => {
@@ -899,13 +1406,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ─── Deploy VPS ───────────────────────────────────────────────────────────────
 
-  app.post("/api/deploy/generate-script", requireAuth, requireAdmin, (_req, res) => {
+  app.post("/api/deploy/generate-script", requireAuth, requireAdmin, (req, res) => {
     try {
-      const { backendIp, backendPort, proxyPort, vpsName } = _req.body;
-      const bIp = backendIp || "main.netbird.cloud";
-      const bPort = backendPort || 8880;
-      const pPort = proxyPort || 8880;
-      const name = vpsName || "nuovo-proxy";
+      if (!NETBIRD_SETUP_KEY) {
+        return res.status(503).json({ error: "NETBIRD_SETUP_KEY non configurata sul dashboard" });
+      }
+
+      const rawName = typeof req.body?.vpsName === "string" ? req.body.vpsName.trim() : "";
+      const rawBackendIp = typeof req.body?.backendIp === "string" ? req.body.backendIp.trim() : "";
+      const bPort = parseDeployPort(req.body?.backendPort, 8880);
+      const pPort = parseDeployPort(req.body?.proxyPort, 8880);
+      const installAsnBlock = parseDeployToggle(req.body?.installAsnBlock, true);
+      const installAntiIptv = parseDeployToggle(req.body?.installAntiIptv, false);
+
+      if (!rawName || !DEPLOY_VPS_NAME_RE.test(rawName)) {
+        return res.status(400).json({ error: "Nome VPS non valido: usa solo lettere, numeri, spazi e .()_-" });
+      }
+      if (!rawBackendIp || !isValidDeployHost(rawBackendIp)) {
+        return res.status(400).json({ error: "Backend IP / hostname non valido" });
+      }
+      if (bPort === null || pPort === null) {
+        return res.status(400).json({ error: "Porta non valida: usa un valore tra 1 e 65535" });
+      }
+
+      const name = rawName;
+      const bIp = rawBackendIp;
+      const agentBundleUrl = `https://raw.githubusercontent.com/perfido19/ProxyGuardian/${DEPLOY_AGENT_GIT_REF}/agent/agent-bundle.js`;
+      const bannerName = name.length > 47 ? `${name.slice(0, 44)}...` : name.padEnd(47);
+      const bannerGeneratedAt = new Date().toISOString().slice(0, 19).padEnd(47);
 
       const nginxTemplate = readFileSync(NGINX_TEMPLATE_PATH, "utf-8");
       const nginxConf = nginxTemplate
@@ -916,20 +1444,183 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const modsecRelaxed = readFileSync(MODSEC_RELAXED_PATH, "utf-8");
 
       const countryWhitelist = readFleetFile("country_whitelist.conf") || "";
-      const blockAsn = readFleetFile("block_asn.conf") || "";
+      const blockAsn = installAsnBlock ? (readFleetFile("block_asn.conf") || "") : "";
       const blockIsp = readFleetFile("block_isp.conf") || "";
       const blockBadAgents = readFleetFile("block_badagents.conf") || "";
       const ipWhitelist = readFleetFile("ip_whitelist.conf") || "";
       const exclusionIp = readFleetFile("exclusion_ip.conf") || "";
+      const asnBlocklist = installAsnBlock ? (readFleetFile("asn-blocklist.txt") || "# Fleet ASN Blocklist — nessuna entry configurata") : "";
+      const asnWhitelist = installAsnBlock ? (readFleetFile("asn-whitelist.txt") || "# Fleet ASN Whitelist — nessuna entry configurata") : "";
+      const agentAsnLogStats = readFileSync(AGENT_ASN_LOG_STATS_PATH, "utf-8");
+      const asnToIpsetPy = installAsnBlock ? readFileSync(ASN_TO_IPSET_PATH, "utf-8") : "";
+      const updateAsnBlockScript = installAsnBlock ? readFileSync(UPDATE_ASN_BLOCK_PATH, "utf-8") : "";
+      const updateListsScript = installAsnBlock ? readFileSync(UPDATE_LISTS_PATH, "utf-8") : "";
+      const whitelistWatcherScript = installAsnBlock ? readFileSync(WHITELIST_WATCHER_PATH, "utf-8") : "";
+      const antiIptvPy = installAntiIptv ? readFileSync(ANTI_IPTV_PY_PATH, "utf-8") : "";
+      const antiIptvSh = installAntiIptv ? readFileSync(ANTI_IPTV_SH_PATH, "utf-8") : "";
+      const fail2banJailTemplate = readFileSync(FAIL2BAN_JAIL_TEMPLATE_PATH, "utf-8");
+      const fail2banFilters = Object.fromEntries(FAIL2BAN_FILTER_NAMES.map((name) => [
+        name,
+        readFileSync(join(FAIL2BAN_TEMPLATE_DIR, `${name}.conf`), "utf-8"),
+      ]));
+      const geoIpAccountId = process.env.GEOIP_ACCOUNT_ID?.trim();
+      const geoIpLicenseKey = process.env.GEOIP_LICENSE_KEY?.trim();
+      const optionalPackages = Array.from(new Set([
+        ...(installAsnBlock ? ["ipset", "inotify-tools", "python3-maxminddb", "python3-pip"] : []),
+        ...(installAntiIptv ? ["conntrack", "ipset"] : []),
+      ]));
+      const optionalPackageSetup = optionalPackages.length > 0
+        ? `# ── OPTIONAL PACKAGES ──────────────────────────────────────
+info "Installing optional packages..."
+apt-get install -y ${optionalPackages.join(" ")}`
+        : "";
 
-      const script = `#!/bin/bash
+      const fail2banDbSetup = `# ── DATABASE FAIL2BAN ──────────────────────────────────────
+info "Creating fail2ban database..."
+FAIL2BAN_DB_NAME="fail2ban"
+FAIL2BAN_DB_USER="f2b_\$(openssl rand -hex 4)"
+FAIL2BAN_DB_PASSWORD="\$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 24)"
+
+mysql -uroot -e "CREATE DATABASE IF NOT EXISTS \${FAIL2BAN_DB_NAME};"
+mysql -uroot -e "CREATE USER IF NOT EXISTS '\${FAIL2BAN_DB_USER}'@'localhost' IDENTIFIED BY '\${FAIL2BAN_DB_PASSWORD}';"
+mysql -uroot -e "CREATE USER IF NOT EXISTS '\${FAIL2BAN_DB_USER}'@'127.0.0.1' IDENTIFIED BY '\${FAIL2BAN_DB_PASSWORD}';"
+mysql -uroot -e "GRANT ALL ON \${FAIL2BAN_DB_NAME}.* TO '\${FAIL2BAN_DB_USER}'@'localhost';"
+mysql -uroot -e "GRANT ALL ON \${FAIL2BAN_DB_NAME}.* TO '\${FAIL2BAN_DB_USER}'@'127.0.0.1';"
+mysql -uroot -e "FLUSH PRIVILEGES;"
+
+mkdir -p ~/tmp
+cd ~/tmp
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/sql/fail2ban.mysql
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/action.d/banned_db.conf
+wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/bin/fail2ban_banned_db
+mysql \${FAIL2BAN_DB_NAME} < ~/tmp/fail2ban.mysql
+
+cat > /root/.my.cnf-fail2ban << MYCNFEOF
+[client]
+host="127.0.0.1"
+port="3306"
+user="\${FAIL2BAN_DB_USER}"
+password="\${FAIL2BAN_DB_PASSWORD}"
+MYCNFEOF
+chmod 600 /root/.my.cnf-fail2ban
+
+mv ~/tmp/banned_db.conf /etc/fail2ban/action.d/
+mv ~/tmp/fail2ban_banned_db /usr/local/bin/
+chmod 0550 /usr/local/bin/fail2ban_banned_db`;
+
+      const geoIpSetup = geoIpAccountId && geoIpLicenseKey
+        ? `# ── GEOIP2 ─────────────────────────────────────────────────
+info "Configuring GeoIP2..."
+mkdir -p /usr/share/GeoIP
+cat > /etc/GeoIP.conf << GEOEOF
+AccountID ${geoIpAccountId}
+LicenseKey ${geoIpLicenseKey}
+EditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country
+DatabaseDirectory /usr/share/GeoIP
+GEOEOF
+
+chmod 600 /etc/GeoIP.conf
+cat > /etc/cron.d/proxyguardian-geoipupdate << 'CRONEOF'
+0 1 * * * root /usr/bin/geoipupdate >/var/log/geoipupdate.log 2>&1
+CRONEOF
+chmod 644 /etc/cron.d/proxyguardian-geoipupdate
+geoipupdate -v || error "geoipupdate fallito — verifica credenziali MaxMind in .env"
+[ -f /usr/share/GeoIP/GeoLite2-Country.mmdb ] || error "Database GeoIP2 non trovato dopo geoipupdate"`
+        : `# ── GEOIP2 ─────────────────────────────────────────────────
+error "GEOIP_ACCOUNT_ID / GEOIP_LICENSE_KEY non impostati — richiesti per nginx. Configurali nel .env del dashboard e rigenera lo script."`;
+
+      const asnBlockSetup = installAsnBlock
+        ? `# ── ASN BLOCK ──────────────────────────────────────────────
+info "Installing ASN block support..."
+mkdir -p /etc/iptables
+touch /etc/ipset.conf /var/log/update-asn-block.log
+
+cat > /etc/asn-blocklist.txt << 'ASNBLKEOF'
+${asnBlocklist}
+ASNBLKEOF
+
+cat > /etc/asn-whitelist-nets.txt << 'ASNWLEOF'
+${asnWhitelist}
+ASNWLEOF
+
+cat > /usr/local/bin/asn-to-ipset.py << 'ASNTOIPSETEOF'
+${asnToIpsetPy}
+ASNTOIPSETEOF
+
+cat > /usr/local/bin/update-asn-block.sh << 'UPDATEASNBLKEOF'
+${updateAsnBlockScript}
+UPDATEASNBLKEOF
+
+cat > /usr/local/bin/update-lists.sh << 'UPDATELISTSEOF'
+${updateListsScript}
+UPDATELISTSEOF
+
+cat > /usr/local/bin/whitelist-watcher.sh << 'WHITELISTWATCHEREOF'
+${whitelistWatcherScript}
+WHITELISTWATCHEREOF
+
+chmod 755 /usr/local/bin/asn-to-ipset.py /usr/local/bin/update-asn-block.sh /usr/local/bin/update-lists.sh /usr/local/bin/whitelist-watcher.sh
+
+pip3 install --break-system-packages maxminddb==2.6.3 >/dev/null 2>&1 || \
+  pip3 install maxminddb==2.6.3 >/dev/null 2>&1 || \
+  warn "Installazione maxminddb 2.6.3 fallita, provo con pacchetto di sistema"
+
+cat > /etc/systemd/system/ipset-restore.service << 'IPSETRESTOREEOF'
+${DEPLOY_IPSET_RESTORE_SERVICE}
+IPSETRESTOREEOF
+
+cat > /etc/systemd/system/whitelist-watcher.service << 'WHITELISTWATCHERSVCEOF'
+${DEPLOY_WHITELIST_WATCHER_SERVICE}
+WHITELISTWATCHERSVCEOF
+
+ipset create blocked_asn hash:net family inet maxelem 1048576 -exist
+iptables -C INPUT -m set --match-set blocked_asn src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[ASN-BLOCK] " --log-level 4 2>/dev/null || \
+  iptables -I INPUT 1 -m set --match-set blocked_asn src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[ASN-BLOCK] " --log-level 4
+iptables -C INPUT -m set --match-set blocked_asn src -j DROP 2>/dev/null || \
+  iptables -I INPUT 2 -m set --match-set blocked_asn src -j DROP
+ipset save > /etc/ipset.conf
+
+if grep -Eq '^[[:space:]]*AS[0-9]+' /etc/asn-blocklist.txt; then
+  /usr/local/bin/update-asn-block.sh >> /var/log/update-asn-block.log 2>&1 || warn "Aggiornamento iniziale ASN block fallito"
+else
+  warn "ASN blocklist vuota: installazione completata senza popolamento iniziale"
+fi`
+        : `# ── ASN BLOCK ──────────────────────────────────────────────
+info "ASN block disabilitato per questo deploy"`;
+
+      const antiIptvSetup = installAntiIptv
+        ? `# ── ANTI-IPTV ──────────────────────────────────────────────
+info "Installing Anti-IPTV support..."
+mkdir -p /var/log/anti-iptv
+touch /var/log/anti-iptv/bans.log
+
+cat > /usr/local/sbin/anti-iptv.py << 'ANTIIPTVPYEOF'
+${antiIptvPy}
+ANTIIPTVPYEOF
+
+cat > /usr/local/sbin/anti-iptv.sh << 'ANTIIPTVSHEOF'
+${antiIptvSh}
+ANTIIPTVSHEOF
+
+chmod 755 /usr/local/sbin/anti-iptv.py /usr/local/sbin/anti-iptv.sh
+chown root:adm /var/log/anti-iptv /var/log/anti-iptv/bans.log 2>/dev/null || true
+chmod 750 /var/log/anti-iptv 2>/dev/null || true
+chmod 640 /var/log/anti-iptv/bans.log 2>/dev/null || true
+
+cat > /etc/systemd/system/anti-iptv.service << 'ANTIIPTVSVCEOF'
+${DEPLOY_ANTI_IPTV_SERVICE}
+ANTIIPTVSVCEOF`
+        : `# ── ANTI-IPTV ──────────────────────────────────────────────
+info "Anti-IPTV disabilitato per questo deploy"`;
+
+      const script = `#!/usr/bin/env bash
 # ╔══════════════════════════════════════════════════════════╗
 # ║  ProxyGuardian - Deploy Script                          ║
-# ║  VPS: ${name.padEnd(47)}║
-# ║  Generato: ${new Date().toISOString().slice(0, 19).padEnd(47)}║
+# ║  VPS: ${bannerName}║
+# ║  Generato: ${bannerGeneratedAt}║
 # ╚══════════════════════════════════════════════════════════╝
 
-set -e
+set -euo pipefail
 
 RED='\\033[0;31m'; GREEN='\\033[0;32m'; YELLOW='\\033[1;33m'; CYAN='\\033[0;36m'; NC='\\033[0m'
 info()  { echo -e "\${CYAN}[INFO]\${NC} \$*"; }
@@ -937,10 +1628,12 @@ ok()    { echo -e "\${GREEN}[OK]\${NC}   \$*"; }
 warn()  { echo -e "\${YELLOW}[WARN]\${NC} \$*"; }
 error() { echo -e "\${RED}[ERR]\${NC}  \$*"; exit 1; }
 
-BACKEND_IP="${bIp}"
-BACKEND_PORT="${bPort}"
-PROXY_PORT="${pPort}"
-VPS_NAME="${name}"
+BACKEND_IP=${shellQuote(bIp)}
+BACKEND_PORT=${bPort}
+PROXY_PORT=${pPort}
+VPS_NAME=${shellQuote(name)}
+NETBIRD_SETUP_KEY=${shellQuote(NETBIRD_SETUP_KEY)}
+AGENT_BUNDLE_URL=${shellQuote(agentBundleUrl)}
 numcpu=\$(nproc)
 
 echo ""
@@ -960,11 +1653,16 @@ apt-get install -y \\
   build-essential libpcre3 libpcre3-dev zlib1g-dev libssl-dev \\
   libxslt1-dev fail2ban mariadb-server git libtool autoconf \\
   libxml2-dev libcurl4-openssl-dev automake pkgconf libyajl-dev \\
-  liblua5.1-0-dev wget curl
+  liblua5.1-0-dev wget curl ca-certificates gnupg software-properties-common
 
-add-apt-repository -y ppa:maxmind/ppa
-apt-get update -y
-apt-get install -y libmaxminddb-dev libmaxminddb0 mmdb-bin geoipupdate
+apt-get install -y libmaxminddb-dev libmaxminddb0 mmdb-bin
+
+# geoipupdate da GitHub releases (PPA maxmind spesso irraggiungibile)
+GEOIPUPDATE_VER="6.1.0"
+wget -q "https://github.com/maxmind/geoipupdate/releases/download/v\${GEOIPUPDATE_VER}/geoipupdate_\${GEOIPUPDATE_VER}_linux_amd64.deb" -O /tmp/geoipupdate.deb \\
+  && dpkg -i /tmp/geoipupdate.deb >/dev/null 2>&1 \\
+  && rm -f /tmp/geoipupdate.deb \\
+  || warn "geoipupdate install fallito — GeoIP2 non disponibile"
 
 # ── MODSECURITY v3 ─────────────────────────────────────────
 info "Compiling ModSecurity v3..."
@@ -992,7 +1690,7 @@ GEOIP2_DIR=\$(ls -d /usr/local/src/ngx_http_geoip2_module-*)
 info "Building Nginx 1.26.2..."
 cd /usr/local/src
 rm -rf "nginx-1.26.2" "nginx-1.26.2.tar.gz"
-wget -q "http://nginx.org/download/nginx-1.26.2.tar.gz"
+wget -q "https://nginx.org/download/nginx-1.26.2.tar.gz"
 tar xzf "nginx-1.26.2.tar.gz"
 cd "nginx-1.26.2"
 
@@ -1022,7 +1720,8 @@ make -j "\$numcpu" && make install
 
 ln -sf /usr/share/nginx/sbin/nginx /usr/sbin/nginx
 ln -sf /usr/lib/nginx/modules /usr/share/nginx/modules
-mkdir -p /var/lib/nginx/body
+mkdir -p /var/lib/nginx/body /var/cache/nginx/epg /var/cache/nginx/streaming
+chown -R www-data:www-data /var/cache/nginx/epg /var/cache/nginx/streaming
 
 # ── NGINX.SERVICE ──────────────────────────────────────────
 cat > /lib/systemd/system/nginx.service << 'SVCEOF'
@@ -1057,7 +1756,7 @@ ${countryWhitelist || "# Default: tutti i paesi bloccati"}
 EOF
 
 cat > /etc/nginx/block_asn.conf << 'EOF'
-${blockAsn || "# Blacklist ASN"}
+${blockAsn || "# ASN block disabilitato per questo VPS"}
 EOF
 
 cat > /etc/nginx/block_isp.conf << 'EOF'
@@ -1113,83 +1812,42 @@ MODECEOF
 # ── FAIL2BAN ───────────────────────────────────────────────
 info "Configuring Fail2ban..."
 cat > /etc/fail2ban/jail.local << JAILEOF
-[nginx-req-limit]
-enabled  = true
-filter   = nginx-req-limit
-action   = iptables-multiport[name=ReqLimit, port="\${PROXY_PORT}", protocol=tcp]
-           banned_db[name=ReqLimit, port="\${PROXY_PORT}", protocol=tcp]
-logpath  = /var/log/nginx/*error.log
-findtime = 600
-bantime  = 7200
-maxretry = 10
-
-[nginx-4xx]
-enabled  = true
-port     = http,https
-action   = iptables-multiport[name=nginx-4xx, port="\${PROXY_PORT}", protocol=tcp]
-           banned_db[name=ReqLimit, port="\${PROXY_PORT}", protocol=tcp]
-logpath  = /var/log/nginx/access.log
-findtime = 600
-maxretry = 10
-bantime  = 7200
-
-[DEFAULT]
-ignoreip = 127.0.0.1/8 10.0.0.0/8 192.168.0.0/16 172.16.0.0/16
+${fail2banJailTemplate}
 JAILEOF
 
-cat > /etc/fail2ban/filter.d/nginx-req-limit.conf << 'EOF'
-[Definition]
-failregex = limiting requests, excess:.* by zone.*client: <HOST>
-ignoreregex =
-EOF
+cat > /etc/fail2ban/filter.d/404-0.conf << 'F2B404EOF'
+${fail2banFilters["404-0"]}
+F2B404EOF
 
-cat > /etc/fail2ban/filter.d/nginx-4xx.conf << 'EOF'
-[Definition]
-failregex = ^<HOST>.*"(GET|POST).*" (404|444|403|400) .*$
-ignoreregex =
-EOF
+cat > /etc/fail2ban/filter.d/block22.conf << 'F2BBLOCK22EOF'
+${fail2banFilters.block22}
+F2BBLOCK22EOF
 
-# ── DATABASE FAIL2BAN ──────────────────────────────────────
-info "Creating fail2ban database..."
-mysql -uroot -e "CREATE DATABASE IF NOT EXISTS fail2ban;"
-mysql -uroot -e "GRANT ALL ON fail2ban.* TO 'dynamo'@'%' IDENTIFIED BY 'dynamo@2018';"
-mysql -uroot -e "GRANT ALL ON fail2ban.* TO 'dynamo'@'localhost' IDENTIFIED BY 'dynamo@2018';"
-mysql -uroot -e "FLUSH PRIVILEGES;"
+cat > /etc/fail2ban/filter.d/nginx-abuse.conf << 'F2BNGINXABUSEEOF'
+${fail2banFilters["nginx-abuse"]}
+F2BNGINXABUSEEOF
 
-mkdir -p ~/tmp
-cd ~/tmp
-wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/sql/fail2ban.mysql
-wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/action.d/banned_db.conf
-wget -q https://github.com/iredmail/iRedMail/raw/1.3/samples/fail2ban/bin/fail2ban_banned_db
-mysql fail2ban < ~/tmp/fail2ban.mysql
+cat > /etc/fail2ban/filter.d/xtream.conf << 'F2BXTREAMEOF'
+${fail2banFilters.xtream}
+F2BXTREAMEOF
 
-cat > /root/.my.cnf-fail2ban << 'MYCNFEOF'
-[client]
-host="127.0.0.1"
-port="3306"
-user="dynamo"
-password="dynamo@2018"
-MYCNFEOF
+cat > /etc/fail2ban/filter.d/xtream-api.conf << 'F2BXTREAMAPIEOF'
+${fail2banFilters["xtream-api"]}
+F2BXTREAMAPIEOF
 
-mv ~/tmp/banned_db.conf /etc/fail2ban/action.d/
-mv ~/tmp/fail2ban_banned_db /usr/local/bin/
-chmod 0550 /usr/local/bin/fail2ban_banned_db
+${fail2banDbSetup}
 
-# ── GEOIP2 ─────────────────────────────────────────────────
-info "Configuring GeoIP2..."
-cat > /etc/GeoIP.conf << GEOEOF
-AccountID 768897
-LicenseKey xJBgIatxy2Iw7V9h
-EditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country
-GEOEOF
+${geoIpSetup}
 
-echo "0 1 * * *  /usr/bin/geoipupdate" >> /etc/crontab
-geoipupdate
+${optionalPackageSetup}
+
+${asnBlockSetup}
+
+${antiIptvSetup}
 
 # ── SYSCTL ─────────────────────────────────────────────────
 info "Applying sysctl settings..."
-cat >> /etc/sysctl.conf << 'EOF'
-
+cat > /etc/sysctl.d/99-proxyguardian.conf << 'EOF'
 # Proxy hardening
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
@@ -1218,17 +1876,43 @@ net.core.wmem_max = 8388608
 net.core.netdev_max_backlog = 5000
 net.ipv4.tcp_window_scaling = 1
 EOF
-sysctl -p
+sysctl --system >/dev/null || warn "Alcuni sysctl non sono supportati da questo kernel"
 
 # ── IPTABLES ───────────────────────────────────────────────
 info "Applying iptables rules..."
-iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
-iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
-iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+iptables -C INPUT -p tcp --tcp-flags ALL NONE -j DROP 2>/dev/null || iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+iptables -C INPUT -p tcp ! --syn -m state --state NEW -j DROP 2>/dev/null || iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
+iptables -C INPUT -p tcp --tcp-flags ALL ALL -j DROP 2>/dev/null || iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
 
 # ── AVVIO SERVIZI ──────────────────────────────────────────
 info "Enabling and starting services..."
 systemctl daemon-reload
+
+# Nginx valida l'upstream main.netbird.cloud:8880: NetBird deve essere gia connesso.
+info "Installing / connecting NetBird before nginx validation..."
+curl --retry 5 --retry-delay 3 --connect-timeout 20 -fsSL https://pkgs.netbird.io/install.sh | bash
+systemctl enable netbird || true
+if netbird status 2>/dev/null | grep -q "Management: Connected"; then
+  ok "NetBird gia connesso"
+else
+  netbird up --setup-key "\$NETBIRD_SETUP_KEY"
+fi
+for _ in \$(seq 1 15); do
+  if netbird status 2>/dev/null | grep -q "Management: Connected"; then
+    break
+  fi
+  sleep 2
+done
+netbird status 2>/dev/null | grep -q "Management: Connected" || error "NetBird non connesso"
+MAIN_BACKEND_IP=\$(netbird status -d 2>/dev/null | awk '/ main\.netbird\.cloud:/{found=1} found && /NetBird IP:/{print \$3; exit}')
+if [ -n "\$MAIN_BACKEND_IP" ]; then
+  sed -i '/[[:space:]]main\.netbird\.cloud$/d' /etc/hosts
+  echo "\$MAIN_BACKEND_IP main.netbird.cloud" >> /etc/hosts
+  ok "main.netbird.cloud risolto via NetBird: \$MAIN_BACKEND_IP"
+else
+  warn "Peer main.netbird.cloud non trovato nella network map NetBird"
+fi
+
 systemctl enable nginx
 nginx -t && systemctl start nginx
 systemctl enable fail2ban
@@ -1237,6 +1921,56 @@ systemctl restart fail2ban
 ok "Nginx 1.26.2 + ModSecurity v3 + OWASP CRS v4 installati"
 ok "Fail2ban configurato"
 ok "GeoIP2 configurato"
+
+# ── NETBIRD ────────────────────────────────────────────────
+info "Installing / updating NetBird..."
+if ! command -v netbird >/dev/null 2>&1; then
+  curl --retry 5 --retry-delay 3 --connect-timeout 20 -fsSL https://pkgs.netbird.io/install.sh | bash
+fi
+systemctl enable netbird || true
+
+mkdir -p /etc/systemd/system/netbird.service.d
+cat > /usr/local/bin/netbird-ipset-cleanup.sh << 'EOF'
+${DEPLOY_NETBIRD_IPSET_CLEANUP_SH}
+EOF
+chmod +x /usr/local/bin/netbird-ipset-cleanup.sh
+
+cat > /etc/systemd/system/netbird-cleanup.service << 'EOF'
+${DEPLOY_NETBIRD_CLEANUP_SERVICE}
+EOF
+
+cat > /etc/systemd/system/netbird.service.d/restart-nginx.conf << 'EOF'
+${DEPLOY_NETBIRD_RESTART_NGINX_CONF}
+EOF
+
+systemctl daemon-reload
+systemctl enable netbird-cleanup.service >/dev/null 2>&1 || true
+
+if netbird status 2>/dev/null | grep -q "Management: Connected"; then
+  ok "NetBird già connesso"
+else
+  info "Connecting NetBird..."
+  netbird up --setup-key "\$NETBIRD_SETUP_KEY"
+fi
+
+systemctl restart netbird
+
+for _ in \$(seq 1 15); do
+  if netbird status 2>/dev/null | grep -q "Management: Connected"; then
+    break
+  fi
+  sleep 2
+done
+
+netbird status 2>/dev/null | grep -q "Management: Connected" || error "NetBird non connesso"
+NETBIRD_IP=\$(ip -4 addr show 2>/dev/null | awk '/inet 100\./ {print \$2; exit}' | cut -d/ -f1)
+[ -n "\$NETBIRD_IP" ] || error "IP NetBird 100.x non rilevato"
+ok "IP NetBird rilevato: \$NETBIRD_IP"
+MAIN_BACKEND_IP=\$(netbird status -d 2>/dev/null | awk '/ main\.netbird\.cloud:/{found=1} found && /NetBird IP:/{print \$3; exit}')
+if [ -n "\$MAIN_BACKEND_IP" ]; then
+  sed -i '/[[:space:]]main\.netbird\.cloud$/d' /etc/hosts
+  echo "\$MAIN_BACKEND_IP main.netbird.cloud" >> /etc/hosts
+fi
 
 # ═══════════════════════════════════════════════════════════
 # INSTALLAZIONE AGENT
@@ -1251,17 +1985,7 @@ AGENT_PORT="3001"
 AGENT_USER="pgagent"
 SERVICE_NAME="proxy-guardian-agent"
 AGENT_API_KEY=\$(openssl rand -hex 32)
-
-NETBIRD_IP=\$(ip addr show 2>/dev/null | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}' | grep -E '^100\\.' | head -1)
-if [ -n "\$NETBIRD_IP" ]; then
-  AGENT_BIND="\$NETBIRD_IP"
-  ok "IP NetBird rilevato: \$NETBIRD_IP"
-else
-  AGENT_BIND="0.0.0.0"
-  warn "NetBird non rilevato — agent su 0.0.0.0"
-fi
-
-PUBLIC_IP=\$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print \$1}')
+AGENT_BIND="\$NETBIRD_IP"
 HOSTNAME=\$(hostname -f 2>/dev/null || hostname)
 
 if command -v ipset &>/dev/null && ipset list blocked_asn &>/dev/null 2>&1; then
@@ -1287,31 +2011,7 @@ fi
 id "\$AGENT_USER" &>/dev/null || useradd -r -m -s /bin/bash "\$AGENT_USER"
 
 cat > /etc/sudoers.d/proxy-guardian-agent << 'SUDOEOF'
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl status *
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start nginx
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start fail2ban
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop fail2ban
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart fail2ban
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start mariadb
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop mariadb
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart mariadb
-pgagent ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client *
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/ipset *
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start netbird
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop netbird
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart netbird
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables *
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save
-pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save
-pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4
-pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart proxy-guardian-agent
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop proxy-guardian-agent
+${DEPLOY_AGENT_SUDOERS}
 SUDOEOF
 chmod 440 /etc/sudoers.d/proxy-guardian-agent
 
@@ -1323,19 +2023,34 @@ if [ -f /etc/nginx/nginx.conf ]; then
   chown root:"\$AGENT_USER" /etc/nginx/nginx.conf
   chmod 664 /etc/nginx/nginx.conf
 fi
+if [ -f /etc/asn-blocklist.txt ]; then
+  chown root:"\$AGENT_USER" /etc/asn-blocklist.txt /etc/asn-whitelist-nets.txt 2>/dev/null || true
+  chmod 664 /etc/asn-blocklist.txt /etc/asn-whitelist-nets.txt 2>/dev/null || true
+fi
+if [ -f /var/log/update-asn-block.log ]; then
+  chown root:adm /var/log/update-asn-block.log 2>/dev/null || true
+  chmod 640 /var/log/update-asn-block.log 2>/dev/null || true
+fi
 
 NGINX_USER=\$(grep -oP '^user\\s+\\K\\S+(?=;)' /etc/nginx/nginx.conf 2>/dev/null || echo "www-data")
-mkdir -p /opt/log
+mkdir -p /opt/log /var/cache/nginx/epg /var/cache/nginx/streaming
 touch /opt/log/modsec_audit.log
 chown "\${NGINX_USER}:\${AGENT_USER}" /opt/log/modsec_audit.log
 chmod 664 /opt/log/modsec_audit.log
 chown "\${NGINX_USER}:\${AGENT_USER}" /opt/log
 chmod 775 /opt/log
+chown -R "\${NGINX_USER}:\${NGINX_USER}" /var/cache/nginx/epg /var/cache/nginx/streaming
 
 mkdir -p "\$AGENT_DIR"
 info "Download agent bundle..."
-curl -fsSL "https://raw.githubusercontent.com/perfido19/ProxyGuardian/main/agent/agent-bundle.js" -o "\$AGENT_DIR/index.js" || \\
+curl -fsSL "\$AGENT_BUNDLE_URL" -o "\$AGENT_DIR/agent-bundle.js" || \\
   error "Impossibile scaricare agent-bundle.js"
+
+cat > /usr/local/bin/asn-log-stats.py << 'ASNLOGSTATSEOF'
+${agentAsnLogStats}
+ASNLOGSTATSEOF
+chmod 755 /usr/local/bin/asn-log-stats.py
+
 chown -R "\$AGENT_USER:\$AGENT_USER" "\$AGENT_DIR"
 
 cat > "\$AGENT_DIR/.env" << ENVEOF
@@ -1352,10 +2067,15 @@ cat > "\$AGENT_DIR/start.sh" << 'STARTEOF'
 set -a
 source /opt/proxy-guardian-agent/.env
 set +a
-exec node /opt/proxy-guardian-agent/index.js
+exec node /opt/proxy-guardian-agent/agent-bundle.js
 STARTEOF
 chmod +x "\$AGENT_DIR/start.sh"
 chown "\$AGENT_USER:\$AGENT_USER" "\$AGENT_DIR/start.sh"
+
+cat > "/etc/logrotate.d/proxyguardian" << 'LOGEOF'
+${DEPLOY_LOGROTATE_CONF}
+LOGEOF
+chmod 644 /etc/logrotate.d/proxyguardian
 
 cat > "/etc/systemd/system/\$SERVICE_NAME.service" << SVCEOF
 [Unit]
@@ -1379,6 +2099,11 @@ SVCEOF
 systemctl daemon-reload
 systemctl enable "\$SERVICE_NAME" >/dev/null 2>&1
 systemctl restart "\$SERVICE_NAME"
+${installAsnBlock ? `systemctl enable ipset-restore whitelist-watcher >/dev/null 2>&1 || true
+systemctl start ipset-restore >/dev/null 2>&1 || true
+systemctl restart whitelist-watcher >/dev/null 2>&1 || true` : ""}
+${installAntiIptv ? `systemctl enable anti-iptv >/dev/null 2>&1 || true
+systemctl restart anti-iptv >/dev/null 2>&1 || true` : ""}
 sleep 2
 
 echo ""
@@ -1387,7 +2112,7 @@ echo -e "\${GREEN}   DEPLOY COMPLETATO ✓\${NC}"
 echo -e "\${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
 echo ""
 echo -e "  VPS:        \${CYAN}\$VPS_NAME\${NC}"
-echo -e "  Host:       \${CYAN}\${NETBIRD_IP:-\$PUBLIC_IP}\${NC}"
+echo -e "  Host:       \${CYAN}\$NETBIRD_IP\${NC}"
 echo -e "  Porta:      \${CYAN}\$AGENT_PORT\${NC}"
 echo -e "  API Key:    \${YELLOW}\$AGENT_API_KEY\${NC}"
 echo ""
@@ -1396,7 +2121,7 @@ echo ""
 echo -e "  \${CYAN}Ora aggiungi questo VPS nella dashboard:\${NC}"
 echo -e "    Vai su VPS → Aggiungi VPS"
 echo -e "    Nome: \$VPS_NAME"
-echo -e "    Host: \${NETBIRD_IP:-\$PUBLIC_IP}"
+echo -e "    Host: \$NETBIRD_IP"
 echo -e "    Porta: \$AGENT_PORT"
 echo -e "    API Key: (quella sopra)"
 echo ""
@@ -1414,14 +2139,17 @@ fi
           backendIp: bIp,
           backendPort: bPort,
           proxyPort: pPort,
+          installAsnBlock,
+          installAntiIptv,
         },
         embeddedConfigs: {
           countryWhitelist: !!countryWhitelist && countryWhitelist.trim().length > 0,
-          blockAsn: !!blockAsn && blockAsn.trim().length > 0,
+          blockAsn: installAsnBlock,
           blockIsp: !!blockIsp && blockIsp.trim().length > 0,
           blockBadAgents: !!blockBadAgents && blockBadAgents.trim().length > 0,
           ipWhitelist: !!ipWhitelist && ipWhitelist.trim().length > 0,
           exclusionIp: !!exclusionIp && exclusionIp.trim().length > 0,
+          antiIptv: installAntiIptv,
           modsecRelaxed: true,
           nginxOptimized: true,
         },

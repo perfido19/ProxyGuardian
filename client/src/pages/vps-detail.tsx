@@ -33,7 +33,7 @@ interface SystemInfo {
 }
 interface Jail { name: string; enabled: boolean; banTime: number; maxRetry: number; findTime: number; }
 interface IpSetMeta { name: string; type: string; count: number; }
-interface IpSetDetail extends IpSetMeta { members: string[]; }
+interface IpSetDetail extends IpSetMeta { members: string[]; totalMembers?: number; truncated?: boolean; }
 interface IpTablesChain { name: string; policy: string; rules: string[]; }
 interface NetbirdPeer { name: string; ip: string; latency: string; connected: boolean; }
 interface NetbirdStatus { running: boolean; connected: boolean; ip: string | null; peers: NetbirdPeer[]; }
@@ -83,6 +83,7 @@ export default function VpsDetail() {
   const [ipsetSearch, setIpsetSearch] = useState("");
   const [newIp, setNewIp] = useState("");
   const [showAddRule, setShowAddRule] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("services");
   const [ruleForm, setRuleForm] = useState({ target: "DROP", protocol: "all", source: "", dport: "", position: "append" });
 
   useEffect(() => {
@@ -122,32 +123,34 @@ export default function VpsDetail() {
       const r = await apiRequest("GET", proxy(`/api/logs/${logType}?${params}`));
       return r.json();
     },
-    enabled: !!vps,
+    enabled: !!vps && activeTab === "logs",
     refetchInterval: REFETCH,
   });
 
   const { data: ipsets, refetch: refetchIpsets } = useQuery<IpSetMeta[]>({
     queryKey: [`vps-${id}-ipsets`],
     queryFn: async () => { const r = await apiRequest("GET", proxy("/api/ipset")); return r.json(); },
-    enabled: !!vps,
+    enabled: !!vps && activeTab === "ipset",
     refetchInterval: REFETCH,
   });
 
   const { data: ipsetDetail, isLoading: ipsetDetailLoading, refetch: refetchIpsetDetail } = useQuery<IpSetDetail>({
     queryKey: [`vps-${id}-ipset-${selectedIpset}`],
-    queryFn: async () => { const r = await apiRequest("GET", proxy(`/api/ipset/${selectedIpset}`)); return r.json(); },
-    enabled: !!vps && !!selectedIpset,
+    queryFn: async () => { const r = await apiRequest("GET", proxy(`/api/ipset/${selectedIpset}?limit=1000`)); return r.json(); },
+    enabled: !!vps && activeTab === "ipset" && !!selectedIpset,
   });
 
   const { data: iptables, refetch: refetchIptables } = useQuery<IpTablesChain[]>({
     queryKey: [`vps-${id}-iptables`],
     queryFn: async () => { const r = await apiRequest("GET", proxy("/api/iptables")); return r.json(); },
-    enabled: !!vps,
+    enabled: !!vps && activeTab === "ipset",
     refetchInterval: REFETCH,
   });
 
   useEffect(() => {
-    if (ipsets?.length && !selectedIpset) setSelectedIpset(ipsets[0].name);
+    if (ipsets?.length && !selectedIpset) {
+      setSelectedIpset((ipsets.find(s => s.count <= 1000) || ipsets[0]).name);
+    }
   }, [ipsets, selectedIpset]);
 
   const { data: jails, isLoading: jailsLoading, refetch: refetchJails } = useQuery<Jail[]>({
@@ -164,9 +167,11 @@ export default function VpsDetail() {
   });
 
   // Keep textarea in sync with fetched data (only when not editing)
-  if (configData && configContent === null) {
-    setConfigContent(configData.content);
-  }
+  useEffect(() => {
+    if (configData && configContent === null) {
+      setConfigContent(configData.content);
+    }
+  }, [configData]);
 
   const serviceActionMutation = useMutation({
     mutationFn: async ({ service, action }: { service: string; action: string }) => {
@@ -381,6 +386,8 @@ export default function VpsDetail() {
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
+  useIpBatch((bannedIps || []).map(b => b.ip));
+
   if (!vpsList) return <LoadingState message="Caricamento..." />;
   if (!vps) {
     return (
@@ -400,7 +407,6 @@ export default function VpsDetail() {
     (!jailFilter || item.jail === jailFilter) &&
     (!ipSearch || item.ip.includes(ipSearch) || item.jail.toLowerCase().includes(ipSearch.toLowerCase()))
   );
-  useIpBatch((bannedIps || []).map(b => b.ip));
 
   const memPct = systemInfo ? Math.round((systemInfo.memory.used / systemInfo.memory.total) * 100) : 0;
   const online = vps.lastStatus === "online";
@@ -461,7 +467,7 @@ export default function VpsDetail() {
       )}
 
       {/* Tabs */}
-      <Tabs defaultValue="services">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0">
           <TabsList className="flex-nowrap md:flex-wrap h-auto gap-1 w-max md:w-auto">
             <TabsTrigger value="services">Servizi</TabsTrigger>
@@ -557,12 +563,12 @@ export default function VpsDetail() {
                   </div>
                   <div className="flex items-center gap-2">
                     {uniqueJails.length > 1 && (
-                      <Select value={jailFilter} onValueChange={setJailFilter}>
+                      <Select value={jailFilter || "__all__"} onValueChange={v => setJailFilter(v === "__all__" ? "" : v)}>
                         <SelectTrigger className="h-8 w-[140px] text-xs">
                           <SelectValue placeholder="Tutte le jail" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Tutte le jail</SelectItem>
+                          <SelectItem value="__all__">Tutte le jail</SelectItem>
                           {uniqueJails.map(j => (
                             <SelectItem key={j} value={j}>{j}</SelectItem>
                           ))}
@@ -622,7 +628,7 @@ export default function VpsDetail() {
                       <TableBody>
                         {filteredBannedIps.map((item, i) => (
                           <TableRow key={i}>
-                            <TableCell><IpCell ip={item.ip} /></TableCell>
+                            <TableCell><IpCell ip={item.ip} deferFetch /></TableCell>
                             <TableCell><Badge variant="outline">{item.jail}</Badge></TableCell>
                             <TableCell className="text-sm text-muted-foreground">{new Date(item.banTime).toLocaleString("it-IT")}</TableCell>
                             <TableCell className="text-right">
@@ -890,7 +896,8 @@ export default function VpsDetail() {
                   {ipsetDetail && (
                     <div className="flex gap-4 text-sm text-muted-foreground mb-1">
                       <span>Tipo: <span className="font-mono text-foreground">{ipsetDetail.type}</span></span>
-                      <span>Entries: <span className="font-semibold text-foreground">{ipsetDetail.members.length}</span></span>
+                      <span>Entries: <span className="font-semibold text-foreground">{ipsetDetail.totalMembers ?? ipsetDetail.count}</span></span>
+                      {ipsetDetail.truncated && <span>Mostrate: <span className="font-semibold text-foreground">{ipsetDetail.members.length}</span></span>}
                     </div>
                   )}
 
@@ -933,6 +940,8 @@ export default function VpsDetail() {
                   {/* Tabella members */}
                   {filteredMembers.length === 0 && ipsetSearch ? (
                     <p className="text-center text-muted-foreground py-6">Nessun risultato per "{ipsetSearch}"</p>
+                  ) : ipsetDetail?.truncated && ipsetSearch ? (
+                    <p className="text-center text-muted-foreground py-6">Ricerca limitata ai primi {ipsetDetail.members.length} elementi caricati</p>
                   ) : filteredMembers.length === 0 ? (
                     <p className="text-center text-muted-foreground py-6">IPSet vuoto</p>
                   ) : (

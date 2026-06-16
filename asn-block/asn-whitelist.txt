@@ -1,3 +1,26 @@
-# Fleet ASN Whitelist — gestito dalla dashboard ProxyGuardian
-# Formato: <CIDR o dominio> [# commento]
-# Esempio: 1.2.3.0/24 # provider fidato
+# =============================================================
+# Whitelist prefissi e domini da NON bloccare mai
+# =============================================================
+# Formato prefisso:  1.2.3.0/24        # descrizione
+# Formato dominio:   domain:example.com # descrizione
+#
+# I domini vengono risolti dinamicamente ad ogni aggiornamento
+# e i loro IP vengono esclusi dal blocco automaticamente
+# =============================================================
+
+# --- Netbird (rete mesh) ---
+85.9.200.0/21          # UpCloud - server Netbird (api, signal, relay)
+domain:api.netbird.io  # Netbird API server
+domain:signal.netbird.io # Netbird signal server
+domain:relay.netbird.io  # Netbird relay server
+domain:management.netbird.io  # Netbird Management
+domain:stun.netbird.io
+domain:turn.netbird.io
+domain:streamline-vl-tlv-0.relay.netbird.io
+
+# --- Aggiungi qui altri prefissi o domini da escludere ---
+# Esempi:
+# 192.168.0.0/16       # Rete locale
+# domain:miodominio.com # Mio server
+
+

@@ -187,6 +187,8 @@ La configurazione template si trova in `server/nginx-template.conf` ed è ottimi
 | `SESSION_SECRET` | — | Segreto per cookie di sessione (obbligatorio in produzione) |
 | `PORT` | `5000` | Porta HTTP dashboard |
 | `DATA_DIR` | `./data` | Directory persistenza JSON |
+| `NETBIRD_SETUP_KEY` | — | Setup key usata da Deploy VPS per installare/joinare NetBird |
+| `DEPLOY_AGENT_GIT_REF` | `main` | Ref GitHub usato da Deploy VPS per scaricare `agent-bundle.js` |
 
 ### Agent (`/opt/proxy-guardian-agent/.env`)
 
@@ -195,6 +197,31 @@ La configurazione template si trova in `server/nginx-template.conf` ed è ottimi
 | `AGENT_API_KEY` | (generato) | Chiave autenticazione API |
 | `AGENT_PORT` | `3001` | Porta HTTP agent |
 | `AGENT_BIND` | IP NetBird o `0.0.0.0` | Indirizzo di ascolto |
+
+---
+
+## Migrazione Dashboard
+
+Per spostare il VPS dashboard su una nuova macchina sono disponibili due script in `scripts/`:
+
+```bash
+sudo bash scripts/dashboard-backup.sh /root/proxyguardian-dashboard-backup.tar.gz
+sudo bash scripts/dashboard-restore.sh /root/proxyguardian-dashboard-backup.tar.gz
+```
+
+Il backup include:
+
+- snapshot completo di `/root/proxy-dashboard` esclusi `.git`, `node_modules`, `dist`
+- `.env`, `data/`, `asn-block/`, bundle agent e override locali del repo
+- file runtime di sistema: nginx, SSL, GeoIP, PM2 dump, chiave SSH dashboard
+- manifest, checksum, `git status`, `git diff`, `netbird status`
+
+Note operative:
+
+- `dashboard-backup.sh --include-sessions` include anche `data/sessions`
+- `dashboard-restore.sh --dry-run` valida l'archivio senza modificare il server
+- NetBird va comunque collegato sul nuovo VPS prima dei test verso gli agent
+- La checklist completa di cutover si trova in `DASHBOARD_CUTOVER_CHECKLIST.md`
 
 ---
 
