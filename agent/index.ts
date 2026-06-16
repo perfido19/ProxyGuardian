@@ -1424,6 +1424,56 @@ app.get("/api/anti-iptv/banned", async (_req, res) => {
   }
 });
 
+app.post("/api/anti-iptv/cleanup", async (_req, res) => {
+  try {
+    var ipsetR = await runCmd("sudo ipset list iptv_ban 2>/dev/null | awk '/^Members:/{found=1;next} found && /^[0-9]/{print $1}' || echo ''");
+    var activeIps: { [ip: string]: boolean } = {};
+    var activeArr = (ipsetR.ok && ipsetR.stdout.trim() ? ipsetR.stdout.split("\n") : [])
+      .map(function(l: string) { return l.trim(); })
+      .filter(function(l: string) { return /^\d+\.\d+\.\d+\.\d+$/.test(l); });
+    for (var ai = 0; ai < activeArr.length; ai++) { activeIps[activeArr[ai]] = true; }
+
+    var logPath = "/var/log/anti-iptv/bans.log";
+    var tmpPath = "/tmp/anti-iptv-bans-clean.log";
+    var logR = await runCmd("cat " + logPath + " 2>/dev/null || echo ''");
+    if (!logR.ok || !logR.stdout.trim()) {
+      return res.json({ ok: true, removed: 0, kept: 0 });
+    }
+
+    var sep = "============================================================";
+    var blocks = logR.stdout.split(/={10,}/);
+    var kept: string[] = [];
+    var removed = 0;
+
+    for (var bi = 0; bi < blocks.length; bi++) {
+      var block = blocks[bi].trim();
+      if (!block) continue;
+      var ipMatch = block.match(/IP BANNATO:\s*(\d+\.\d+\.\d+\.\d+)/);
+      if (!ipMatch) { kept.push(block); continue; }
+      if (activeIps[ipMatch[1]]) {
+        kept.push(block);
+      } else {
+        removed++;
+      }
+    }
+
+    var newContent = kept.length
+      ? kept.map(function(b) { return sep + "\n" + b + "\n"; }).join("") + sep + "\n"
+      : "";
+
+    var { writeFile } = require("fs/promises");
+    await writeFile(tmpPath, newContent, "utf-8");
+    var mvR = await runCmd("sudo mv " + tmpPath + " " + logPath + " && sudo chown root:adm " + logPath + " && sudo chmod 640 " + logPath);
+    if (!mvR.ok) {
+      return res.status(500).json({ error: "Scrittura log fallita" });
+    }
+
+    res.json({ ok: true, removed: removed, kept: kept.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, BIND, () => {

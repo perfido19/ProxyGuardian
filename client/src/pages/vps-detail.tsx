@@ -86,6 +86,7 @@ export default function VpsDetail() {
   const [newIp, setNewIp] = useState("");
   const [showAddRule, setShowAddRule] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("services");
+  const [antiIptvSearch, setAntiIptvSearch] = useState("");
   const [ruleForm, setRuleForm] = useState({ target: "DROP", protocol: "all", source: "", dport: "", position: "append" });
 
   useEffect(() => {
@@ -273,6 +274,18 @@ export default function VpsDetail() {
     },
     onSuccess: () => { refetchAntiIptv(); toast({ title: "Tutti gli IP anti-iptv sbloccati" }); },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const cleanupAntiIptvMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", proxy("/api/anti-iptv/cleanup"), {});
+      return r.json();
+    },
+    onSuccess: (data: any) => {
+      refetchAntiIptv();
+      toast({ title: "Log pulito", description: `${data.removed} entry scadute rimosse, ${data.kept} mantenute` });
+    },
+    onError: (e: any) => toast({ title: "Errore cleanup", description: e.message, variant: "destructive" }),
   });
 
   const nginxTestMutation = useMutation({
@@ -1273,78 +1286,109 @@ export default function VpsDetail() {
 
         {/* ── Anti-IPTV ── */}
         <TabsContent value="anti-iptv" className="pt-4">
-          {antiIptvLoading ? <LoadingState message="Caricamento ban anti-iptv..." /> : (
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />Ban Anti-IPTV</CardTitle>
-                    <CardDescription>
-                      {antiIptv?.activeCount ?? 0} IP attualmente bannati · {antiIptv?.entries.length ?? 0} totali in log
-                    </CardDescription>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="outline" onClick={() => refetchAntiIptv()}>
-                      <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
-                    </Button>
-                    {(antiIptv?.activeCount ?? 0) > 0 && (
-                      <Button size="sm" variant="destructive" onClick={() => flushAntiIptvMutation.mutate()} disabled={flushAntiIptvMutation.isPending}>
-                        <ShieldOff className="w-4 h-4 mr-1" />Sblocca tutti
+          {antiIptvLoading ? <LoadingState message="Caricamento ban anti-iptv..." /> : (() => {
+            const expiredCount = antiIptv?.entries.filter(e => !e.active).length ?? 0;
+            const filtered = antiIptv?.entries.filter(e => {
+              if (!antiIptvSearch) return true;
+              const q = antiIptvSearch.toLowerCase();
+              return e.ip.includes(q) || e.usernames.some(u => u.toLowerCase().includes(q));
+            }) ?? [];
+            return (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between gap-4 flex-wrap">
+                    <div>
+                      <CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />Ban Anti-IPTV</CardTitle>
+                      <CardDescription>
+                        {antiIptv?.activeCount ?? 0} attivi · {antiIptv?.entries.length ?? 0} in log{expiredCount > 0 ? ` · ${expiredCount} scaduti` : ""}
+                      </CardDescription>
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                      <Button size="sm" variant="outline" onClick={() => refetchAntiIptv()}>
+                        <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
                       </Button>
-                    )}
+                      {expiredCount > 0 && (
+                        <Button size="sm" variant="outline" onClick={() => cleanupAntiIptvMutation.mutate()} disabled={cleanupAntiIptvMutation.isPending}>
+                          <Trash2 className="w-4 h-4 mr-1" />Pulisci scaduti ({expiredCount})
+                        </Button>
+                      )}
+                      {(antiIptv?.activeCount ?? 0) > 0 && (
+                        <Button size="sm" variant="destructive" onClick={() => flushAntiIptvMutation.mutate()} disabled={flushAntiIptvMutation.isPending}>
+                          <ShieldOff className="w-4 h-4 mr-1" />Sblocca tutti
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {!antiIptv?.entries.length ? (
-                  <p className="text-center text-muted-foreground py-8">Nessun ban in log</p>
-                ) : (
-                  <div className="border rounded-md overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>IP</TableHead>
-                          <TableHead>Username triggerati</TableHead>
-                          <TableHead>Data ban</TableHead>
-                          <TableHead>Stato</TableHead>
-                          <TableHead className="text-right">Azioni</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {antiIptv.entries.map((item, i) => (
-                          <TableRow key={i} className={item.active ? "" : "opacity-50"}>
-                            <TableCell><IpCell ip={item.ip} deferFetch /></TableCell>
-                            <TableCell>
-                              <div className="flex flex-wrap gap-1">
-                                {item.usernames.length ? item.usernames.map((u, j) => (
-                                  <Badge key={j} variant="outline" className="text-xs font-mono">{u}</Badge>
-                                )) : <span className="text-muted-foreground text-xs">—</span>}
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                              {item.date || "—"}
-                            </TableCell>
-                            <TableCell>
-                              {item.active
-                                ? <Badge className="bg-destructive text-white">Attivo</Badge>
-                                : <Badge variant="outline">Scaduto</Badge>}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {item.active && (
-                                <Button size="sm" variant="ghost" onClick={() => unbanAntiIptvMutation.mutate(item.ip)} disabled={unbanAntiIptvMutation.isPending}>
-                                  <ShieldOff className="w-4 h-4 mr-1" />Sblocca
-                                </Button>
-                              )}
-                            </TableCell>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {(antiIptv?.entries.length ?? 0) > 0 && (
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Cerca IP o username..."
+                        value={antiIptvSearch}
+                        onChange={e => setAntiIptvSearch(e.target.value)}
+                        className="pl-8"
+                      />
+                      {antiIptvSearch && (
+                        <span className="absolute right-3 top-2.5 text-xs text-muted-foreground">
+                          {filtered.length} / {antiIptv?.entries.length}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {!antiIptv?.entries.length ? (
+                    <p className="text-center text-muted-foreground py-8">Nessun ban in log</p>
+                  ) : filtered.length === 0 ? (
+                    <p className="text-center text-muted-foreground py-8">Nessun risultato per "{antiIptvSearch}"</p>
+                  ) : (
+                    <div className="border rounded-md overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>IP</TableHead>
+                            <TableHead>Username triggerati</TableHead>
+                            <TableHead>Data ban</TableHead>
+                            <TableHead>Stato</TableHead>
+                            <TableHead className="text-right">Azioni</TableHead>
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
+                        </TableHeader>
+                        <TableBody>
+                          {filtered.map((item, i) => (
+                            <TableRow key={i} className={item.active ? "" : "opacity-50"}>
+                              <TableCell><IpCell ip={item.ip} deferFetch /></TableCell>
+                              <TableCell>
+                                <div className="flex flex-wrap gap-1">
+                                  {item.usernames.length ? item.usernames.map((u, j) => (
+                                    <Badge key={j} variant="outline" className="text-xs font-mono">{u}</Badge>
+                                  )) : <span className="text-muted-foreground text-xs">—</span>}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                                {item.date || "—"}
+                              </TableCell>
+                              <TableCell>
+                                {item.active
+                                  ? <Badge className="bg-destructive text-white">Attivo</Badge>
+                                  : <Badge variant="outline">Scaduto</Badge>}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {item.active && (
+                                  <Button size="sm" variant="ghost" onClick={() => unbanAntiIptvMutation.mutate(item.ip)} disabled={unbanAntiIptvMutation.isPending}>
+                                    <ShieldOff className="w-4 h-4 mr-1" />Sblocca
+                                  </Button>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
         </TabsContent>
       </Tabs>
     </div>
