@@ -37,6 +37,8 @@ interface IpSetDetail extends IpSetMeta { members: string[]; totalMembers?: numb
 interface IpTablesChain { name: string; policy: string; rules: string[]; }
 interface NetbirdPeer { name: string; ip: string; latency: string; connected: boolean; }
 interface NetbirdStatus { running: boolean; connected: boolean; ip: string | null; peers: NetbirdPeer[]; }
+interface AntiIptvBan { ip: string; date: string; usernames: string[]; active: boolean; }
+interface AntiIptvData { entries: AntiIptvBan[]; activeCount: number; }
 
 const REFETCH = 60000;
 
@@ -160,6 +162,13 @@ export default function VpsDetail() {
     refetchInterval: REFETCH,
   });
 
+  const { data: antiIptv, isLoading: antiIptvLoading, refetch: refetchAntiIptv } = useQuery<AntiIptvData>({
+    queryKey: [`vps-${id}-anti-iptv`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/anti-iptv/banned")); return r.json(); },
+    enabled: !!vps && activeTab === "anti-iptv",
+    refetchInterval: 30000,
+  });
+
   const { data: configData, isLoading: configLoading, refetch: refetchConfig } = useQuery<{ filename: string; content: string }>({
     queryKey: [`vps-${id}-config-${selectedConfig}`],
     queryFn: async () => { const r = await apiRequest("GET", proxy(`/api/config/${selectedConfig}`)); return r.json(); },
@@ -245,6 +254,24 @@ export default function VpsDetail() {
       refetchBanned();
       toast({ title: "IP sbloccati", description: `${data.unbannedCount} IP sbloccati` });
     },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const unbanAntiIptvMutation = useMutation({
+    mutationFn: async (ip: string) => {
+      const r = await apiRequest("POST", proxy("/api/unban"), { ip, jail: "anti-iptv" });
+      return r.json();
+    },
+    onSuccess: (_data, ip) => { refetchAntiIptv(); toast({ title: `IP ${ip} sbloccato da anti-iptv` }); },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const flushAntiIptvMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", proxy("/api/unban-jail"), { jail: "anti-iptv" });
+      return r.json();
+    },
+    onSuccess: () => { refetchAntiIptv(); toast({ title: "Tutti gli IP anti-iptv sbloccati" }); },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
@@ -427,7 +454,7 @@ export default function VpsDetail() {
           </div>
           <p className="text-sm text-muted-foreground font-mono">{vps.host}:{vps.port}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchSystem(); refetchBanned(); refetchLogs(); refetchJails(); refetchIpsets(); refetchIpsetDetail(); refetchIptables(); refetchNetbird(); }}>
+        <Button variant="outline" size="sm" onClick={() => { refetchServices(); refetchSystem(); refetchBanned(); refetchLogs(); refetchJails(); refetchIpsets(); refetchIpsetDetail(); refetchIptables(); refetchNetbird(); refetchAntiIptv(); }}>
           <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
         </Button>
       </div>
@@ -479,6 +506,8 @@ export default function VpsDetail() {
             <TabsTrigger value="logs">Log</TabsTrigger>
             <TabsTrigger value="ipset">IPTables</TabsTrigger>
             <TabsTrigger value="netbird">NetBird</TabsTrigger>
+            <TabsTrigger value="anti-iptv">
+              Anti-IPTV {antiIptv && antiIptv.activeCount > 0 ? <span className="ml-1 bg-destructive text-white text-xs rounded-full px-1.5">{antiIptv.activeCount}</span> : ""}</TabsTrigger>
           </TabsList>
         </div>
 
@@ -1240,6 +1269,82 @@ export default function VpsDetail() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* ── Anti-IPTV ── */}
+        <TabsContent value="anti-iptv" className="pt-4">
+          {antiIptvLoading ? <LoadingState message="Caricamento ban anti-iptv..." /> : (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />Ban Anti-IPTV</CardTitle>
+                    <CardDescription>
+                      {antiIptv?.activeCount ?? 0} IP attualmente bannati · {antiIptv?.entries.length ?? 0} totali in log
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => refetchAntiIptv()}>
+                      <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
+                    </Button>
+                    {(antiIptv?.activeCount ?? 0) > 0 && (
+                      <Button size="sm" variant="destructive" onClick={() => flushAntiIptvMutation.mutate()} disabled={flushAntiIptvMutation.isPending}>
+                        <ShieldOff className="w-4 h-4 mr-1" />Sblocca tutti
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {!antiIptv?.entries.length ? (
+                  <p className="text-center text-muted-foreground py-8">Nessun ban in log</p>
+                ) : (
+                  <div className="border rounded-md overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>IP</TableHead>
+                          <TableHead>Username triggerati</TableHead>
+                          <TableHead>Data ban</TableHead>
+                          <TableHead>Stato</TableHead>
+                          <TableHead className="text-right">Azioni</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {antiIptv.entries.map((item, i) => (
+                          <TableRow key={i} className={item.active ? "" : "opacity-50"}>
+                            <TableCell><IpCell ip={item.ip} deferFetch /></TableCell>
+                            <TableCell>
+                              <div className="flex flex-wrap gap-1">
+                                {item.usernames.length ? item.usernames.map((u, j) => (
+                                  <Badge key={j} variant="outline" className="text-xs font-mono">{u}</Badge>
+                                )) : <span className="text-muted-foreground text-xs">—</span>}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                              {item.date || "—"}
+                            </TableCell>
+                            <TableCell>
+                              {item.active
+                                ? <Badge className="bg-destructive text-white">Attivo</Badge>
+                                : <Badge variant="outline">Scaduto</Badge>}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {item.active && (
+                                <Button size="sm" variant="ghost" onClick={() => unbanAntiIptvMutation.mutate(item.ip)} disabled={unbanAntiIptvMutation.isPending}>
+                                  <ShieldOff className="w-4 h-4 mr-1" />Sblocca
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
       </Tabs>
     </div>

@@ -1342,6 +1342,88 @@ app.post("/api/agent/update", express.raw({ type: "*/*", limit: "10mb" }), async
   }
 });
 
+// ─── Anti-IPTV ────────────────────────────────────────────────────────────────
+
+app.get("/api/anti-iptv/status", async (_req, res) => {
+  try {
+    var activeR = await runCmd("systemctl is-active anti-iptv 2>/dev/null || echo 'inactive'");
+    var running = activeR.stdout.trim() === "active";
+    var countR = await runCmd("sudo ipset list iptv_ban 2>/dev/null | awk '/^Members:/{found=1;next} found && /^[0-9]/{c++} END{print c+0}' || echo '0'");
+    var ipCount = parseInt(countR.stdout.trim()) || 0;
+    res.json({ running: running, ipCount: ipCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/anti-iptv/banned", async (_req, res) => {
+  try {
+    var ipsetR = await runCmd("sudo ipset list iptv_ban 2>/dev/null | awk '/^Members:/{found=1;next} found && /^[0-9]/{print $1}' || echo ''");
+    var activeIpArr: string[] = (ipsetR.ok && ipsetR.stdout.trim() ? ipsetR.stdout.split("\n") : [])
+      .map(function(l: string) { return l.trim(); })
+      .filter(function(l: string) { return /^\d+\.\d+\.\d+\.\d+$/.test(l); });
+    var activeIps: { [ip: string]: boolean } = {};
+    for (var ai = 0; ai < activeIpArr.length; ai++) { activeIps[activeIpArr[ai]] = true; }
+
+    var logR = await runCmd("cat /var/log/anti-iptv/bans.log 2>/dev/null || echo ''");
+    var entries: Array<{ ip: string; date: string; usernames: string[]; active: boolean }> = [];
+    var seenIp: { [ip: string]: number } = {};
+
+    if (logR.ok && logR.stdout.trim()) {
+      var blocks = logR.stdout.split(/={10,}/);
+      for (var bi = 0; bi < blocks.length; bi++) {
+        var block = blocks[bi].trim();
+        if (!block) continue;
+        var ipMatch = block.match(/IP BANNATO:\s*(\d+\.\d+\.\d+\.\d+)/);
+        var dateMatch = block.match(/DATA:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+        if (!ipMatch) continue;
+        var ip = ipMatch[1];
+        var date = dateMatch ? dateMatch[1] : "";
+        var usernames: string[] = [];
+        var usernamesSeen: { [u: string]: boolean } = {};
+        var lines = block.split("\n");
+        for (var li = 0; li < lines.length; li++) {
+          var uMatch = lines[li].match(/[?&]username=([^& "]+)/);
+          if (uMatch && !usernamesSeen[uMatch[1]]) {
+            usernames.push(uMatch[1]);
+            usernamesSeen[uMatch[1]] = true;
+          }
+        }
+        if (seenIp[ip] !== undefined) {
+          var existing = entries[seenIp[ip]];
+          if (date > existing.date) {
+            existing.date = date;
+            existing.usernames = usernames;
+          }
+        } else {
+          seenIp[ip] = entries.length;
+          entries.push({ ip: ip, date: date, usernames: usernames, active: !!activeIps[ip] });
+        }
+      }
+      for (var ei = 0; ei < entries.length; ei++) {
+        entries[ei].active = !!activeIps[entries[ei].ip];
+      }
+    }
+
+    for (var ki = 0; ki < activeIpArr.length; ki++) {
+      var aip = activeIpArr[ki];
+      if (seenIp[aip] === undefined) {
+        entries.push({ ip: aip, date: "", usernames: [], active: true });
+      }
+    }
+
+    entries.sort(function(a, b) {
+      if (a.active && !b.active) return -1;
+      if (!a.active && b.active) return 1;
+      return b.date.localeCompare(a.date);
+    });
+
+    res.json({ entries: entries, activeCount: activeIpArr.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, BIND, () => {
