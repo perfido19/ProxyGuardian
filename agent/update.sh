@@ -105,9 +105,7 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/streamin
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/logrotate.d/proxyguardian
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/logrotate *
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod 644 /etc/logrotate.d/proxyguardian
-$AGENT_USER ALL=(ALL) NOPASSWD: /bin/mv /tmp/anti-iptv-bans-clean.log /var/log/anti-iptv/bans.log
-$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chown root\:adm /var/log/anti-iptv/bans.log
-$AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod 640 /var/log/anti-iptv/bans.log
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /var/log/anti-iptv/bans.log
 SUDOEOF
 chmod 440 "$SUDOERS_FILE"
 ok "Sudoers aggiornati"

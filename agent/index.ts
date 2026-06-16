@@ -1434,7 +1434,6 @@ app.post("/api/anti-iptv/cleanup", async (_req, res) => {
     for (var ai = 0; ai < activeArr.length; ai++) { activeIps[activeArr[ai]] = true; }
 
     var logPath = "/var/log/anti-iptv/bans.log";
-    var tmpPath = "/tmp/anti-iptv-bans-clean.log";
     var logR = await runCmd("cat " + logPath + " 2>/dev/null || echo ''");
     if (!logR.ok || !logR.stdout.trim()) {
       return res.json({ ok: true, removed: 0, kept: 0 });
@@ -1461,12 +1460,15 @@ app.post("/api/anti-iptv/cleanup", async (_req, res) => {
       ? kept.map(function(b) { return sep + "\n" + b + "\n"; }).join("") + sep + "\n"
       : "";
 
-    var { writeFile } = require("fs/promises");
-    await writeFile(tmpPath, newContent, "utf-8");
-    var mvR = await runCmd("sudo mv " + tmpPath + " " + logPath + " && sudo chown root:adm " + logPath + " && sudo chmod 640 " + logPath);
-    if (!mvR.ok) {
-      return res.status(500).json({ error: "Scrittura log fallita" });
-    }
+    await new Promise<void>(function(resolve, reject) {
+      var child = require("child_process").spawn("sudo", ["tee", logPath], { stdio: ["pipe", "ignore", "ignore"] });
+      child.on("error", reject);
+      child.on("close", function(code: number) {
+        if (code === 0) resolve(); else reject(new Error("tee exit " + code));
+      });
+      child.stdin.write(newContent, "utf-8");
+      child.stdin.end();
+    });
 
     res.json({ ok: true, removed: removed, kept: kept.length });
   } catch (err: any) {
