@@ -900,7 +900,9 @@ app.get("/api/fail2ban/filters", async (_req, res) => {
 });
 
 app.get("/api/fail2ban/filters/:name", async (req, res) => {
-  const filePath = path.join(FILTER_DIR, `${req.params.name}.conf`);
+  if (!/^[a-zA-Z0-9_-]+$/.test(req.params.name)) return res.status(400).json({ error: "Invalid filter name" });
+  const filePath = path.resolve(path.join(FILTER_DIR, `${req.params.name}.conf`));
+  if (!filePath.startsWith(FILTER_DIR + "/")) return res.status(400).json({ error: "Invalid filter name" });
   try {
     await access(filePath, constants.R_OK);
     const content = await readFile(filePath, "utf-8");
@@ -911,7 +913,9 @@ app.get("/api/fail2ban/filters/:name", async (req, res) => {
 });
 
 app.post("/api/fail2ban/filters/:name", async (req, res) => {
-  const filePath = path.join(FILTER_DIR, `${req.params.name}.conf`);
+  if (!/^[a-zA-Z0-9_-]+$/.test(req.params.name)) return res.status(400).json({ error: "Invalid filter name" });
+  const filePath = path.resolve(path.join(FILTER_DIR, `${req.params.name}.conf`));
+  if (!filePath.startsWith(FILTER_DIR + "/")) return res.status(400).json({ error: "Invalid filter name" });
   const { content } = req.body;
   if (typeof content !== "string") return res.status(400).json({ error: "content required" });
   try {
