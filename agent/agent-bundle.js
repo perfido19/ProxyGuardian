@@ -24510,6 +24510,18 @@ async function runCmd(cmd, timeout = 1e4) {
     return { stdout: err.stdout ? err.stdout.trim() : "", stderr: err.stderr ? err.stderr.trim() : err.message, ok: false };
   }
 }
+function sudoWriteFile(filePath, content) {
+  return new Promise(function(resolve, reject) {
+    var child = require("child_process").spawn("sudo", ["tee", filePath], { stdio: ["pipe", "ignore", "ignore"] });
+    child.on("error", reject);
+    child.on("close", function(code) {
+      if (code === 0) resolve();
+      else reject(new Error("tee exit " + code + " for " + filePath));
+    });
+    child.stdin.write(content, "utf-8");
+    child.stdin.end();
+  });
+}
 async function getServiceStatus(name) {
   const { stdout } = await runCmd(`systemctl is-active ${name} 2>/dev/null`);
   const state = stdout.trim().toLowerCase();
@@ -24704,7 +24716,7 @@ app.post("/api/config/:filename", async (req, res) => {
   const { content } = req.body;
   if (typeof content !== "string") return res.status(400).json({ error: "content required" });
   try {
-    await (0, import_promises.writeFile)(filePath, content, "utf-8");
+    await sudoWriteFile(filePath, content);
     if (req.params.filename.startsWith("nginx") || req.params.filename.endsWith(".conf") || req.params.filename.endsWith(".rules")) {
       const test = await runCmd("sudo nginx -t");
       if (!test.ok) {
@@ -24713,12 +24725,6 @@ app.post("/api/config/:filename", async (req, res) => {
     }
     res.json({ ok: true, message: `${req.params.filename} updated` });
   } catch (err) {
-    if (err.code === "EACCES" || err.code === "EPERM") {
-      const agentUser2 = process.env.USER || "pgagent";
-      return res.status(403).json({
-        error: `Permessi insufficienti su ${filePath} \u2014 esegui: chown root:${agentUser2} ${filePath} && chmod 664 ${filePath}`
-      });
-    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -25139,6 +25145,21 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/logrotate *",
   "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 644 /etc/logrotate.d/proxyguardian",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /var/log/anti-iptv/bans.log",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/fail2ban/jail.local",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/fail2ban/fail2ban.local",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/fail2ban/filter.d/*",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/nginx.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/country_whitelist.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/block_asn.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/block_isp.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/useragent.rules",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/ip_whitelist.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/exclusion_ip.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/block_badagents.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/conf/modsecurity.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/asn-whitelist-nets.txt",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/asn-blocklist.txt",
   ""
 ].join("\n");
 var LOGROTATE_CONF = [
@@ -25253,7 +25274,7 @@ app.post("/api/fail2ban/filters/:name", async (req, res) => {
   const { content } = req.body;
   if (typeof content !== "string") return res.status(400).json({ error: "content required" });
   try {
-    await (0, import_promises.writeFile)(filePath, content, "utf-8");
+    await sudoWriteFile(filePath, content);
     await runCmd("sudo fail2ban-client reload 2>/dev/null || true");
     res.json({ ok: true, message: `Filter ${req.params.name} updated` });
   } catch (err) {

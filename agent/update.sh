@@ -106,6 +106,21 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/logrotate.d/proxyguardian
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/sbin/logrotate *
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod 644 /etc/logrotate.d/proxyguardian
 $AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /var/log/anti-iptv/bans.log
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/fail2ban/jail.local
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/fail2ban/fail2ban.local
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/fail2ban/filter.d/*
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/nginx.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/country_whitelist.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/block_asn.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/block_isp.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/useragent.rules
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/ip_whitelist.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/exclusion_ip.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/block_badagents.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/conf/modsecurity.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/asn-whitelist-nets.txt
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/asn-blocklist.txt
 SUDOEOF
 chmod 440 "$SUDOERS_FILE"
 ok "Sudoers aggiornati"
