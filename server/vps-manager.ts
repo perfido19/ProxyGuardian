@@ -150,7 +150,29 @@ export async function checkAllVpsHealth(): Promise<Map<string, boolean>> {
   await Promise.allSettled(enabled.map(async vps => {
     results.set(vps.id, await checkVpsHealth(vps));
   }));
+  lastPollTime = new Date();
+  saveVpsStore();
   return results;
+}
+
+let lastPollTime: Date | null = null;
+
+export function getLastPollTime(): Date | null { return lastPollTime; }
+
+export function getHealthFromCache(): Map<string, boolean> {
+  const results = new Map<string, boolean>();
+  for (const vps of vpsStore.values()) {
+    if (vps.enabled) results.set(vps.id, vps.lastStatus === "online");
+  }
+  return results;
+}
+
+export function startHealthPoller(intervalMs = 60000): void {
+  // Prima poll subito all'avvio, poi ogni intervalMs
+  checkAllVpsHealth().catch(e => console.error("[HealthPoller] poll error:", e));
+  setInterval(() => {
+    checkAllVpsHealth().catch(e => console.error("[HealthPoller] poll error:", e));
+  }, intervalMs);
 }
 
 export interface BulkResult {
