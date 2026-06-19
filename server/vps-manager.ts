@@ -168,11 +168,86 @@ export function getHealthFromCache(): Map<string, boolean> {
 }
 
 export function startHealthPoller(intervalMs = 60000): void {
-  // Prima poll subito all'avvio, poi ogni intervalMs
   checkAllVpsHealth().catch(e => console.error("[HealthPoller] poll error:", e));
   setInterval(() => {
     checkAllVpsHealth().catch(e => console.error("[HealthPoller] poll error:", e));
   }, intervalMs);
+}
+
+export interface BanSyncResult {
+  totalUniqueIps: number;
+  propagated: number;
+  vpsUpdated: number;
+  errors: number;
+  ips: string[];
+}
+
+export async function syncIptvBanFleet(): Promise<BanSyncResult> {
+  const enabled = Array.from(vpsStore.values()).filter(v => v.enabled);
+
+  // 1. Pull iptv_ban da tutti i VPS in parallelo
+  const pullResults = await Promise.allSettled(
+    enabled.map(async vps => {
+      try {
+        const data = await agentGet(vps, "/api/ipset/iptv_ban?limit=10000", 15000);
+        const members: string[] = (data.members || []).map((m: string) => m.split(" ")[0]).filter((ip: string) => /^\d+\.\d+\.\d+\.\d+$/.test(ip));
+        return { vpsId: vps.id, ips: members };
+      } catch {
+        return { vpsId: vps.id, ips: [] };
+      }
+    })
+  );
+
+  // 2. Unione di tutti gli IP bannati nella fleet
+  const allBannedIps = new Set<string>();
+  const vpsBanMap = new Map<string, Set<string>>();
+  for (let i = 0; i < pullResults.length; i++) {
+    const r = pullResults[i];
+    const vps = enabled[i];
+    const ips = r.status === "fulfilled" ? r.value.ips : [];
+    vpsBanMap.set(vps.id, new Set(ips));
+    ips.forEach(ip => allBannedIps.add(ip));
+  }
+
+  // 3. Propaga IP mancanti a ogni VPS
+  let propagated = 0;
+  let vpsUpdated = 0;
+  let errors = 0;
+
+  await Promise.allSettled(
+    enabled.map(async vps => {
+      const existing = vpsBanMap.get(vps.id) || new Set();
+      const missing = [...allBannedIps].filter(ip => !existing.has(ip));
+      if (missing.length === 0) return;
+      let pushed = 0;
+      for (const ip of missing) {
+        try {
+          await agentPost(vps, "/api/ipset/iptv_ban/add", { ip });
+          pushed++;
+        } catch {
+          errors++;
+        }
+      }
+      if (pushed > 0) {
+        propagated += pushed;
+        vpsUpdated++;
+      }
+    })
+  );
+
+  return { totalUniqueIps: allBannedIps.size, propagated, vpsUpdated, errors, ips: [...allBannedIps] };
+}
+
+export function startBanSyncPoller(intervalMs = 300000): void {
+  // Prima sync dopo 30s dall'avvio (lascia tempo all'health poller), poi ogni intervalMs
+  setTimeout(() => {
+    syncIptvBanFleet().then(r => console.log(`[BanSync] ${r.totalUniqueIps} IP totali, propagati ${r.propagated} a ${r.vpsUpdated} VPS`))
+      .catch(e => console.error("[BanSync] error:", e));
+    setInterval(() => {
+      syncIptvBanFleet().then(r => console.log(`[BanSync] ${r.totalUniqueIps} IP totali, propagati ${r.propagated} a ${r.vpsUpdated} VPS`))
+        .catch(e => console.error("[BanSync] error:", e));
+    }, intervalMs);
+  }, 30000);
 }
 
 export interface BulkResult {

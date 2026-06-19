@@ -7,7 +7,7 @@ import { open as openMaxMind, type Reader, validate as validateIp } from "maxmin
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
-import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
+import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -947,6 +947,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ─── Fleet Banned IPs streaming ───────────────────────────────────────────────
 
   // Invia i risultati man mano che ogni VPS risponde (SSE) — timeout 5s per VPS
+  app.post("/api/fleet/iptv-ban/sync", requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const result = await syncIptvBanFleet();
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/fleet/banned-ips/stream", requireAuth, async (req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -2049,6 +2058,7 @@ fi
   });
 
   startHealthPoller(60000);
+  startBanSyncPoller(300000);
 
   const server = createServer(app);
   attachSshWebSocket(server);
