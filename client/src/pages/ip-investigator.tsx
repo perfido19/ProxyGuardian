@@ -286,8 +286,8 @@ export default function IpInvestigator() {
                         )}
                         {vps.sample.length > 0 && (
                           <div>
-                            <div className="text-xs text-muted-foreground mb-1">Ultime righe log:</div>
-                            <div className="bg-black/40 rounded p-2 space-y-0.5 max-h-40 overflow-y-auto">
+                            <div className="text-xs text-muted-foreground mb-1">Righe log ({vps.sample.length}):</div>
+                            <div className="bg-black/40 rounded p-2 space-y-0.5 max-h-96 overflow-y-auto">
                               {vps.sample.map((line, i) => (
                                 <div key={i} className="text-[10px] font-mono text-green-400/80 break-all">{line}</div>
                               ))}

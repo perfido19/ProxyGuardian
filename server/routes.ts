@@ -989,7 +989,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const statuses = lines.map(l => { const m = /"\s+(\d{3})\s+/.exec(l); return m?.[1] || null; }).filter(Boolean) as string[];
         const ua = lines.map(l => { const m = /"([^"]+)"\s+"[^"]*"\s+"[^"]*"\s+"/.exec(l); return m?.[1] || null; }).find(Boolean) || null;
 
-        return { vpsId: vps.id, vpsName: vps.name, count: lines.length, usernames, paths, statuses, ua, banned, sample: lines.slice(-5) };
+        return { vpsId: vps.id, vpsName: vps.name, count: lines.length, usernames, paths, statuses, ua, banned, sample: lines };
       } catch { return null; }
     }));
 
