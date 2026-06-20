@@ -36,6 +36,7 @@ ProxyGuardian/
 │           ├── ricerca.tsx       ← ricerca IP bannati + grep log cross-VPS
 │           ├── vps-detail.tsx    ← pannello per-VPS (5 tab)
 │           ├── vps-manager.tsx   ← gestione VPS (add/edit/delete)
+│           ├── ip-investigator.tsx ← analisi cross-fleet IP (log, username, ban)
 │           └── user-management.tsx ← gestione utenti
 ├── server/                       ← Express API
 │   ├── index.ts                  ← entry point, middleware, logging
@@ -128,7 +129,12 @@ ProxyGuardian/
 - Importante: nuovi deploy scaricano `agent/agent-bundle.js` da GitHub `main`; dopo modifiche agent bisogna committare e pushare il bundle o i nuovi VPS scaricheranno agent vecchio.
 - Per dashboard production (`185.229.236.50`, path `/root/proxy-dashboard`) va bene anche un hot deploy manuale: copiare i file cambiati, poi `cd /root/proxy-dashboard && npm run build && pm2 restart proxy-dashboard`.
 - Caso reale noto: `dynadoctor` non popolava la mappa ASN perché lo script remoto `asn-log-stats.py` era vecchio e incompatibile con `--source nginx`; fix live gia` applicato.
-- **NetBird Update**: sezione in `fleet-config.tsx` per aggiornare la fleet all'ultima versione (0.70.4). Endpoint agent `/api/netbird/version` e `/api/netbird/update`. Route fleet: `GET /api/fleet/netbird/update-status`, `POST /api/fleet/netbird/update`. Sudoers richiede: `apt install --only-upgrade netbird *`.
+- **NetBird Update**: sezione in `fleet-config.tsx` per aggiornare la fleet all'ultima versione. Endpoint agent `/api/netbird/version` e `/api/netbird/update`. Route fleet: `GET /api/fleet/netbird/update-status`, `POST /api/fleet/netbird/update`. Sudoers richiede: `apt install --only-upgrade netbird *`. Versione target dinamica da `GET /api/fleet/netbird/latest-version` (GitHub releases API, cache 1h, fallback `0.73.1`).
+- **NetBird fix boot loop**: su tutta la fleet aggiunto `100.116.117.155 main.netbird.cloud` in `/etc/hosts` e dropin systemd `sleep 10 && systemctl restart nginx || true` — evita loop netbird se tunnel non ancora su al boot.
+- **IP Investigator**: pagina `/ip-investigator` — input IP → analisi cross-fleet (grep log + ipset ban check in parallelo su tutti i VPS). Tre endpoint fleet: `POST /api/fleet/ip-investigate`, `POST /api/fleet/ip-ban`, `POST /api/fleet/ip-unban`. Il ban check è **sempre** eseguito indipendentemente dai log (log ruotati → mostra "solo ban"). Agent `/api/grep` restituisce `{ entries: [{id, level, message}] }` — campo corretto è `entries[].message`.
+- **Anti-IPTV soglia**: `MAX_USERNAME=2` (abbassato da 3 il 2026-06-20) su tutti i 53 VPS proxy. Due varianti script: bash (`/usr/local/sbin/anti-iptv.sh`) e python (`/usr/local/sbin/anti-iptv.py`). DynamoXc: NON installato, skippa sempre.
+- **BanSync interval**: 60s (era 5min). Configurato in `startBanSyncPoller(60000)` in `server/routes.ts`.
+- **nginx rate limiting fleet**: zona `auth_slow` (`10r/m`) aggiunta nell'`http {}` block + `limit_req zone=auth_slow burst=5 nodelay` nel location `player_api.php|get.php|xmltv.php|panel_api.php` su tutti i 53 VPS. Zona esistente `login_api` (1r/s) rimane.
 
 ## Endpoint Agent — Riferimento Rapido
 | Metodo | Path | Descrizione |
@@ -152,6 +158,8 @@ ProxyGuardian/
 | POST | `/api/nginx/reload` | test + reload nginx |
 | GET | `/api/netbird/version` | Versione NetBird installata |
 | POST | `/api/netbird/update` | Aggiorna NetBird all'ultima versione |
+| GET | `/api/ipset/:name` | Membri ipset (default limit, per blocked_asn grandi) |
+| POST | `/api/ipset/:name/add` | Aggiunge IP a ipset (usato da BanSync per iptv_ban) |
 
 ## Do NOT
 - Non committare `.env` o `data/vps.json`
