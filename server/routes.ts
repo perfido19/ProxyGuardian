@@ -966,8 +966,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const results = await Promise.allSettled(vpsList.map(async (vps) => {
       try {
-        const grepData = await agentGet(vps, `/api/grep?q=${encodeURIComponent(ip)}&log=nginx_access`, 15000);
-        const lines: string[] = (grepData.lines || grepData.results || []).filter((l: string) => l.includes(ip));
+        const grepData = await agentGet(vps, `/api/grep?q=${encodeURIComponent(ip)}&type=nginx_access`, 15000);
+        const rawLines: string[] = (grepData.entries || []).map((e: any) => e.message || e).filter(Boolean);
+        const lines: string[] = rawLines.filter((l: string) => l.includes(ip));
         if (lines.length === 0) return null;
 
         const usernameRe = /[?&]username=([^&\s"*]+)/;
