@@ -1194,6 +1194,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(results);
   });
 
+  let netbirdLatestCache: { version: string; fetchedAt: number } | null = null;
+  app.get("/api/fleet/netbird/latest-version", requireAuth, async (_req, res) => {
+    const CACHE_TTL = 3600 * 1000;
+    if (netbirdLatestCache && Date.now() - netbirdLatestCache.fetchedAt < CACHE_TTL) {
+      return res.json({ version: netbirdLatestCache.version });
+    }
+    try {
+      const r = await fetch("https://api.github.com/repos/netbirdio/netbird/releases/latest", {
+        headers: { "Accept": "application/vnd.github+json", "User-Agent": "ProxyGuardian" },
+        signal: AbortSignal.timeout(5000),
+      });
+      const data: any = await r.json();
+      const version = (data.tag_name || "").replace(/^v/, "") || null;
+      if (version) netbirdLatestCache = { version, fetchedAt: Date.now() };
+      res.json({ version });
+    } catch {
+      res.json({ version: netbirdLatestCache?.version || null });
+    }
+  });
+
   app.post("/api/fleet/netbird/update", requireAuth, requireAdmin, async (req, res) => {
     const { vpsIds } = req.body;
     if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds richiesto" });

@@ -57,7 +57,7 @@ interface VpsNetbirdUpdateStatus {
   error: string | null;
 }
 
-const NETBIRD_TARGET = "0.73.1";
+const NETBIRD_FALLBACK = "0.73.1";
 
 const CHECK_LABELS: Record<keyof NginxCheck, { label: string; icon: React.ReactNode }> = {
   streamCacheValid:   { label: "Cache streaming",       icon: <HardDrive className="w-3.5 h-3.5" /> },
@@ -122,6 +122,17 @@ export default function FleetConfig() {
     },
     staleTime: 60000,
   });
+
+  const { data: netbirdLatest } = useQuery<{ version: string | null }>({
+    queryKey: ["/api/fleet/netbird/latest-version"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/fleet/netbird/latest-version");
+      return res.json();
+    },
+    staleTime: 3600000,
+  });
+
+  const NETBIRD_TARGET = netbirdLatest?.version || NETBIRD_FALLBACK;
 
   const { data: sshKeyData } = useQuery<{ key: string }>({
     queryKey: ["/api/fleet/ssh-key"],
@@ -343,6 +354,7 @@ export default function FleetConfig() {
           >
             <Radio className="w-3.5 h-3.5" />
             Aggiorna NetBird
+            <span className="font-mono text-[10px] opacity-70">{NETBIRD_TARGET}</span>
           </Button>
         </div>
       </div>
