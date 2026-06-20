@@ -18,6 +18,7 @@ interface VpsHit {
   ua: string | null;
   banned: boolean;
   sample: string[];
+  usernameStats: Record<string, Record<string, number>>;
 }
 
 interface InvestigateResult {
@@ -25,6 +26,7 @@ interface InvestigateResult {
   totalVps: number;
   totalRequests: number;
   allUsernames: string[];
+  allUsernameStats: Record<string, Record<string, number>>;
   geoInfo: { asn?: string; org?: string; countryCode?: string } | null;
   vpsResults: VpsHit[];
 }
@@ -34,6 +36,79 @@ function statusColor(s: string) {
   if (s.startsWith("4")) return "text-orange-400";
   if (s.startsWith("5")) return "text-red-400";
   return "text-muted-foreground";
+}
+
+function statusBadgeClass(s: string) {
+  if (s === "200") return "bg-green-500/20 text-green-400 border-green-500/30";
+  if (s === "503") return "bg-red-500/20 text-red-400 border-red-500/30";
+  if (s === "403") return "bg-orange-500/20 text-orange-400 border-orange-500/30";
+  if (s.startsWith("2")) return "bg-green-500/10 text-green-400 border-green-500/20";
+  if (s.startsWith("5")) return "bg-red-500/10 text-red-400 border-red-500/20";
+  return "bg-muted text-muted-foreground border-border";
+}
+
+function isExfiltrated(stats: Record<string, number>) {
+  return Object.keys(stats).some(s => s.startsWith("2"));
+}
+
+function UsernameStatsTable({ stats }: { stats: Record<string, Record<string, number>> }) {
+  const entries = Object.entries(stats).sort((a, b) => {
+    const aEx = isExfiltrated(a[1]);
+    const bEx = isExfiltrated(b[1]);
+    if (aEx && !bEx) return -1;
+    if (!aEx && bEx) return 1;
+    const aTotal = Object.values(a[1]).reduce((s, n) => s + n, 0);
+    const bTotal = Object.values(b[1]).reduce((s, n) => s + n, 0);
+    return bTotal - aTotal;
+  });
+
+  const allStatuses = [...new Set(entries.flatMap(([, s]) => Object.keys(s)))].sort();
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-border">
+            <th className="text-left py-1 pr-3 font-medium text-muted-foreground">Username</th>
+            {allStatuses.map(s => (
+              <th key={s} className={`text-center px-2 py-1 font-mono font-medium ${statusColor(s)}`}>{s}</th>
+            ))}
+            <th className="text-center px-2 py-1 font-medium text-muted-foreground">Tot</th>
+            <th className="text-left px-2 py-1 font-medium text-muted-foreground">Stato</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map(([username, counts]) => {
+            const exfil = isExfiltrated(counts);
+            const total = Object.values(counts).reduce((s, n) => s + n, 0);
+            return (
+              <tr
+                key={username}
+                className={`border-b border-border/50 ${exfil ? "bg-red-500/5" : ""}`}
+              >
+                <td className={`py-1.5 pr-3 font-mono ${exfil ? "text-red-400 font-semibold" : "text-foreground"}`}>
+                  {username}
+                </td>
+                {allStatuses.map(s => (
+                  <td key={s} className={`text-center px-2 py-1.5 font-mono ${statusColor(s)}`}>
+                    {counts[s] ?? "-"}
+                  </td>
+                ))}
+                <td className="text-center px-2 py-1.5 text-muted-foreground">{total}</td>
+                <td className="px-2 py-1.5">
+                  {exfil ? (
+                    <span className="text-red-400 font-semibold">⚠ esfiltrató</span>
+                  ) : (
+                    <span className="text-muted-foreground">bloccato</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export default function IpInvestigator() {
@@ -63,7 +138,6 @@ export default function IpInvestigator() {
       const data = await res.json();
       setBanState("ok");
       toast({ title: `Bannato su ${data.ok} VPS`, description: data.fail > 0 ? `${data.fail} VPS falliti` : "Tutta la fleet aggiornata" });
-      // refresh
       investigate.mutate(ip);
     } catch (e: any) {
       setBanState("error");
@@ -83,6 +157,12 @@ export default function IpInvestigator() {
 
   const bannedVpsCount = result?.vpsResults.filter(v => v.banned).length ?? 0;
   const isFullyBanned = result && bannedVpsCount === result.totalVps && result.totalVps > 0;
+
+  const exfiltratedUsernames = result
+    ? Object.entries(result.allUsernameStats || {})
+        .filter(([, stats]) => isExfiltrated(stats))
+        .map(([u]) => u)
+    : [];
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
@@ -138,9 +218,11 @@ export default function IpInvestigator() {
             </Card>
             <Card>
               <CardContent className="pt-4 pb-3">
-                <div className="text-2xl font-bold font-heading">{result.allUsernames.length}</div>
+                <div className={`text-2xl font-bold font-heading ${exfiltratedUsernames.length > 0 ? "text-red-400" : ""}`}>
+                  {exfiltratedUsernames.length}/{result.allUsernames.length}
+                </div>
                 <div className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                  <User className="w-3 h-3" /> Username unici
+                  <User className="w-3 h-3" /> Esfiltrató/Tot username
                 </div>
               </CardContent>
             </Card>
@@ -154,7 +236,7 @@ export default function IpInvestigator() {
             </Card>
           </div>
 
-          {/* Geo + username + actions */}
+          {/* Geo + actions */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Card>
               <CardHeader className="pb-2">
@@ -189,46 +271,57 @@ export default function IpInvestigator() {
 
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Username trovati ({result.allUsernames.length})</CardTitle>
-                <CardDescription className="text-xs">Da /player_api.php e /panel_api.php</CardDescription>
+                <CardTitle className="text-sm flex items-center gap-2">
+                  Azioni
+                </CardTitle>
               </CardHeader>
-              <CardContent>
-                {result.allUsernames.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
-                    {result.allUsernames.map(u => (
-                      <Badge key={u} variant="secondary" className="font-mono text-xs">{u}</Badge>
-                    ))}
+              <CardContent className="space-y-3">
+                {result.totalVps > 0 && (
+                  <div className="flex gap-3">
+                    <Button
+                      variant="destructive"
+                      disabled={banState === "running" || isFullyBanned === true}
+                      onClick={() => banFleet(result.ip)}
+                      className="gap-1.5"
+                    >
+                      {banState === "running" ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : banState === "ok" ? (
+                        <CheckCircle2 className="w-4 h-4" />
+                      ) : (
+                        <ShieldBan className="w-4 h-4" />
+                      )}
+                      {isFullyBanned ? "Già bannato" : "Banna fleet"}
+                    </Button>
+                    <Button variant="outline" onClick={() => investigate.mutate(result.ip)} disabled={investigate.isPending} className="gap-1.5">
+                      <RefreshCw className={`w-4 h-4 ${investigate.isPending ? "animate-spin" : ""}`} />
+                      Rianalizza
+                    </Button>
                   </div>
-                ) : (
-                  <div className="text-xs text-muted-foreground">Nessun username estratto</div>
+                )}
+                {exfiltratedUsernames.length > 0 && (
+                  <div className="text-xs text-red-400 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" />
+                    {exfiltratedUsernames.length} username con risposta 2xx (credenziali esposte)
+                  </div>
                 )}
               </CardContent>
             </Card>
           </div>
 
-          {/* Actions */}
-          {result.totalVps > 0 && (
-            <div className="flex gap-3">
-              <Button
-                variant="destructive"
-                disabled={banState === "running" || isFullyBanned === true}
-                onClick={() => banFleet(result.ip)}
-                className="gap-1.5"
-              >
-                {banState === "running" ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : banState === "ok" ? (
-                  <CheckCircle2 className="w-4 h-4" />
-                ) : (
-                  <ShieldBan className="w-4 h-4" />
-                )}
-                {isFullyBanned ? "Già bannato su tutta la fleet" : "Banna su tutta la fleet"}
-              </Button>
-              <Button variant="outline" onClick={() => investigate.mutate(result.ip)} disabled={investigate.isPending} className="gap-1.5">
-                <RefreshCw className={`w-4 h-4 ${investigate.isPending ? "animate-spin" : ""}`} />
-                Rianalizza
-              </Button>
-            </div>
+          {/* Username stats aggregati fleet */}
+          {result.allUsernames.length > 0 && result.allUsernameStats && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Username — analisi cross-fleet ({result.allUsernames.length})</CardTitle>
+                <CardDescription className="text-xs">
+                  Rosso = ha ricevuto risposta 2xx (credenziali confermate). Arancio/grigio = bloccato prima dell'auth.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <UsernameStatsTable stats={result.allUsernameStats} />
+              </CardContent>
+            </Card>
           )}
 
           {/* Per-VPS breakdown */}
@@ -260,37 +353,48 @@ export default function IpInvestigator() {
                           <span className="text-xs text-muted-foreground">{vps.usernames.length} username</span>
                         )}
                       </div>
-                      <div className="flex gap-1">
-                        {[...new Set(vps.statuses)].map(s => (
-                          <span key={s} className={`text-xs font-mono ${statusColor(s)}`}>{s}</span>
-                        ))}
+                      <div className="flex gap-1.5 items-center">
+                        {[...new Set(vps.statuses)].sort().map(s => {
+                          const cnt = vps.statuses.filter(x => x === s).length;
+                          return (
+                            <span key={s} className={`text-xs font-mono border rounded px-1 ${statusBadgeClass(s)}`}>
+                              {s}×{cnt}
+                            </span>
+                          );
+                        })}
                       </div>
                     </button>
 
                     {expandedVps === vps.vpsId && (
-                      <div className="border-t border-border px-4 py-3 bg-muted/20 space-y-3">
+                      <div className="border-t border-border px-4 py-3 bg-muted/20 space-y-4">
                         {vps.ua && (
                           <div className="text-xs text-muted-foreground">
                             User-Agent: <span className="font-mono text-foreground">{vps.ua}</span>
                           </div>
                         )}
-                        {vps.usernames.length > 0 && (
+
+                        {vps.usernameStats && Object.keys(vps.usernameStats).length > 0 && (
                           <div>
-                            <div className="text-xs text-muted-foreground mb-1">Username:</div>
-                            <div className="flex flex-wrap gap-1">
-                              {vps.usernames.map(u => (
-                                <Badge key={u} variant="outline" className="font-mono text-xs">{u}</Badge>
-                              ))}
-                            </div>
+                            <div className="text-xs text-muted-foreground mb-2">Username per stato:</div>
+                            <UsernameStatsTable stats={vps.usernameStats} />
                           </div>
                         )}
+
                         {vps.sample.length > 0 && (
                           <div>
                             <div className="text-xs text-muted-foreground mb-1">Righe log ({vps.sample.length}):</div>
                             <div className="bg-black/40 rounded p-2 space-y-0.5 max-h-96 overflow-y-auto">
-                              {vps.sample.map((line, i) => (
-                                <div key={i} className="text-[10px] font-mono text-green-400/80 break-all">{line}</div>
-                              ))}
+                              {vps.sample.map((line, i) => {
+                                const has200 = /"\s+2\d{2}\s+/.test(line);
+                                return (
+                                  <div
+                                    key={i}
+                                    className={`text-[10px] font-mono break-all ${has200 ? "text-red-400/90" : "text-green-400/80"}`}
+                                  >
+                                    {line}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}

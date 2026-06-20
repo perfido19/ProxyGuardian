@@ -984,18 +984,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const usernameRe = /[?&]username=([^&\s"*]+)/;
         const pathRe = /"(?:GET|POST) ([^\s"]+)/;
+        const statusRe = /"\s+(\d{3})\s+/;
         const usernames = [...new Set(lines.map(l => { const m = usernameRe.exec(l); return m?.[1] || null; }).filter(Boolean))] as string[];
         const paths = [...new Set(lines.map(l => { const m = pathRe.exec(l); return m?.[1]?.split("?")[0] || null; }).filter(Boolean))] as string[];
-        const statuses = lines.map(l => { const m = /"\s+(\d{3})\s+/.exec(l); return m?.[1] || null; }).filter(Boolean) as string[];
+        const statuses = lines.map(l => { const m = statusRe.exec(l); return m?.[1] || null; }).filter(Boolean) as string[];
         const ua = lines.map(l => { const m = /"([^"]+)"\s+"[^"]*"\s+"[^"]*"\s+"/.exec(l); return m?.[1] || null; }).find(Boolean) || null;
 
-        return { vpsId: vps.id, vpsName: vps.name, count: lines.length, usernames, paths, statuses, ua, banned, sample: lines };
+        const usernameStats: Record<string, Record<string, number>> = {};
+        for (const line of lines) {
+          const uMatch = usernameRe.exec(line);
+          const sMatch = statusRe.exec(line);
+          if (uMatch) {
+            const u = uMatch[1];
+            const s = sMatch?.[1] || "?";
+            if (!usernameStats[u]) usernameStats[u] = {};
+            usernameStats[u][s] = (usernameStats[u][s] || 0) + 1;
+          }
+        }
+
+        return { vpsId: vps.id, vpsName: vps.name, count: lines.length, usernames, paths, statuses, ua, banned, sample: lines, usernameStats };
       } catch { return null; }
     }));
 
     const hits = results.map(r => r.status === "fulfilled" ? r.value : null).filter(Boolean) as any[];
     const allUsernames = [...new Set(hits.flatMap(h => h.usernames))];
     const totalRequests = hits.reduce((s, h) => s + h.count, 0);
+
+    const allUsernameStats: Record<string, Record<string, number>> = {};
+    for (const hit of hits) {
+      for (const [u, stats] of Object.entries(hit.usernameStats || {})) {
+        if (!allUsernameStats[u]) allUsernameStats[u] = {};
+        for (const [s, n] of Object.entries(stats as Record<string, number>)) {
+          allUsernameStats[u][s] = (allUsernameStats[u][s] || 0) + n;
+        }
+      }
+    }
 
     // Geo info via existing ip-info endpoint
     let geoInfo: any = null;
@@ -1006,7 +1029,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (geoRes.ok) geoInfo = await geoRes.json();
     } catch {}
 
-    res.json({ ip, totalVps: hits.length, totalRequests, allUsernames, geoInfo, vpsResults: hits });
+    res.json({ ip, totalVps: hits.length, totalRequests, allUsernames, allUsernameStats, geoInfo, vpsResults: hits });
   });
 
   app.post("/api/fleet/ip-ban", requireAuth, requireAdmin, async (req, res) => {
