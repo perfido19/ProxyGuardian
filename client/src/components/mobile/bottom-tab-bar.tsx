@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Server, Shield, Search, Menu,
   Globe, AlertTriangle, FileText, Network,
-  Rocket, Settings2, TerminalSquare, RotateCw, CloudUpload, Users, LogOut, User,
+  Rocket, Settings2, TerminalSquare, RotateCw, CloudUpload, Users, LogOut, User, ScanSearch,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +21,7 @@ const secondaryItems = [
   { title: "ASN Block", url: "/asn-block", icon: Globe },
   { title: "Fail2ban", url: "/fail2ban", icon: AlertTriangle },
   { title: "Log", url: "/log", icon: FileText },
+  { title: "IP Investigator", url: "/ip-investigator", icon: ScanSearch },
   { title: "VPS", url: "/vps", icon: Network },
 ];
 

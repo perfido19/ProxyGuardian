@@ -956,6 +956,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── IP Investigator ──────────────────────────────────────────────────────────
+
+  app.post("/api/fleet/ip-investigate", requireAuth, async (req, res) => {
+    const { ip } = req.body;
+    if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
+
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter((v): v is any => !!v);
+
+    const results = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const grepData = await agentGet(vps, `/api/grep?q=${encodeURIComponent(ip)}&log=nginx_access`, 15000);
+        const lines: string[] = (grepData.lines || grepData.results || []).filter((l: string) => l.includes(ip));
+        if (lines.length === 0) return null;
+
+        const usernameRe = /[?&]username=([^&\s"*]+)/;
+        const pathRe = /"(?:GET|POST) ([^\s"]+)/;
+        const usernames = [...new Set(lines.map(l => { const m = usernameRe.exec(l); return m?.[1] || null; }).filter(Boolean))] as string[];
+        const paths = [...new Set(lines.map(l => { const m = pathRe.exec(l); return m?.[1]?.split("?")[0] || null; }).filter(Boolean))] as string[];
+        const statuses = lines.map(l => { const m = /"\s+(\d{3})\s+/.exec(l); return m?.[1] || null; }).filter(Boolean) as string[];
+        const ua = lines.map(l => { const m = /"([^"]+)"\s+"[^"]*"\s+"[^"]*"\s+"/.exec(l); return m?.[1] || null; }).find(Boolean) || null;
+
+        let banned = false;
+        try {
+          const ipset = await agentGet(vps, "/api/ipset/iptv_ban?limit=50000", 10000);
+          banned = (ipset.members || []).some((m: string) => m.startsWith(ip + " ") || m === ip);
+        } catch {}
+
+        return { vpsId: vps.id, vpsName: vps.name, count: lines.length, usernames, paths, statuses, ua, banned, sample: lines.slice(-5) };
+      } catch { return null; }
+    }));
+
+    const hits = results.map(r => r.status === "fulfilled" ? r.value : null).filter(Boolean) as any[];
+    const allUsernames = [...new Set(hits.flatMap(h => h.usernames))];
+    const totalRequests = hits.reduce((s, h) => s + h.count, 0);
+
+    // Geo info via existing ip-info endpoint
+    let geoInfo: any = null;
+    try {
+      const geoRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/ip-info/${ip}`, {
+        headers: { cookie: req.headers.cookie || "" }
+      });
+      if (geoRes.ok) geoInfo = await geoRes.json();
+    } catch {}
+
+    res.json({ ip, totalVps: hits.length, totalRequests, allUsernames, geoInfo, vpsResults: hits });
+  });
+
+  app.post("/api/fleet/ip-ban", requireAuth, requireAdmin, async (req, res) => {
+    const { ip } = req.body;
+    if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter((v): v is any => !!v);
+    const results = await Promise.allSettled(vpsList.map(async (vps) => {
+      try { await agentPost(vps, "/api/ipset/iptv_ban/add", { ip }); return { vpsId: vps.id, vpsName: vps.name, ok: true }; }
+      catch (e: any) { return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message }; }
+    }));
+    const data = results.map(r => r.status === "fulfilled" ? r.value : { ok: false, error: "rejected" });
+    res.json({ ok: data.filter(d => d.ok).length, fail: data.filter(d => !d.ok).length, results: data });
+  });
+
+  app.post("/api/fleet/ip-unban", requireAuth, requireAdmin, async (req, res) => {
+    const { ip } = req.body;
+    if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter((v): v is any => !!v);
+    const results = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        await agentPost(vps, "/api/unban", { ip, jail: "iptv_ban" });
+        return { vpsId: vps.id, vpsName: vps.name, ok: true };
+      } catch (e: any) { return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message }; }
+    }));
+    const data = results.map(r => r.status === "fulfilled" ? r.value : { ok: false, error: "rejected" });
+    res.json({ ok: data.filter(d => d.ok).length, fail: data.filter(d => !d.ok).length });
+  });
+
   app.get("/api/fleet/banned-ips/stream", requireAuth, async (req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
