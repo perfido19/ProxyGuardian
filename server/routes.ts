@@ -2157,7 +2157,7 @@ fi
   });
 
   startHealthPoller(60000);
-  startBanSyncPoller(300000);
+  startBanSyncPoller(60000);
 
   const server = createServer(app);
   attachSshWebSocket(server);
