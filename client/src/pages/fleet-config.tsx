@@ -57,6 +57,8 @@ interface VpsNetbirdUpdateStatus {
   error: string | null;
 }
 
+const NETBIRD_TARGET = "0.73.1";
+
 const CHECK_LABELS: Record<keyof NginxCheck, { label: string; icon: React.ReactNode }> = {
   streamCacheValid:   { label: "Cache streaming",       icon: <HardDrive className="w-3.5 h-3.5" /> },
   modsecurityActive:  { label: "ModSecurity attivo",    icon: <ShieldCheck className="w-3.5 h-3.5" /> },
@@ -332,7 +334,7 @@ export default function FleetConfig() {
             size="sm"
             variant="destructive"
             onClick={() => {
-              const outdated = (netbirdStatuses || []).filter(n => n.version && n.version !== "0.70.4" && !n.error).map(n => n.vpsId);
+              const outdated = (netbirdStatuses || []).filter(n => n.version && n.version !== NETBIRD_TARGET && !n.error).map(n => n.vpsId);
               const allIds = outdated.length > 0 ? outdated : (netbirdStatuses || []).filter(n => !n.error).map(n => n.vpsId);
               if (allIds.length > 0) applyNetbirdUpdate(allIds);
             }}
@@ -523,10 +525,10 @@ export default function FleetConfig() {
                     <TableCell>
                       {netbirdState === "running" ? (
                         <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground" />
-                      ) : netbirdState === "ok" || (netbirdVps?.version === "0.70.4" && netbirdState !== "error") ? (
+                      ) : netbirdState === "ok" || (netbirdVps?.version === NETBIRD_TARGET && netbirdState !== "error") ? (
                         <div className="flex items-center gap-1">
                           <CheckCircle2 className="w-4 h-4 text-green-500" />
-                          <span className="text-[10px] font-mono text-muted-foreground">0.70.4</span>
+                          <span className="text-[10px] font-mono text-muted-foreground">{NETBIRD_TARGET}</span>
                         </div>
                       ) : netbirdState === "error" || netbirdVps?.error ? (
                         <span className="text-muted-foreground">—</span>
@@ -585,7 +587,7 @@ export default function FleetConfig() {
                             nginx
                           </Button>
                         )}
-                        {netbirdVps && netbirdVps.version && netbirdVps.version !== "0.70.4" && !netbirdVps.error && (
+                        {netbirdVps && netbirdVps.version && netbirdVps.version !== NETBIRD_TARGET && !netbirdVps.error && (
                           <Button
                             size="sm"
                             variant="outline"
