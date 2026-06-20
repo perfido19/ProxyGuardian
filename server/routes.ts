@@ -966,10 +966,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const results = await Promise.allSettled(vpsList.map(async (vps) => {
       try {
-        const grepData = await agentGet(vps, `/api/grep?q=${encodeURIComponent(ip)}&type=nginx_access`, 15000);
-        const rawLines: string[] = (grepData.entries || []).map((e: any) => e.message || e).filter(Boolean);
+        const [grepData, ipsetData] = await Promise.allSettled([
+          agentGet(vps, `/api/grep?q=${encodeURIComponent(ip)}&type=nginx_access`, 15000),
+          agentGet(vps, "/api/ipset/iptv_ban?limit=50000", 10000),
+        ]);
+
+        const rawLines: string[] = grepData.status === "fulfilled"
+          ? (grepData.value.entries || []).map((e: any) => e.message || e).filter(Boolean)
+          : [];
         const lines: string[] = rawLines.filter((l: string) => l.includes(ip));
-        if (lines.length === 0) return null;
+
+        const banned = ipsetData.status === "fulfilled"
+          ? (ipsetData.value.members || []).some((m: string) => m.startsWith(ip + " ") || m === ip)
+          : false;
+
+        if (lines.length === 0 && !banned) return null;
 
         const usernameRe = /[?&]username=([^&\s"*]+)/;
         const pathRe = /"(?:GET|POST) ([^\s"]+)/;
@@ -977,12 +988,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const paths = [...new Set(lines.map(l => { const m = pathRe.exec(l); return m?.[1]?.split("?")[0] || null; }).filter(Boolean))] as string[];
         const statuses = lines.map(l => { const m = /"\s+(\d{3})\s+/.exec(l); return m?.[1] || null; }).filter(Boolean) as string[];
         const ua = lines.map(l => { const m = /"([^"]+)"\s+"[^"]*"\s+"[^"]*"\s+"/.exec(l); return m?.[1] || null; }).find(Boolean) || null;
-
-        let banned = false;
-        try {
-          const ipset = await agentGet(vps, "/api/ipset/iptv_ban?limit=50000", 10000);
-          banned = (ipset.members || []).some((m: string) => m.startsWith(ip + " ") || m === ip);
-        } catch {}
 
         return { vpsId: vps.id, vpsName: vps.name, count: lines.length, usernames, paths, statuses, ua, banned, sample: lines.slice(-5) };
       } catch { return null; }

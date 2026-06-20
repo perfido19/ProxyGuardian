@@ -122,9 +122,9 @@ export default function IpInvestigator() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card>
               <CardContent className="pt-4 pb-3">
-                <div className="text-2xl font-bold font-heading">{result.totalVps}</div>
+                <div className="text-2xl font-bold font-heading">{result.vpsResults.filter(v => v.count > 0).length}</div>
                 <div className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                  <Server className="w-3 h-3" /> VPS colpiti
+                  <Server className="w-3 h-3" /> VPS con log
                 </div>
               </CardContent>
             </Card>
@@ -251,7 +251,11 @@ export default function IpInvestigator() {
                           <XCircle className="w-4 h-4 text-orange-400 shrink-0" />
                         )}
                         <span className="text-sm font-medium">{vps.vpsName}</span>
-                        <Badge variant="secondary" className="text-xs">{vps.count} req</Badge>
+                        {vps.count > 0 ? (
+                          <Badge variant="secondary" className="text-xs">{vps.count} req</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs text-muted-foreground">solo ban</Badge>
+                        )}
                         {vps.usernames.length > 0 && (
                           <span className="text-xs text-muted-foreground">{vps.usernames.length} username</span>
                         )}
@@ -302,7 +306,8 @@ export default function IpInvestigator() {
             <Card>
               <CardContent className="pt-8 pb-8 text-center text-muted-foreground">
                 <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-green-500" />
-                <div className="text-sm">Nessuna attività trovata per <span className="font-mono">{result.ip}</span></div>
+                <div className="text-sm">Nessuna attività rilevata per <span className="font-mono">{result.ip}</span></div>
+                <div className="text-xs mt-1 opacity-60">Nessun log recente e non presente in iptv_ban</div>
               </CardContent>
             </Card>
           )}
