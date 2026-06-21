@@ -25608,15 +25608,18 @@ app.get("/api/asn/log", async (_req, res) => {
 });
 app.get("/api/system/sudoers-status", async (_req, res) => {
   try {
-    var content = "";
-    try {
-      content = await (0, import_promises.readFile)(SUDOERS_PATH, "utf-8");
-    } catch {
-    }
+    var canSelfUpdate = (await runCmd("sudo -n -l /usr/bin/tee /etc/sudoers.d/proxy-guardian-agent 2>/dev/null")).ok;
+    var canNetbird = (await runCmd("sudo -n -l /usr/bin/tee /etc/systemd/system/netbird-cleanup.service 2>/dev/null")).ok;
+    var canNginxConf = (await runCmd("sudo -n -l /usr/bin/tee /etc/nginx/nginx.conf 2>/dev/null")).ok;
+    var canIpset = (await runCmd("sudo -n -l /usr/sbin/ipset list 2>/dev/null")).ok;
+    var canFail2ban = (await runCmd("sudo -n -l /usr/bin/fail2ban-client status 2>/dev/null")).ok;
     res.json({
-      exists: content.length > 0,
-      hasNetbirdCleanupEntries: content.includes("tee /etc/systemd/system/netbird-cleanup.service"),
-      canSelfUpdate: content.includes("tee /etc/sudoers.d/proxy-guardian-agent")
+      exists: canSelfUpdate,
+      hasNetbirdCleanupEntries: canNetbird,
+      canSelfUpdate,
+      canNginxConf,
+      canIpset,
+      canFail2ban
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -25829,6 +25832,33 @@ app.post("/api/anti-iptv/cleanup", async (_req, res) => {
       child.stdin.end();
     });
     res.json({ ok: true, removed, kept: kept.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var SECURITY_STATS_FILE = "/var/log/pg-security-stats.json";
+var SECURITY_MONITOR_SCRIPT = "/opt/pg-security-monitor.py";
+app.get("/api/security/stats", async (_req, res) => {
+  try {
+    const raw = await (0, import_promises.readFile)(SECURITY_STATS_FILE, "utf-8");
+    res.json(JSON.parse(raw));
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      res.status(404).json({ error: "Stats not yet generated. Run security monitor first." });
+    } else {
+      res.status(500).json({ error: err.message });
+    }
+  }
+});
+app.post("/api/security/stats/refresh", async (_req, res) => {
+  try {
+    const result = await runCmd(`python3 ${SECURITY_MONITOR_SCRIPT}`, 6e4);
+    if (!result.ok) {
+      res.status(500).json({ error: result.stderr || "Script failed" });
+      return;
+    }
+    const raw = await (0, import_promises.readFile)(SECURITY_STATS_FILE, "utf-8");
+    res.json(JSON.parse(raw));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

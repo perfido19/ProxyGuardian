@@ -2179,7 +2179,7 @@ fi
     }
   });
 
-  startHealthPoller(60000);
+  startHealthPoller(30000);
   startBanSyncPoller(60000);
 
   const server = createServer(app);

@@ -93,6 +93,8 @@ export function deleteVps(id: string): void {
 }
 
 const REQUEST_TIMEOUT = 10000;
+const HEALTH_TIMEOUT = 6000;
+const HEALTH_RETRY_DELAY = 4000;
 export const SLOW_REQUEST_TIMEOUT = 120000;
 
 export const SLOW_PATHS = [
@@ -135,13 +137,19 @@ export async function agentPost(vps: VpsConfig, path: string, body: any, timeout
 }
 
 export async function checkVpsHealth(vps: VpsConfig): Promise<boolean> {
-  try {
-    const res = await agentFetch(vps, "/health");
-    const online = res.ok;
-    vps.lastSeen = online ? new Date().toISOString() : vps.lastSeen;
-    vps.lastStatus = online ? "online" : "offline";
-    return online;
-  } catch { vps.lastStatus = "offline"; return false; }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await agentFetch(vps, "/health", {}, HEALTH_TIMEOUT);
+      if (res.ok) {
+        vps.lastSeen = new Date().toISOString();
+        vps.lastStatus = "online";
+        return true;
+      }
+    } catch {}
+    if (attempt === 0) await new Promise(r => setTimeout(r, HEALTH_RETRY_DELAY));
+  }
+  vps.lastStatus = "offline";
+  return false;
 }
 
 export async function checkAllVpsHealth(): Promise<Map<string, boolean>> {
