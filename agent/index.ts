@@ -1000,25 +1000,38 @@ app.get("/api/fail2ban/jails", async (_req, res) => {
 
 app.post("/api/fail2ban/jails/:name", async (req, res) => {
   const { name } = req.params;
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) return res.status(400).json({ error: "Invalid jail name" });
   const { config } = req.body;
+
+  // Valida e sanitizza tutti i valori numerici prima di qualsiasi uso
+  const banTime = config.banTime !== undefined ? Math.floor(Number(config.banTime)) : undefined;
+  const maxRetry = config.maxRetry !== undefined ? Math.floor(Number(config.maxRetry)) : undefined;
+  const findTime = config.findTime !== undefined ? Math.floor(Number(config.findTime)) : undefined;
+  if ((banTime !== undefined && !Number.isFinite(banTime)) ||
+      (maxRetry !== undefined && !Number.isFinite(maxRetry)) ||
+      (findTime !== undefined && !Number.isFinite(findTime))) {
+    return res.status(400).json({ error: "Invalid numeric config values" });
+  }
+
   const cmds: string[] = [];
   if (config.enabled !== undefined) cmds.push(`sudo fail2ban-client set ${name} ${config.enabled ? "unbanip all" : "banned"}`);
-  if (config.banTime !== undefined) cmds.push(`sudo fail2ban-client set ${name} bantime ${config.banTime}`);
-  if (config.maxRetry !== undefined) cmds.push(`sudo fail2ban-client set ${name} maxretry ${config.maxRetry}`);
-  if (config.findTime !== undefined) cmds.push(`sudo fail2ban-client set ${name} findtime ${config.findTime}`);
+  if (banTime !== undefined) cmds.push(`sudo fail2ban-client set ${name} bantime ${banTime}`);
+  if (maxRetry !== undefined) cmds.push(`sudo fail2ban-client set ${name} maxretry ${maxRetry}`);
+  if (findTime !== undefined) cmds.push(`sudo fail2ban-client set ${name} findtime ${findTime}`);
   for (const cmd of cmds) await runCmd(cmd);
 
   // Persisti in jail.local
-  if (config.banTime !== undefined || config.maxRetry !== undefined || config.findTime !== undefined) {
+  if (banTime !== undefined || maxRetry !== undefined || findTime !== undefined) {
     try {
       var jailLocalPath = "/etc/fail2ban/jail.local";
       var raw = "";
       try { raw = await readFile(jailLocalPath, "utf-8"); } catch {}
-      var sectionRe = new RegExp(`\\[${name}\\][\\s\\S]*?(?=\\n\\[|$)`, "m");
+      var escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      var sectionRe = new RegExp(`\\[${escapedName}\\][\\s\\S]*?(?=\\n\\[|$)`, "m");
       var newSection = `[${name}]\n`;
-      if (config.banTime !== undefined) newSection += `bantime = ${config.banTime}\n`;
-      if (config.maxRetry !== undefined) newSection += `maxretry = ${config.maxRetry}\n`;
-      if (config.findTime !== undefined) newSection += `findtime = ${config.findTime}\n`;
+      if (banTime !== undefined) newSection += `bantime = ${banTime}\n`;
+      if (maxRetry !== undefined) newSection += `maxretry = ${maxRetry}\n`;
+      if (findTime !== undefined) newSection += `findtime = ${findTime}\n`;
       if (sectionRe.test(raw)) {
         raw = raw.replace(sectionRe, newSection.trimEnd());
       } else {

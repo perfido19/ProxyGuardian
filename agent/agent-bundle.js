@@ -25347,14 +25347,21 @@ app.get("/api/fail2ban/jails", async (_req, res) => {
 });
 app.post("/api/fail2ban/jails/:name", async (req, res) => {
   const { name } = req.params;
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) return res.status(400).json({ error: "Invalid jail name" });
   const { config } = req.body;
+  const banTime = config.banTime !== void 0 ? Math.floor(Number(config.banTime)) : void 0;
+  const maxRetry = config.maxRetry !== void 0 ? Math.floor(Number(config.maxRetry)) : void 0;
+  const findTime = config.findTime !== void 0 ? Math.floor(Number(config.findTime)) : void 0;
+  if (banTime !== void 0 && !Number.isFinite(banTime) || maxRetry !== void 0 && !Number.isFinite(maxRetry) || findTime !== void 0 && !Number.isFinite(findTime)) {
+    return res.status(400).json({ error: "Invalid numeric config values" });
+  }
   const cmds = [];
   if (config.enabled !== void 0) cmds.push(`sudo fail2ban-client set ${name} ${config.enabled ? "unbanip all" : "banned"}`);
-  if (config.banTime !== void 0) cmds.push(`sudo fail2ban-client set ${name} bantime ${config.banTime}`);
-  if (config.maxRetry !== void 0) cmds.push(`sudo fail2ban-client set ${name} maxretry ${config.maxRetry}`);
-  if (config.findTime !== void 0) cmds.push(`sudo fail2ban-client set ${name} findtime ${config.findTime}`);
+  if (banTime !== void 0) cmds.push(`sudo fail2ban-client set ${name} bantime ${banTime}`);
+  if (maxRetry !== void 0) cmds.push(`sudo fail2ban-client set ${name} maxretry ${maxRetry}`);
+  if (findTime !== void 0) cmds.push(`sudo fail2ban-client set ${name} findtime ${findTime}`);
   for (const cmd of cmds) await runCmd(cmd);
-  if (config.banTime !== void 0 || config.maxRetry !== void 0 || config.findTime !== void 0) {
+  if (banTime !== void 0 || maxRetry !== void 0 || findTime !== void 0) {
     try {
       var jailLocalPath = "/etc/fail2ban/jail.local";
       var raw = "";
@@ -25362,14 +25369,15 @@ app.post("/api/fail2ban/jails/:name", async (req, res) => {
         raw = await (0, import_promises.readFile)(jailLocalPath, "utf-8");
       } catch {
       }
-      var sectionRe = new RegExp(`\\[${name}\\][\\s\\S]*?(?=\\n\\[|$)`, "m");
+      var escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      var sectionRe = new RegExp(`\\[${escapedName}\\][\\s\\S]*?(?=\\n\\[|$)`, "m");
       var newSection = `[${name}]
 `;
-      if (config.banTime !== void 0) newSection += `bantime = ${config.banTime}
+      if (banTime !== void 0) newSection += `bantime = ${banTime}
 `;
-      if (config.maxRetry !== void 0) newSection += `maxretry = ${config.maxRetry}
+      if (maxRetry !== void 0) newSection += `maxretry = ${maxRetry}
 `;
-      if (config.findTime !== void 0) newSection += `findtime = ${config.findTime}
+      if (findTime !== void 0) newSection += `findtime = ${findTime}
 `;
       if (sectionRe.test(raw)) {
         raw = raw.replace(sectionRe, newSection.trimEnd());
