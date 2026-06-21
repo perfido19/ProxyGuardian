@@ -24723,6 +24723,9 @@ app.post("/api/config/:filename", async (req, res) => {
         return res.status(422).json({ error: `nginx -t failed: ${test.stderr}` });
       }
     }
+    if (req.params.filename === "jail.local" || req.params.filename === "fail2ban.local") {
+      await runCmd("sudo fail2ban-client reload 2>/dev/null || true");
+    }
     res.json({ ok: true, message: `${req.params.filename} updated` });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -25351,6 +25354,32 @@ app.post("/api/fail2ban/jails/:name", async (req, res) => {
   if (config.maxRetry !== void 0) cmds.push(`sudo fail2ban-client set ${name} maxretry ${config.maxRetry}`);
   if (config.findTime !== void 0) cmds.push(`sudo fail2ban-client set ${name} findtime ${config.findTime}`);
   for (const cmd of cmds) await runCmd(cmd);
+  if (config.banTime !== void 0 || config.maxRetry !== void 0 || config.findTime !== void 0) {
+    try {
+      var jailLocalPath = "/etc/fail2ban/jail.local";
+      var raw = "";
+      try {
+        raw = await (0, import_promises.readFile)(jailLocalPath, "utf-8");
+      } catch {
+      }
+      var sectionRe = new RegExp(`\\[${name}\\][\\s\\S]*?(?=\\n\\[|$)`, "m");
+      var newSection = `[${name}]
+`;
+      if (config.banTime !== void 0) newSection += `bantime = ${config.banTime}
+`;
+      if (config.maxRetry !== void 0) newSection += `maxretry = ${config.maxRetry}
+`;
+      if (config.findTime !== void 0) newSection += `findtime = ${config.findTime}
+`;
+      if (sectionRe.test(raw)) {
+        raw = raw.replace(sectionRe, newSection.trimEnd());
+      } else {
+        raw = raw.trimEnd() + "\n\n" + newSection;
+      }
+      await sudoWriteFile(jailLocalPath, raw.trimEnd() + "\n");
+    } catch {
+    }
+  }
   res.json({ ok: true, message: `Jail ${name} updated` });
 });
 app.get("/api/system/antibrute-stats", async (_req, res) => {
