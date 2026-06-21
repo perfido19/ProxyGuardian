@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Search, ShieldBan, ShieldCheck, AlertTriangle, Globe, User, Server, RefreshCw, XCircle, CheckCircle2 } from "lucide-react";
+import { Search, ShieldBan, ShieldCheck, AlertTriangle, Globe, User, Server, RefreshCw, XCircle, CheckCircle2, Shield, Unlock } from "lucide-react";
 
 interface VpsHit {
   vpsId: string;
@@ -108,6 +108,145 @@ function UsernameStatsTable({ stats }: { stats: Record<string, Record<string, nu
         </tbody>
       </table>
     </div>
+  );
+}
+
+interface MainJail {
+  name: string;
+  ips: string[];
+}
+
+interface MainBansResult {
+  jails: MainJail[];
+  updatedAt: string;
+}
+
+function MainBansSection() {
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [unbanning, setUnbanning] = useState<string | null>(null);
+
+  const { data, isLoading, isFetching, refetch } = useQuery<MainBansResult>({
+    queryKey: ["main-bans"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/main/bans");
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    refetchInterval: false,
+    staleTime: 30000,
+  });
+
+  const unban = async (ip: string, jail: string) => {
+    setUnbanning(`${ip}:${jail}`);
+    try {
+      const res = await apiRequest("POST", "/api/main/unban", { ip, jail });
+      if (!res.ok) throw new Error(await res.text());
+      toast({ title: `Unbanned ${ip}`, description: `Rimosso da ${jail}` });
+      refetch();
+    } catch (e: any) {
+      toast({ title: "Errore unban", description: e.message, variant: "destructive" });
+    } finally {
+      setUnbanning(null);
+    }
+  };
+
+  const q = search.trim().toLowerCase();
+  const filteredJails = (data?.jails ?? [])
+    .map(j => ({ ...j, ips: j.ips.filter(ip => !q || ip.includes(q) || j.name.includes(q)) }))
+    .filter(j => j.ips.length > 0);
+
+  const totalBans = (data?.jails ?? []).reduce((s, j) => s + j.ips.length, 0);
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Shield className="w-4 h-4 text-orange-400" />
+              Main Backend — IP Bannati
+            </CardTitle>
+            <CardDescription className="text-xs mt-0.5">
+              Fail2ban + iptables su 80.244.4.35
+              {data?.updatedAt && (
+                <span className="ml-2 opacity-60">
+                  Aggiornato: {new Date(data.updatedAt).toLocaleTimeString("it-IT")}
+                </span>
+              )}
+            </CardDescription>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isFetching} className="gap-1.5">
+            <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+            Aggiorna
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1 max-w-xs">
+            <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Cerca IP o jail…"
+              className="pl-8 text-sm font-mono h-9"
+            />
+          </div>
+          {data && (
+            <span className="text-sm text-muted-foreground">
+              {totalBans} IP bannati in {data.jails.length} jail
+            </span>
+          )}
+        </div>
+
+        {isLoading && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+            <RefreshCw className="w-4 h-4 animate-spin" /> Caricamento…
+          </div>
+        )}
+
+        {!isLoading && filteredJails.length === 0 && (
+          <div className="text-sm text-muted-foreground py-4 text-center">
+            {q ? "Nessun IP trovato per questa ricerca" : "Nessun IP bannato al momento"}
+          </div>
+        )}
+
+        {filteredJails.map(jail => (
+          <div key={jail.name} className="border border-border rounded-lg overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-2.5 bg-muted/30 border-b border-border">
+              <ShieldBan className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+              <span className="font-mono text-sm font-medium">{jail.name}</span>
+              <Badge variant="secondary" className="text-xs ml-auto">{jail.ips.length}</Badge>
+            </div>
+            <div className="divide-y divide-border/50">
+              {jail.ips.map(ip => {
+                const key = `${ip}:${jail.name}`;
+                return (
+                  <div key={ip} className="flex items-center justify-between px-4 py-2 hover:bg-muted/20 transition-colors">
+                    <span className="font-mono text-sm">{ip}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="gap-1.5 text-xs h-7 text-muted-foreground hover:text-foreground"
+                      disabled={unbanning === key}
+                      onClick={() => unban(ip, jail.name)}
+                    >
+                      {unbanning === key ? (
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Unlock className="w-3 h-3" />
+                      )}
+                      Unban
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -417,6 +556,8 @@ export default function IpInvestigator() {
           )}
         </>
       )}
+
+      <MainBansSection />
     </div>
   );
 }
