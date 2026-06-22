@@ -564,8 +564,14 @@ app.get("/api/netbird", async (_req, res) => {
       runCmd("systemctl is-active netbird 2>/dev/null"),
       runCmd("nc -z -w3 main.netbird.cloud 8880 2>/dev/null && echo ok || echo fail"),
     ]);
+    let running = serviceResult.stdout.trim() === "active";
+    // Fallback pgrep per container OpenVZ/LXC senza D-Bus
+    if (!running && serviceResult.stdout.trim() === "") {
+      const pg = await runCmd("pgrep -f netbird > /dev/null 2>&1");
+      running = pg.ok;
+    }
     res.json({
-      running: serviceResult.stdout.trim() === "active",
+      running,
       connected: connResult.stdout.trim() === "ok",
     });
   } catch (err: any) {
