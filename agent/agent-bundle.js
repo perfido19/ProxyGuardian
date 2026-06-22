@@ -26045,32 +26045,10 @@ async function autoHealLoop() {
     }
   }
 }
-var lastNetbirdRestart = 0;
-var NETBIRD_WATCHDOG_COOLDOWN = 10 * 60 * 1e3;
-async function netbirdWatchdogLoop() {
-  try {
-    const result = await runCmd("netbird status 2>/dev/null", 1e4);
-    const mgmt = /Management:\s*Connected/.test(result.stdout);
-    const signal = /Signal:\s*Connected/.test(result.stdout);
-    if (!mgmt || !signal) {
-      const now = Date.now();
-      if (now - lastNetbirdRestart > NETBIRD_WATCHDOG_COOLDOWN) {
-        console.log("[NetbirdWatchdog] not connected (mgmt=" + mgmt + " signal=" + signal + ") \u2014 restarting");
-        await runCmd("sudo systemctl restart netbird", 3e4);
-        lastNetbirdRestart = now;
-      }
-    }
-  } catch (e) {
-  }
-}
 setTimeout(function() {
   setInterval(autoHealLoop, 3 * 60 * 1e3);
   autoHealLoop();
 }, 2 * 60 * 1e3);
-setTimeout(function() {
-  setInterval(netbirdWatchdogLoop, 5 * 60 * 1e3);
-  netbirdWatchdogLoop();
-}, 3 * 60 * 1e3);
 app.listen(PORT, BIND, () => {
   console.log(`[ProxyGuardian Agent] Listening on ${BIND}:${PORT}`);
   if (!AGENT_API_KEY) console.warn("[WARN] AGENT_API_KEY not set \u2014 all requests will be rejected");

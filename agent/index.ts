@@ -1722,27 +1722,7 @@ async function autoHealLoop() {
   }
 }
 
-let lastNetbirdRestart = 0;
-const NETBIRD_WATCHDOG_COOLDOWN = 10 * 60 * 1000;
-
-async function netbirdWatchdogLoop() {
-  try {
-    const result = await runCmd("netbird status 2>/dev/null", 10000);
-    const mgmt = /Management:\s*Connected/.test(result.stdout);
-    const signal = /Signal:\s*Connected/.test(result.stdout);
-    if (!mgmt || !signal) {
-      const now = Date.now();
-      if (now - lastNetbirdRestart > NETBIRD_WATCHDOG_COOLDOWN) {
-        console.log("[NetbirdWatchdog] not connected (mgmt=" + mgmt + " signal=" + signal + ") — restarting");
-        await runCmd("sudo systemctl restart netbird", 30000);
-        lastNetbirdRestart = now;
-      }
-    }
-  } catch (e) {}
-}
-
 setTimeout(function() { setInterval(autoHealLoop, 3 * 60 * 1000); autoHealLoop(); }, 2 * 60 * 1000);
-setTimeout(function() { setInterval(netbirdWatchdogLoop, 5 * 60 * 1000); netbirdWatchdogLoop(); }, 3 * 60 * 1000);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
