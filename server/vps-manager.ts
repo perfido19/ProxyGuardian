@@ -92,7 +92,7 @@ export function deleteVps(id: string): void {
   saveVpsStore();
 }
 
-const REQUEST_TIMEOUT = 10000;
+const REQUEST_TIMEOUT = 5000;
 const HEALTH_TIMEOUT = 6000;
 const HEALTH_RETRY_DELAY = 4000;
 export const SLOW_REQUEST_TIMEOUT = 120000;
@@ -190,8 +190,11 @@ export interface BanSyncResult {
   ips: string[];
 }
 
+const BANSYNC_MAX_PER_VPS = 50;
+
 export async function syncIptvBanFleet(): Promise<BanSyncResult> {
-  const enabled = Array.from(vpsStore.values()).filter(v => v.enabled);
+  // Salta VPS offline per non appesantire il ciclo
+  const enabled = Array.from(vpsStore.values()).filter(v => v.enabled && v.lastStatus !== "offline");
 
   // 1. Pull iptv_ban da tutti i VPS in parallelo
   const pullResults = await Promise.allSettled(
@@ -217,7 +220,7 @@ export async function syncIptvBanFleet(): Promise<BanSyncResult> {
     ips.forEach(ip => allBannedIps.add(ip));
   }
 
-  // 3. Propaga IP mancanti a ogni VPS
+  // 3. Propaga IP mancanti a ogni VPS (max BANSYNC_MAX_PER_VPS per ciclo per non saturare)
   let propagated = 0;
   let vpsUpdated = 0;
   let errors = 0;
@@ -225,7 +228,7 @@ export async function syncIptvBanFleet(): Promise<BanSyncResult> {
   await Promise.allSettled(
     enabled.map(async vps => {
       const existing = vpsBanMap.get(vps.id) || new Set();
-      const missing = [...allBannedIps].filter(ip => !existing.has(ip));
+      const missing = [...allBannedIps].filter(ip => !existing.has(ip)).slice(0, BANSYNC_MAX_PER_VPS);
       if (missing.length === 0) return;
       let pushed = 0;
       for (const ip of missing) {
@@ -262,16 +265,19 @@ export interface BulkResult {
   vpsId: string; vpsName: string; success: boolean; data?: any; error?: string;
 }
 
-export async function bulkPost(vpsIds: string[] | "all", path: string, body: any): Promise<BulkResult[]> {
-  const targets = vpsIds === "all"
+export async function bulkPost(vpsIds: string[] | "all", path: string, body: any, skipOffline = true): Promise<BulkResult[]> {
+  const all = vpsIds === "all"
     ? Array.from(vpsStore.values()).filter(v => v.enabled)
     : vpsIds.map(id => vpsStore.get(id)).filter((v): v is VpsConfig => !!v && v.enabled);
+  const offline = skipOffline ? all.filter(v => v.lastStatus === "offline") : [];
+  const targets = skipOffline ? all.filter(v => v.lastStatus !== "offline") : all;
   const timeout = SLOW_PATHS.includes(path) ? SLOW_REQUEST_TIMEOUT : undefined;
   const results = await Promise.allSettled(targets.map(async vps => {
     try { return { vpsId: vps.id, vpsName: vps.name, success: true, data: await agentPost(vps, path, body, timeout) }; }
     catch (e: any) { return { vpsId: vps.id, vpsName: vps.name, success: false, error: e.message }; }
   }));
-  return results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", success: false, error: "rejected" });
+  const offlineResults: BulkResult[] = offline.map(v => ({ vpsId: v.id, vpsName: v.name, success: false, error: "offline (skip)" }));
+  return [...results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", success: false, error: "rejected" }), ...offlineResults];
 }
 
 export async function agentUpdate(vps: VpsConfig, bundle: Buffer): Promise<{ ok: boolean; message?: string; error?: string }> {
@@ -319,13 +325,16 @@ export async function bulkAgentUpdate(vpsIds: string[] | "all"): Promise<BulkRes
   return results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", success: false, error: "rejected" });
 }
 
-export async function bulkGet(vpsIds: string[] | "all", path: string): Promise<BulkResult[]> {
-  const targets = vpsIds === "all"
+export async function bulkGet(vpsIds: string[] | "all", path: string, skipOffline = true): Promise<BulkResult[]> {
+  const all = vpsIds === "all"
     ? Array.from(vpsStore.values()).filter(v => v.enabled)
     : vpsIds.map(id => vpsStore.get(id)).filter((v): v is VpsConfig => !!v && v.enabled);
+  const offline = skipOffline ? all.filter(v => v.lastStatus === "offline") : [];
+  const targets = skipOffline ? all.filter(v => v.lastStatus !== "offline") : all;
   const results = await Promise.allSettled(targets.map(async vps => {
     try { return { vpsId: vps.id, vpsName: vps.name, success: true, data: await agentGet(vps, path) }; }
     catch (e: any) { return { vpsId: vps.id, vpsName: vps.name, success: false, error: e.message }; }
   }));
-  return results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", success: false, error: "rejected" });
+  const offlineResults: BulkResult[] = offline.map(v => ({ vpsId: v.id, vpsName: v.name, success: false, error: "offline (skip)" }));
+  return [...results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", success: false, error: "rejected" }), ...offlineResults];
 }
