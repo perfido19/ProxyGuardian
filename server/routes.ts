@@ -554,6 +554,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!requireVpsAccess(req.params.id, req.session.userId!)) return res.status(403).json({ error: "Accesso negato" });
     const vps = getVpsById(req.params.id);
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    if (vps.lastStatus === "offline") return res.status(502).json({ error: "VPS offline" });
     const proxyPath = "/" + (req.params as any)[0];
     const timeout = SLOW_PATHS.includes(proxyPath) ? SLOW_REQUEST_TIMEOUT : undefined;
     try { res.json(await agentGet(vps, proxyPath, timeout)); }
@@ -562,12 +563,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/vps/:id/proxy/*", requireAuth, requireOperator, async (req, res) => {
     if (!requireVpsAccess(req.params.id, req.session.userId!)) return res.status(403).json({ error: "Accesso negato" });
     const proxyPath = "/" + (req.params as any)[0];
-    // Operator: solo servizi e ban/unban. Admin: tutto.
     if (req.session.userRole === "operator" && !isOperatorAllowedPost(proxyPath)) {
       return res.status(403).json({ error: "Permessi insufficienti: solo admin può modificare le configurazioni" });
     }
     const vps = getVpsById(req.params.id);
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    if (vps.lastStatus === "offline") return res.status(502).json({ error: "VPS offline" });
     const timeout = SLOW_PATHS.includes(proxyPath) ? SLOW_REQUEST_TIMEOUT : undefined;
     try { res.json(await agentPost(vps, proxyPath, req.body, timeout)); }
     catch (e: any) { res.status(502).json({ error: e.message }); }
