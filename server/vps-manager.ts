@@ -93,9 +93,12 @@ export function deleteVps(id: string): void {
 }
 
 const REQUEST_TIMEOUT = 5000;
-const HEALTH_TIMEOUT = 6000;
+const HEALTH_TIMEOUT = 8000;
 const HEALTH_RETRY_DELAY = 4000;
+const HEALTH_OFFLINE_THRESHOLD = 2;
 export const SLOW_REQUEST_TIMEOUT = 120000;
+
+const consecutiveFailures = new Map<string, number>();
 
 export const SLOW_PATHS = [
   "/api/asn/update-lists",
@@ -143,12 +146,17 @@ export async function checkVpsHealth(vps: VpsConfig): Promise<boolean> {
       if (res.ok) {
         vps.lastSeen = new Date().toISOString();
         vps.lastStatus = "online";
+        consecutiveFailures.set(vps.id, 0);
         return true;
       }
     } catch {}
     if (attempt === 0) await new Promise(r => setTimeout(r, HEALTH_RETRY_DELAY));
   }
-  vps.lastStatus = "offline";
+  const fails = (consecutiveFailures.get(vps.id) || 0) + 1;
+  consecutiveFailures.set(vps.id, fails);
+  if (fails >= HEALTH_OFFLINE_THRESHOLD) {
+    vps.lastStatus = "offline";
+  }
   return false;
 }
 
