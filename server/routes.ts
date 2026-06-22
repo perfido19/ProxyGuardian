@@ -1,7 +1,9 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { totalmem, freemem, cpus } from "os";
-import { execSync, execFileSync } from "child_process";
+import { execSync, execFile } from "child_process";
+import { promisify } from "util";
+const execFileAsync = promisify(execFile);
 import { randomBytes } from "crypto";
 import { open as openMaxMind, type Reader, validate as validateIp } from "maxmind";
 import { storage } from "./storage";
@@ -1103,30 +1105,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const MAIN_SSH_PASS = process.env.MAIN_SSH_PASS || "";
   const MAIN_JAILS = ["player-api-stuffing", "player-api", "panel-api", "nginx-abuse", "404-0", "block22", "sshd"];
 
-  function mainSsh(cmd: string, timeoutMs = 12000): string {
+  async function mainSsh(cmd: string, timeoutMs = 10000): Promise<string> {
     if (!MAIN_HOST || !MAIN_SSH_PASS) throw new Error("MAIN_HOST/MAIN_SSH_PASS non configurati in .env");
-    return execFileSync(
+    const { stdout } = await execFileAsync(
       "sshpass",
-      ["-e", "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=8", `root@${MAIN_HOST}`, cmd],
+      ["-e", "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=6", `root@${MAIN_HOST}`, cmd],
       { env: { ...process.env, SSHPASS: MAIN_SSH_PASS }, timeout: timeoutMs }
-    ).toString().trim();
+    );
+    return stdout.trim();
   }
 
   app.get("/api/main/bans", requireAuth, async (_req, res) => {
     try {
-      const jails: { name: string; ips: string[] }[] = [];
-      for (const jail of MAIN_JAILS) {
-        try {
-          const raw = mainSsh(`fail2ban-client get ${jail} banlist 2>/dev/null || echo ""`);
+      const results = await Promise.allSettled([
+        ...MAIN_JAILS.map(async jail => {
+          const raw = await mainSsh(`fail2ban-client get ${jail} banlist 2>/dev/null || echo ""`);
           const ips = raw.split(/[\s,]+/).map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s));
-          if (ips.length > 0) jails.push({ name: jail, ips });
-        } catch {}
-      }
-      try {
-        const raw = mainSsh(`iptables -L INPUT -n | awk '/^DROP/{print $4}' | grep -E '^[0-9]+\\.' | sort -u`);
-        const ips = raw.split("\n").map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s));
-        if (ips.length > 0) jails.push({ name: "iptables-manual", ips });
-      } catch {}
+          return { name: jail, ips };
+        }),
+        mainSsh(`iptables -L INPUT -n | awk '/^DROP/{print $4}' | grep -E '^[0-9]+\\.' | sort -u`).then(raw => ({
+          name: "iptables-manual",
+          ips: raw.split("\n").map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s)),
+        })),
+      ]);
+      const jails = results
+        .filter((r): r is PromiseFulfilledResult<{ name: string; ips: string[] }> => r.status === "fulfilled")
+        .map(r => r.value)
+        .filter(j => j.ips.length > 0);
       res.json({ jails, updatedAt: new Date().toISOString() });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1139,9 +1144,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!jail || !/^[a-z0-9_-]{1,64}$/.test(jail)) return res.status(400).json({ error: "Jail non valida" });
     try {
       if (jail === "iptables-manual") {
-        mainSsh(`iptables -D INPUT -s ${ip} -j DROP 2>/dev/null; true`);
+        await mainSsh(`iptables -D INPUT -s ${ip} -j DROP 2>/dev/null; true`);
       } else {
-        mainSsh(`fail2ban-client set ${jail} unbanip ${ip} 2>/dev/null; true`);
+        await mainSsh(`fail2ban-client set ${jail} unbanip ${ip} 2>/dev/null; true`);
       }
       res.json({ ok: true });
     } catch (e: any) {

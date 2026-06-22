@@ -126,6 +126,7 @@ function MainBansSection() {
   const [search, setSearch] = useState("");
   const [unbanning, setUnbanning] = useState<string | null>(null);
 
+  const [enabled, setEnabled] = useState(false);
   const { data, isLoading, isFetching, refetch } = useQuery<MainBansResult>({
     queryKey: ["main-bans"],
     queryFn: async () => {
@@ -133,9 +134,12 @@ function MainBansSection() {
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
+    enabled,
     refetchInterval: false,
-    staleTime: 30000,
+    staleTime: 60000,
   });
+
+  const load = () => { setEnabled(true); refetch(); };
 
   const unban = async (ip: string, jail: string) => {
     setUnbanning(`${ip}:${jail}`);
@@ -176,7 +180,7 @@ function MainBansSection() {
               )}
             </CardDescription>
           </div>
-          <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isFetching} className="gap-1.5">
+          <Button size="sm" variant="outline" onClick={load} disabled={isFetching} className="gap-1.5">
             <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
             Aggiorna
           </Button>
@@ -200,9 +204,15 @@ function MainBansSection() {
           )}
         </div>
 
+        {!enabled && !data && (
+          <div className="text-sm text-muted-foreground py-4 text-center opacity-60">
+            Clicca Aggiorna per caricare i ban dal main backend
+          </div>
+        )}
+
         {isLoading && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
-            <RefreshCw className="w-4 h-4 animate-spin" /> Caricamento…
+            <RefreshCw className="w-4 h-4 animate-spin" /> Caricamento ban in corso…
           </div>
         )}
 
