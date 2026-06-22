@@ -24522,13 +24522,23 @@ function sudoWriteFile(filePath, content) {
     child.stdin.end();
   });
 }
+var PGREP_NAMES = {
+  nginx: "nginx",
+  fail2ban: "fail2ban-server",
+  mariadb: "mariadbd,mysqld"
+};
 async function getServiceStatus(name) {
   const { stdout } = await runCmd(`systemctl is-active ${name} 2>/dev/null`);
   const state = stdout.trim().toLowerCase();
-  return {
-    name,
-    status: state === "active" ? "running" : "stopped"
-  };
+  if (state !== "") {
+    return { name, status: state === "active" ? "running" : "stopped" };
+  }
+  const procs = (PGREP_NAMES[name] || name).split(",");
+  for (const proc of procs) {
+    const { ok } = await runCmd(`pgrep -f "${proc}" > /dev/null 2>&1`);
+    if (ok) return { name, status: "running" };
+  }
+  return { name, status: "stopped" };
 }
 app.get("/api/services", async (_req, res) => {
   try {

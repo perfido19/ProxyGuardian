@@ -60,13 +60,25 @@ function sudoWriteFile(filePath: string, content: string): Promise<void> {
   });
 }
 
+const PGREP_NAMES: Record<string, string> = {
+  nginx: "nginx",
+  fail2ban: "fail2ban-server",
+  mariadb: "mariadbd,mysqld",
+};
+
 async function getServiceStatus(name: string) {
   const { stdout } = await runCmd(`systemctl is-active ${name} 2>/dev/null`);
   const state = stdout.trim().toLowerCase();
-  return {
-    name,
-    status: state === "active" ? "running" : "stopped",
-  };
+  if (state !== "") {
+    return { name, status: state === "active" ? "running" : "stopped" };
+  }
+  // Fallback per container OpenVZ/LXC senza D-Bus system bus
+  const procs = (PGREP_NAMES[name] || name).split(",");
+  for (const proc of procs) {
+    const { ok } = await runCmd(`pgrep -f "${proc}" > /dev/null 2>&1`);
+    if (ok) return { name, status: "running" };
+  }
+  return { name, status: "stopped" };
 }
 
 // ─── Services ─────────────────────────────────────────────────────────────────
