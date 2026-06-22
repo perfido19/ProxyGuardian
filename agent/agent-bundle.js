@@ -25412,7 +25412,7 @@ app.get("/api/system/diagnose", async (_req, res) => {
       runCmd("df / | awk 'NR==2{print $5}' | tr -d '%'"),
       runCmd(`free -m | awk 'NR==2{printf "%d %d", $3,$2}'`),
       runCmd("test -S /run/dbus/system_bus_socket && echo present || echo missing"),
-      runCmd("sudo nginx -t 2>&1 | tail -1"),
+      runCmd("sudo nginx -t 2>&1"),
       runCmd("sudo fail2ban-client ping 2>/dev/null || echo fail"),
       runCmd("grep -c 'Out of memory' /var/log/kern.log 2>/dev/null || echo 0")
     ]);
