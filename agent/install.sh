@@ -232,6 +232,47 @@ systemctl enable "$SERVICE_NAME" >/dev/null 2>&1
 systemctl restart "$SERVICE_NAME"
 sleep 2
 
+# ── NetBird watchdog (timer ogni 5min) ──────────────────────────────────────
+cat > /usr/local/sbin/netbird-watchdog.sh << 'WDEOF'
+#!/bin/bash
+STATUS=$(netbird status 2>/dev/null)
+MGMT=$(echo "$STATUS" | grep "^Management:" | awk '{print $2}')
+SIGNAL=$(echo "$STATUS" | grep "^Signal:" | awk '{print $2}')
+if [ "$MGMT" = "Connected" ] && [ "$SIGNAL" = "Connected" ]; then
+    exit 0
+fi
+logger -t netbird-watchdog "NetBird not connected (Management=$MGMT Signal=$SIGNAL) - restarting"
+systemctl restart netbird
+WDEOF
+chmod +x /usr/local/sbin/netbird-watchdog.sh
+
+cat > /etc/systemd/system/netbird-watchdog.service << 'WDSVCEOF'
+[Unit]
+Description=NetBird connectivity watchdog
+After=netbird.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/netbird-watchdog.sh
+WDSVCEOF
+
+cat > /etc/systemd/system/netbird-watchdog.timer << 'WDTIMEREOF'
+[Unit]
+Description=NetBird connectivity watchdog timer
+
+[Timer]
+OnBootSec=180
+OnUnitActiveSec=5min
+Unit=netbird-watchdog.service
+
+[Install]
+WantedBy=timers.target
+WDTIMEREOF
+
+systemctl daemon-reload
+systemctl enable --now netbird-watchdog.timer >/dev/null 2>&1
+ok "NetBird watchdog installato (controllo ogni 5min)"
+
 # ── Verifica ─────────────────────────────────────────────────────────────────
 if systemctl is-active --quiet "$SERVICE_NAME"; then
   CONNECT_IP="${NETBIRD_IP:-$PUBLIC_IP}"
