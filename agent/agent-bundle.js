@@ -25344,14 +25344,26 @@ app.post("/api/fail2ban/filters/:name/test", async (req, res) => {
   if (!logline || typeof logline !== "string" || logline.length > 2e3) {
     return res.status(400).json({ error: "logline required (max 2000 chars)" });
   }
-  const tmpFile = "/tmp/pg-f2b-test-" + Date.now() + ".log";
+  const { randomBytes } = require("crypto");
+  const { openSync, writeSync, closeSync, constants: fsc } = require("fs");
+  const tmpFile = "/tmp/pg-f2b-" + randomBytes(16).toString("hex") + ".log";
+  let fd = null;
   try {
-    await (0, import_promises.writeFile)(tmpFile, logline + "\n", "utf-8");
+    fd = openSync(tmpFile, fsc.O_WRONLY | fsc.O_CREAT | fsc.O_EXCL | fsc.O_NOFOLLOW, 384);
+    writeSync(fd, logline + "\n");
+    closeSync(fd);
+    fd = null;
     const result = await runCmd("fail2ban-regex " + tmpFile + " " + filterPath + " 2>&1", 15e3);
     await runCmd("rm -f " + tmpFile);
     const matchNum = parseInt((result.stdout.match(/(\d+) matched/) || ["", "0"])[1], 10);
     res.json({ ok: result.ok, matched: matchNum > 0, matchCount: matchNum, output: result.stdout });
   } catch (err) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch (_) {
+      }
+    }
     await runCmd("rm -f " + tmpFile);
     res.status(500).json({ error: err.message });
   }
