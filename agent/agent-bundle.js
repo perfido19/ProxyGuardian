@@ -24522,20 +24522,22 @@ function sudoWriteFile(filePath, content) {
     child.stdin.end();
   });
 }
+var ALLOWED_SERVICES = /* @__PURE__ */ new Set(["nginx", "fail2ban", "mariadb"]);
 var PGREP_NAMES = {
-  nginx: "nginx",
-  fail2ban: "fail2ban-server",
-  mariadb: "mariadbd,mysqld"
+  nginx: ["nginx"],
+  fail2ban: ["fail2ban-server"],
+  mariadb: ["mariadbd", "mysqld"]
 };
 async function getServiceStatus(name) {
+  if (!ALLOWED_SERVICES.has(name)) throw new Error(`Unknown service: ${name}`);
   const { stdout } = await runCmd(`systemctl is-active ${name} 2>/dev/null`);
   const state = stdout.trim().toLowerCase();
   if (state !== "") {
     return { name, status: state === "active" ? "running" : "stopped" };
   }
-  const procs = (PGREP_NAMES[name] || name).split(",");
+  const procs = PGREP_NAMES[name] || [];
   for (const proc of procs) {
-    const { ok } = await runCmd(`pgrep -f "${proc}" > /dev/null 2>&1`);
+    const { ok } = await runCmd(`pgrep -f ${proc} > /dev/null 2>&1`);
     if (ok) return { name, status: "running" };
   }
   return { name, status: "stopped" };
