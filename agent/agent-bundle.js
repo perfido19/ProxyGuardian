@@ -24485,7 +24485,14 @@ var execAsync = (0, import_util.promisify)(import_child_process.exec);
 var CMD_MAX_BUFFER = 16 * 1024 * 1024;
 var app = (0, import_express.default)();
 app.use(import_express.default.json());
-var AGENT_VERSION = "1.3.3";
+var AGENT_VERSION = "1.4.0";
+var AGENT_BUILT_AT = (function() {
+  try {
+    return new Date((0, import_fs.statSync)(__filename).mtime).toISOString();
+  } catch (e) {
+    return "unknown";
+  }
+})();
 var AGENT_API_KEY = process.env.AGENT_API_KEY || "";
 var PORT = parseInt(process.env.AGENT_PORT || "3001", 10);
 var BIND = process.env.AGENT_BIND || "0.0.0.0";
@@ -24499,8 +24506,31 @@ function requireApiKey(req, res, next) {
   next();
 }
 app.use("/api", requireApiKey);
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", hostname: process.env.HOSTNAME || "unknown", ts: Date.now(), version: AGENT_VERSION });
+app.get("/health", async (_req, res) => {
+  const [mem, disk, load] = await Promise.all([
+    runCmd(`free -m | awk 'NR==2{printf "%d %d", $3,$2}'`),
+    runCmd("df / | awk 'NR==2{print $5}' | tr -d '%'"),
+    runCmd("cat /proc/loadavg")
+  ]);
+  const memParts = (mem.stdout || "0 0").split(" ").map(Number);
+  const memUsedMb = memParts[0] || 0;
+  const memTotalMb = memParts[1] || 1;
+  const diskPct = parseInt(disk.stdout || "0", 10) || 0;
+  const load1m = parseFloat((load.stdout || "0").split(" ")[0]) || 0;
+  res.json({
+    status: "ok",
+    hostname: process.env.HOSTNAME || "unknown",
+    ts: Date.now(),
+    version: AGENT_VERSION,
+    builtAt: AGENT_BUILT_AT,
+    uptime: process.uptime(),
+    load1m,
+    memUsedMb,
+    memTotalMb,
+    memPct: memTotalMb > 0 ? Math.round(memUsedMb / memTotalMb * 100) : 0,
+    diskPct,
+    diskAlert: diskPct > 85
+  });
 });
 async function runCmd(cmd, timeout = 1e4) {
   try {
@@ -25305,6 +25335,27 @@ app.post("/api/fail2ban/filters/:name", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.post("/api/fail2ban/filters/:name/test", async (req, res) => {
+  const { name } = req.params;
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) return res.status(400).json({ error: "Invalid filter name" });
+  const filterPath = import_path.default.resolve(import_path.default.join(FILTER_DIR, name + ".conf"));
+  if (!filterPath.startsWith(FILTER_DIR + "/")) return res.status(400).json({ error: "Invalid filter name" });
+  const { logline } = req.body;
+  if (!logline || typeof logline !== "string" || logline.length > 2e3) {
+    return res.status(400).json({ error: "logline required (max 2000 chars)" });
+  }
+  const tmpFile = "/tmp/pg-f2b-test-" + Date.now() + ".log";
+  try {
+    await (0, import_promises.writeFile)(tmpFile, logline + "\n", "utf-8");
+    const result = await runCmd("fail2ban-regex " + tmpFile + " " + filterPath + " 2>&1", 15e3);
+    await runCmd("rm -f " + tmpFile);
+    const matchNum = parseInt((result.stdout.match(/(\d+) matched/) || ["", "0"])[1], 10);
+    res.json({ ok: result.ok, matched: matchNum > 0, matchCount: matchNum, output: result.stdout });
+  } catch (err) {
+    await runCmd("rm -f " + tmpFile);
+    res.status(500).json({ error: err.message });
+  }
+});
 app.post("/api/nginx/test", async (_req, res) => {
   const result = await runCmd("sudo nginx -t");
   res.json({ ok: result.ok, output: result.stderr || result.stdout });
@@ -25331,13 +25382,57 @@ app.get("/api/system", async (_req, res) => {
   const [memTotal, memUsed, memFree] = (memory.stdout || "0 0 0").split(" ").map(Number);
   const [diskTotal, diskUsed, diskFree, diskPercent] = (disk.stdout || "0 0 0 0%").split(" ");
   const loadValues = (load.stdout || "0 0 0").split(" ").slice(0, 3).map(Number);
+  const diskPctNum = parseInt((diskPercent || "0").replace("%", ""), 10) || 0;
   res.json({
     uptime: uptime.stdout,
     memory: { total: memTotal, used: memUsed, free: memFree },
     disk: { total: diskTotal, used: diskUsed, free: diskFree, percent: diskPercent },
+    diskAlert: diskPctNum > 85,
     load: { "1m": loadValues[0], "5m": loadValues[1], "15m": loadValues[2] },
     hostname: process.env.HOSTNAME || "unknown"
   });
+});
+app.get("/api/system/diagnose", async (_req, res) => {
+  try {
+    const [hostsCheck, nbStatus, disk, mem, dbus, nginxTest, f2bPing, oomCheck] = await Promise.all([
+      runCmd("grep -c 'main.netbird.cloud' /etc/hosts 2>/dev/null || echo 0"),
+      runCmd("netbird status 2>/dev/null"),
+      runCmd("df / | awk 'NR==2{print $5}' | tr -d '%'"),
+      runCmd(`free -m | awk 'NR==2{printf "%d %d", $3,$2}'`),
+      runCmd("test -S /run/dbus/system_bus_socket && echo present || echo missing"),
+      runCmd("sudo nginx -t 2>&1 | tail -1"),
+      runCmd("sudo fail2ban-client ping 2>/dev/null || echo fail"),
+      runCmd("grep -c 'Out of memory' /var/log/kern.log 2>/dev/null || echo 0")
+    ]);
+    const memParts = (mem.stdout || "0 0").split(" ").map(Number);
+    const memUsedMb = memParts[0] || 0;
+    const memTotalMb = memParts[1] || 1;
+    const diskPct = parseInt(disk.stdout || "0", 10) || 0;
+    const nbOut = nbStatus.stdout || "";
+    const mgmtConnected = /Management:\s*Connected/.test(nbOut);
+    const signalConnected = /Signal:\s*Connected/.test(nbOut);
+    const relayMatch = nbOut.match(/Relays:\s*(\d+)\/(\d+)/);
+    const relaysUp = relayMatch ? parseInt(relayMatch[1], 10) : -1;
+    const relaysTotal = relayMatch ? parseInt(relayMatch[2], 10) : -1;
+    res.json({
+      hostsNetbird: parseInt(hostsCheck.stdout || "0", 10) > 0,
+      netbird: { management: mgmtConnected, signal: signalConnected, relaysUp, relaysTotal },
+      dbus: dbus.stdout.trim() === "present",
+      disk: { pct: diskPct, alert: diskPct > 85 },
+      mem: {
+        usedMb: memUsedMb,
+        totalMb: memTotalMb,
+        pct: memTotalMb > 0 ? Math.round(memUsedMb / memTotalMb * 100) : 0
+      },
+      nginx: { configOk: /syntax is ok/.test(nginxTest.stdout) },
+      fail2ban: { responding: /pong/.test(f2bPing.stdout) },
+      oomEvents: parseInt(oomCheck.stdout || "0", 10),
+      version: AGENT_VERSION,
+      builtAt: AGENT_BUILT_AT
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 app.get("/api/fail2ban/jails", async (_req, res) => {
   try {
@@ -25917,6 +26012,53 @@ app.post("/api/security/stats/refresh", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+var lastServiceRestart = {};
+var AUTOHEAL_COOLDOWN = 10 * 60 * 1e3;
+async function autoHealLoop() {
+  const svcs = ["nginx", "fail2ban", "mariadb"];
+  for (let i = 0; i < svcs.length; i++) {
+    const svc = svcs[i];
+    try {
+      const s = await getServiceStatus(svc);
+      if (s.status !== "running") {
+        const last = lastServiceRestart[svc] || 0;
+        const now = Date.now();
+        if (now - last > AUTOHEAL_COOLDOWN) {
+          console.log("[AutoHeal] " + svc + " stopped \u2014 restarting");
+          await runCmd("sudo systemctl restart " + svc, 3e4);
+          lastServiceRestart[svc] = now;
+        }
+      }
+    } catch (e) {
+    }
+  }
+}
+var lastNetbirdRestart = 0;
+var NETBIRD_WATCHDOG_COOLDOWN = 10 * 60 * 1e3;
+async function netbirdWatchdogLoop() {
+  try {
+    const result = await runCmd("netbird status 2>/dev/null", 1e4);
+    const mgmt = /Management:\s*Connected/.test(result.stdout);
+    const signal = /Signal:\s*Connected/.test(result.stdout);
+    if (!mgmt || !signal) {
+      const now = Date.now();
+      if (now - lastNetbirdRestart > NETBIRD_WATCHDOG_COOLDOWN) {
+        console.log("[NetbirdWatchdog] not connected (mgmt=" + mgmt + " signal=" + signal + ") \u2014 restarting");
+        await runCmd("sudo systemctl restart netbird", 3e4);
+        lastNetbirdRestart = now;
+      }
+    }
+  } catch (e) {
+  }
+}
+setTimeout(function() {
+  setInterval(autoHealLoop, 3 * 60 * 1e3);
+  autoHealLoop();
+}, 2 * 60 * 1e3);
+setTimeout(function() {
+  setInterval(netbirdWatchdogLoop, 5 * 60 * 1e3);
+  netbirdWatchdogLoop();
+}, 3 * 60 * 1e3);
 app.listen(PORT, BIND, () => {
   console.log(`[ProxyGuardian Agent] Listening on ${BIND}:${PORT}`);
   if (!AGENT_API_KEY) console.warn("[WARN] AGENT_API_KEY not set \u2014 all requests will be rejected");
