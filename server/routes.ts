@@ -1131,19 +1131,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         mainSsh(`ipset list iptv_ban 2>/dev/null | grep -E '^[0-9]+\\.' | awk '{print $1}' | sort -u`),
       ]);
 
-      const jails: { name: string; ips: string[] }[] = [];
+      type MainJailEntry = { name: string; ips: string[]; type: "f2b" | "iptables-chain" | "iptables-manual" | "iptv_ban"; jailKey?: string };
+      const jails: MainJailEntry[] = [];
 
       // fail2ban managed bans
       if (f2bResults.status === "fulfilled") {
         for (const r of f2bResults.value) {
-          if (r.status === "fulfilled" && r.value.ips.length > 0) jails.push(r.value);
+          if (r.status === "fulfilled" && r.value.ips.length > 0)
+            jails.push({ ...r.value, type: "f2b", jailKey: r.value.name });
         }
       }
 
       // iptables direct DROP in INPUT (manual bans)
       if (manualRaw.status === "fulfilled") {
         const ips = parseIps(manualRaw.value);
-        if (ips.length > 0) jails.push({ name: "iptables-manual", ips });
+        if (ips.length > 0) jails.push({ name: "iptables-manual", ips, type: "iptables-manual" });
       }
 
       // f2b iptables chains (bans persisted in iptables after f2b restart)
@@ -1152,22 +1154,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         f2bChainRaw.value.split("\n").forEach((line: string) => {
           const m = line.match(/^(f2b-[^:]+):(\d+\.\d+\.\d+\.\d+)(\/\d+)?$/);
           if (!m) return;
-          const jail = m[1].replace(/^f2b-/, "") + " (iptables)";
-          if (!byChain[jail]) byChain[jail] = [];
-          if (!byChain[jail].includes(m[2])) byChain[jail].push(m[2]);
+          const jailKey = m[1].replace(/^f2b-/, "");
+          if (!byChain[jailKey]) byChain[jailKey] = [];
+          if (!byChain[jailKey].includes(m[2])) byChain[jailKey].push(m[2]);
         });
-        for (const [name, ips] of Object.entries(byChain)) {
-          // skip if already covered by fail2ban banlist
-          const baseName = name.replace(" (iptables)", "");
-          const alreadyShown = jails.some(j => j.name === baseName && j.ips.length > 0);
-          if (!alreadyShown && ips.length > 0) jails.push({ name, ips });
+        for (const [jailKey, ips] of Object.entries(byChain)) {
+          const alreadyShown = jails.some(j => j.jailKey === jailKey && j.ips.length > 0);
+          if (!alreadyShown && ips.length > 0)
+            jails.push({ name: jailKey + " (iptables)", ips, type: "iptables-chain", jailKey });
         }
       }
 
       // iptv_ban ipset
       if (iptvRaw.status === "fulfilled") {
         const ips = parseIps(iptvRaw.value);
-        if (ips.length > 0) jails.push({ name: "iptv_ban", ips });
+        if (ips.length > 0) jails.push({ name: "iptv_ban", ips, type: "iptv_ban" });
       }
 
       res.json({ jails, updatedAt: new Date().toISOString() });
@@ -1177,17 +1178,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/main/unban", requireAuth, requireAdmin, async (req, res) => {
-    const { ip, jail } = req.body;
+    const { ip, jail, type } = req.body;
     if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
-    if (!jail || !/^[a-z0-9_()\- ]{1,80}$/.test(jail)) return res.status(400).json({ error: "Jail non valida" });
+    // strict: only lowercase alphanumeric, hyphen, underscore — no spaces/parens used in shell
+    if (!jail || !/^[a-z0-9_-]{1,64}$/.test(jail)) return res.status(400).json({ error: "Jail non valida" });
+    const validTypes = ["f2b", "iptables-chain", "iptables-manual", "iptv_ban"] as const;
+    if (!validTypes.includes(type)) return res.status(400).json({ error: "Tipo non valido" });
     try {
-      if (jail === "iptables-manual") {
+      if (type === "iptables-manual") {
+        // ip validated above, no user-controlled shell metacharacters
         await mainSsh(`iptables -D INPUT -s ${ip} -j DROP 2>/dev/null; true`);
-      } else if (jail.endsWith(" (iptables)")) {
-        const chain = "f2b-" + jail.replace(" (iptables)", "");
+      } else if (type === "iptables-chain") {
+        // jail is [a-z0-9_-] only — safe to interpolate; chain derived server-side
+        const chain = "f2b-" + jail;
         await mainSsh(`iptables -D ${chain} -s ${ip}/32 -j DROP 2>/dev/null; true`);
-      } else {
+      } else if (type === "f2b") {
         await mainSsh(`fail2ban-client set ${jail} unbanip ${ip} 2>/dev/null; true`);
+      } else {
+        return res.status(400).json({ error: "Tipo non supportato per unban" });
       }
       res.json({ ok: true });
     } catch (e: any) {

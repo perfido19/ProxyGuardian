@@ -114,6 +114,8 @@ function UsernameStatsTable({ stats }: { stats: Record<string, Record<string, nu
 interface MainJail {
   name: string;
   ips: string[];
+  type: "f2b" | "iptables-chain" | "iptables-manual" | "iptv_ban";
+  jailKey?: string;
 }
 
 interface MainBansResult {
@@ -141,12 +143,17 @@ function MainBansSection() {
 
   const load = () => { setEnabled(true); refetch(); };
 
-  const unban = async (ip: string, jail: string) => {
-    setUnbanning(`${ip}:${jail}`);
+  const unban = async (ip: string, jail: MainJail) => {
+    const key = `${ip}:${jail.name}`;
+    setUnbanning(key);
     try {
-      const res = await apiRequest("POST", "/api/main/unban", { ip, jail });
+      const res = await apiRequest("POST", "/api/main/unban", {
+        ip,
+        jail: jail.jailKey || jail.name,
+        type: jail.type,
+      });
       if (!res.ok) throw new Error(await res.text());
-      toast({ title: `Unbanned ${ip}`, description: `Rimosso da ${jail}` });
+      toast({ title: `Unbanned ${ip}`, description: `Rimosso da ${jail.name}` });
       refetch();
     } catch (e: any) {
       toast({ title: "Errore unban", description: e.message, variant: "destructive" });
@@ -240,7 +247,7 @@ function MainBansSection() {
                       variant="ghost"
                       className="gap-1.5 text-xs h-7 text-muted-foreground hover:text-foreground"
                       disabled={unbanning === key}
-                      onClick={() => unban(ip, jail.name)}
+                      onClick={() => unban(ip, jail)}
                     >
                       {unbanning === key ? (
                         <RefreshCw className="w-3 h-3 animate-spin" />
