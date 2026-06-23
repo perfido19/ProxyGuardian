@@ -1118,25 +1118,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/main/bans", requireAuth, async (_req, res) => {
     try {
-      const results = await Promise.allSettled([
-        ...MAIN_JAILS.map(async jail => {
+      const parseIps = (raw: string) =>
+        raw.split("\n").map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s));
+
+      const [f2bResults, manualRaw, f2bChainRaw, iptvRaw] = await Promise.allSettled([
+        Promise.allSettled(MAIN_JAILS.map(async jail => {
           const raw = await mainSsh(`fail2ban-client get ${jail} banlist 2>/dev/null || echo ""`);
-          const ips = raw.split(/[\s,]+/).map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s));
-          return { name: jail, ips };
-        }),
-        mainSsh(`iptables -L INPUT -n | awk '/^DROP/{print $4}' | grep -E '^[0-9]+\\.' | sort -u`).then(raw => ({
-          name: "iptables-manual",
-          ips: raw.split("\n").map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s)),
+          return { name: jail, ips: raw.split(/[\s,]+/).map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s)) };
         })),
-        mainSsh(`ipset list iptv_ban 2>/dev/null | grep -E '^[0-9]+\\.' | awk '{print $1}' | sort -u`).then(raw => ({
-          name: "iptv_ban",
-          ips: raw.split("\n").map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s)),
-        })),
+        mainSsh(`iptables -S INPUT | grep ' -j DROP' | grep -oE '([0-9]{1,3}\\.){3}[0-9]{1,3}' | sort -u`),
+        mainSsh(`iptables -S | awk '/^-A f2b-/{chain=$2; for(i=1;i<=NF;i++) if($i=="-s") ip=$(i+1); if(chain&&ip) print chain":"ip; chain=""; ip=""}'`),
+        mainSsh(`ipset list iptv_ban 2>/dev/null | grep -E '^[0-9]+\\.' | awk '{print $1}' | sort -u`),
       ]);
-      const jails = results
-        .filter((r): r is PromiseFulfilledResult<{ name: string; ips: string[] }> => r.status === "fulfilled")
-        .map(r => r.value)
-        .filter(j => j.ips.length > 0);
+
+      const jails: { name: string; ips: string[] }[] = [];
+
+      // fail2ban managed bans
+      if (f2bResults.status === "fulfilled") {
+        for (const r of f2bResults.value) {
+          if (r.status === "fulfilled" && r.value.ips.length > 0) jails.push(r.value);
+        }
+      }
+
+      // iptables direct DROP in INPUT (manual bans)
+      if (manualRaw.status === "fulfilled") {
+        const ips = parseIps(manualRaw.value);
+        if (ips.length > 0) jails.push({ name: "iptables-manual", ips });
+      }
+
+      // f2b iptables chains (bans persisted in iptables after f2b restart)
+      if (f2bChainRaw.status === "fulfilled") {
+        const byChain: Record<string, string[]> = {};
+        f2bChainRaw.value.split("\n").forEach((line: string) => {
+          const m = line.match(/^(f2b-[^:]+):(\d+\.\d+\.\d+\.\d+)(\/\d+)?$/);
+          if (!m) return;
+          const jail = m[1].replace(/^f2b-/, "") + " (iptables)";
+          if (!byChain[jail]) byChain[jail] = [];
+          if (!byChain[jail].includes(m[2])) byChain[jail].push(m[2]);
+        });
+        for (const [name, ips] of Object.entries(byChain)) {
+          // skip if already covered by fail2ban banlist
+          const baseName = name.replace(" (iptables)", "");
+          const alreadyShown = jails.some(j => j.name === baseName && j.ips.length > 0);
+          if (!alreadyShown && ips.length > 0) jails.push({ name, ips });
+        }
+      }
+
+      // iptv_ban ipset
+      if (iptvRaw.status === "fulfilled") {
+        const ips = parseIps(iptvRaw.value);
+        if (ips.length > 0) jails.push({ name: "iptv_ban", ips });
+      }
+
       res.json({ jails, updatedAt: new Date().toISOString() });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1146,10 +1179,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/main/unban", requireAuth, requireAdmin, async (req, res) => {
     const { ip, jail } = req.body;
     if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
-    if (!jail || !/^[a-z0-9_-]{1,64}$/.test(jail)) return res.status(400).json({ error: "Jail non valida" });
+    if (!jail || !/^[a-z0-9_()\- ]{1,80}$/.test(jail)) return res.status(400).json({ error: "Jail non valida" });
     try {
       if (jail === "iptables-manual") {
         await mainSsh(`iptables -D INPUT -s ${ip} -j DROP 2>/dev/null; true`);
+      } else if (jail.endsWith(" (iptables)")) {
+        const chain = "f2b-" + jail.replace(" (iptables)", "");
+        await mainSsh(`iptables -D ${chain} -s ${ip}/32 -j DROP 2>/dev/null; true`);
       } else {
         await mainSsh(`fail2ban-client set ${jail} unbanip ${ip} 2>/dev/null; true`);
       }
