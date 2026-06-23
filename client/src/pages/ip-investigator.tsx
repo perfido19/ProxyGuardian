@@ -179,7 +179,7 @@ function MainBansSection() {
               Main Backend — IP Bannati
             </CardTitle>
             <CardDescription className="text-xs mt-0.5">
-              Fail2ban + iptables su 80.244.4.35
+              Fail2ban + iptables su main backend
               {data?.updatedAt && (
                 <span className="ml-2 opacity-60">
                   Aggiornato: {new Date(data.updatedAt).toLocaleTimeString("it-IT")}
