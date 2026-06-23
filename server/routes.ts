@@ -1128,6 +1128,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name: "iptables-manual",
           ips: raw.split("\n").map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s)),
         })),
+        mainSsh(`ipset list iptv_ban 2>/dev/null | grep -E '^[0-9]+\\.' | awk '{print $1}' | sort -u`).then(raw => ({
+          name: "iptv_ban",
+          ips: raw.split("\n").map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s)),
+        })),
       ]);
       const jails = results
         .filter((r): r is PromiseFulfilledResult<{ name: string; ips: string[] }> => r.status === "fulfilled")
