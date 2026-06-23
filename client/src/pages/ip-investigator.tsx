@@ -273,6 +273,7 @@ export default function IpInvestigator() {
   const [result, setResult] = useState<InvestigateResult | null>(null);
   const [expandedVps, setExpandedVps] = useState<string | null>(null);
   const [banState, setBanState] = useState<"idle" | "running" | "ok" | "error">("idle");
+  const [unbanState, setUnbanState] = useState<"idle" | "running" | "ok" | "error">("idle");
 
   const investigate = useMutation({
     mutationFn: async (ip: string) => {
@@ -298,6 +299,20 @@ export default function IpInvestigator() {
     } catch (e: any) {
       setBanState("error");
       toast({ title: "Errore ban", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const unbanFleet = async (ip: string) => {
+    setUnbanState("running");
+    try {
+      const res = await apiRequest("POST", "/api/fleet/ip-unban", { ip });
+      const data = await res.json();
+      setUnbanState("ok");
+      toast({ title: `Unbannato su ${data.ok} VPS`, description: data.fail > 0 ? `${data.fail} VPS falliti` : "IP rimosso da tutta la fleet" });
+      investigate.mutate(ip);
+    } catch (e: any) {
+      setUnbanState("error");
+      toast({ title: "Errore unban", description: e.message, variant: "destructive" });
     }
   };
 
@@ -433,10 +448,10 @@ export default function IpInvestigator() {
               </CardHeader>
               <CardContent className="space-y-3">
                 {result.totalVps > 0 && (
-                  <div className="flex gap-3">
+                  <div className="flex flex-wrap gap-3">
                     <Button
                       variant="destructive"
-                      disabled={banState === "running" || isFullyBanned === true}
+                      disabled={banState === "running" || unbanState === "running" || isFullyBanned === true}
                       onClick={() => banFleet(result.ip)}
                       className="gap-1.5"
                     >
@@ -448,6 +463,21 @@ export default function IpInvestigator() {
                         <ShieldBan className="w-4 h-4" />
                       )}
                       {isFullyBanned ? "Già bannato" : "Banna fleet"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={unbanState === "running" || banState === "running" || bannedVpsCount === 0}
+                      onClick={() => unbanFleet(result.ip)}
+                      className="gap-1.5 border-orange-500/40 text-orange-400 hover:bg-orange-500/10"
+                    >
+                      {unbanState === "running" ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : unbanState === "ok" ? (
+                        <CheckCircle2 className="w-4 h-4" />
+                      ) : (
+                        <Unlock className="w-4 h-4" />
+                      )}
+                      Unban fleet
                     </Button>
                     <Button variant="outline" onClick={() => investigate.mutate(result.ip)} disabled={investigate.isPending} className="gap-1.5">
                       <RefreshCw className={`w-4 h-4 ${investigate.isPending ? "animate-spin" : ""}`} />
