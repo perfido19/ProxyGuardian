@@ -88,7 +88,7 @@ export default function VpsDetail() {
   const [activeTab, setActiveTab] = useState("services");
   const [antiIptvSearch, setAntiIptvSearch] = useState("");
   const [logIp, setLogIp] = useState<string | null>(null);
-  const [logBanType, setLogBanType] = useState<"nginx_access" | "fail2ban">("nginx_access");
+  const [logBanType, setLogBanType] = useState<"nginx_access" | "fail2ban">("fail2ban");
   const [ruleForm, setRuleForm] = useState({ target: "DROP", protocol: "all", source: "", dport: "", position: "append" });
 
   useEffect(() => {
@@ -690,7 +690,7 @@ export default function VpsDetail() {
                               <TableCell className="text-sm text-muted-foreground">{new Date(item.banTime).toLocaleString("it-IT")}</TableCell>
                               <TableCell className="text-right">
                                 <div className="flex items-center justify-end gap-1">
-                                  <Button size="sm" variant={isExpanded ? "secondary" : "ghost"} onClick={() => { setLogIp(isExpanded ? null : item.ip); setLogBanType("nginx_access"); }}>
+                                  <Button size="sm" variant={isExpanded ? "secondary" : "ghost"} onClick={() => { setLogIp(isExpanded ? null : item.ip); setLogBanType("fail2ban"); }}>
                                     <FileText className="w-4 h-4 mr-1" />Log
                                   </Button>
                                   <Button size="sm" variant="ghost" onClick={() => unbanMutation.mutate({ ip: item.ip, jail: item.jail })} disabled={unbanMutation.isPending}>
@@ -708,8 +708,8 @@ export default function VpsDetail() {
                                 <div className="px-4 py-3 bg-muted/30 space-y-2">
                                   <div className="flex items-center gap-2">
                                     <span className="text-xs text-muted-foreground font-mono font-medium">{item.ip}</span>
-                                    <Button size="sm" variant={logBanType === "nginx_access" ? "secondary" : "ghost"} className="h-6 px-2 text-xs" onClick={() => setLogBanType("nginx_access")}>nginx</Button>
                                     <Button size="sm" variant={logBanType === "fail2ban" ? "secondary" : "ghost"} className="h-6 px-2 text-xs" onClick={() => setLogBanType("fail2ban")}>fail2ban</Button>
+                                    <Button size="sm" variant={logBanType === "nginx_access" ? "secondary" : "ghost"} className="h-6 px-2 text-xs" onClick={() => setLogBanType("nginx_access")}>nginx</Button>
                                   </div>
                                   {banLogLoading ? (
                                     <div className="text-xs text-muted-foreground">Caricamento...</div>
