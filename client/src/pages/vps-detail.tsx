@@ -17,7 +17,7 @@ import {
   ArrowLeft, RefreshCw, Server, Shield, Activity,
   HardDrive, Cpu, MemoryStick, CheckCircle, XCircle,
   Play, Square, RotateCw, ShieldOff, Wifi, WifiOff,
-  FileText, Settings, Save, AlertTriangle, Search, Plus, Trash2, Network, Radio, ArrowUpCircle,
+  FileText, Settings, Save, AlertTriangle, Search, Plus, Trash2, Network, Radio, ArrowUpCircle, ExternalLink,
 } from "lucide-react";
 import { IpCell } from "@/components/ip-cell";
 import { useIpBatch } from "@/hooks/use-ip-batch";
@@ -693,6 +693,11 @@ export default function VpsDetail() {
                                   <Button size="sm" variant={isExpanded ? "secondary" : "ghost"} onClick={() => { setLogIp(isExpanded ? null : item.ip); setLogBanType("fail2ban"); }}>
                                     <FileText className="w-4 h-4 mr-1" />Log
                                   </Button>
+                                  <Link href={`/ip-investigator?ip=${item.ip}`}>
+                                    <Button size="sm" variant="ghost">
+                                      <ExternalLink className="w-4 h-4 mr-1" />Investiga
+                                    </Button>
+                                  </Link>
                                   <Button size="sm" variant="ghost" onClick={() => unbanMutation.mutate({ ip: item.ip, jail: item.jail })} disabled={unbanMutation.isPending}>
                                     <ShieldOff className="w-4 h-4 mr-1" />Unban
                                   </Button>

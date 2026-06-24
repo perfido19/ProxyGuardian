@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearch } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -269,6 +270,7 @@ function MainBansSection() {
 
 export default function IpInvestigator() {
   const { toast } = useToast();
+  const search = useSearch();
   const [ipInput, setIpInput] = useState("");
   const [result, setResult] = useState<InvestigateResult | null>(null);
   const [expandedVps, setExpandedVps] = useState<string | null>(null);
@@ -287,6 +289,15 @@ export default function IpInvestigator() {
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
+
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const ip = params.get("ip");
+    if (ip && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+      setIpInput(ip);
+      investigate.mutate(ip);
+    }
+  }, []);
 
   const banFleet = async (ip: string) => {
     setBanState("running");
