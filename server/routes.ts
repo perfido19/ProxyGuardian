@@ -556,8 +556,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!vps) return res.status(404).json({ error: "VPS non trovato" });
     if (vps.lastStatus === "offline") return res.status(502).json({ error: "VPS offline" });
     const proxyPath = "/" + (req.params as any)[0];
+    const rawQuery = req.url.includes("?") ? req.url.substring(req.url.indexOf("?")) : "";
     const timeout = SLOW_PATHS.includes(proxyPath) ? SLOW_REQUEST_TIMEOUT : undefined;
-    try { res.json(await agentGet(vps, proxyPath, timeout)); }
+    try { res.json(await agentGet(vps, proxyPath + rawQuery, timeout)); }
     catch (e: any) { res.status(502).json({ error: e.message }); }
   });
   app.post("/api/vps/:id/proxy/*", requireAuth, requireOperator, async (req, res) => {
