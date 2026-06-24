@@ -87,6 +87,8 @@ export default function VpsDetail() {
   const [showAddRule, setShowAddRule] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("services");
   const [antiIptvSearch, setAntiIptvSearch] = useState("");
+  const [logIp, setLogIp] = useState<string | null>(null);
+  const [logBanType, setLogBanType] = useState<"nginx_access" | "fail2ban">("nginx_access");
   const [ruleForm, setRuleForm] = useState({ target: "DROP", protocol: "all", source: "", dport: "", position: "append" });
 
   useEffect(() => {
@@ -426,6 +428,17 @@ export default function VpsDetail() {
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
+  const { data: banLog, isLoading: banLogLoading } = useQuery<{ entries: { id: number; message: string }[] }>({
+    queryKey: [`vps-${id}-ban-log-${logIp}-${logBanType}`],
+    queryFn: async () => {
+      const params = new URLSearchParams({ q: logIp!, type: logBanType, lines: "100" });
+      const r = await apiRequest("GET", proxy(`/api/grep?${params}`));
+      return r.json();
+    },
+    enabled: !!logIp && !!vps,
+    staleTime: 30000,
+  });
+
   useIpBatch((bannedIps || []).map(b => b.ip));
 
   if (!vpsList) return <LoadingState message="Caricamento..." />;
@@ -668,18 +681,52 @@ export default function VpsDetail() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredBannedIps.map((item, i) => (
-                          <TableRow key={i}>
-                            <TableCell><IpCell ip={item.ip} deferFetch /></TableCell>
-                            <TableCell><Badge variant="outline">{item.jail}</Badge></TableCell>
-                            <TableCell className="text-sm text-muted-foreground">{new Date(item.banTime).toLocaleString("it-IT")}</TableCell>
-                            <TableCell className="text-right">
-                              <Button size="sm" variant="ghost" onClick={() => unbanMutation.mutate({ ip: item.ip, jail: item.jail })} disabled={unbanMutation.isPending}>
-                                <ShieldOff className="w-4 h-4 mr-1" />Unban
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                        {filteredBannedIps.flatMap((item, i) => {
+                          const isExpanded = logIp === item.ip;
+                          const mainRow = (
+                            <TableRow key={`row-${i}`}>
+                              <TableCell><IpCell ip={item.ip} deferFetch /></TableCell>
+                              <TableCell><Badge variant="outline">{item.jail}</Badge></TableCell>
+                              <TableCell className="text-sm text-muted-foreground">{new Date(item.banTime).toLocaleString("it-IT")}</TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <Button size="sm" variant={isExpanded ? "secondary" : "ghost"} onClick={() => { setLogIp(isExpanded ? null : item.ip); setLogBanType("nginx_access"); }}>
+                                    <FileText className="w-4 h-4 mr-1" />Log
+                                  </Button>
+                                  <Button size="sm" variant="ghost" onClick={() => unbanMutation.mutate({ ip: item.ip, jail: item.jail })} disabled={unbanMutation.isPending}>
+                                    <ShieldOff className="w-4 h-4 mr-1" />Unban
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                          if (!isExpanded) return [mainRow];
+                          return [
+                            mainRow,
+                            <TableRow key={`log-${i}`}>
+                              <TableCell colSpan={4} className="p-0">
+                                <div className="px-4 py-3 bg-muted/30 space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground font-mono font-medium">{item.ip}</span>
+                                    <Button size="sm" variant={logBanType === "nginx_access" ? "secondary" : "ghost"} className="h-6 px-2 text-xs" onClick={() => setLogBanType("nginx_access")}>nginx</Button>
+                                    <Button size="sm" variant={logBanType === "fail2ban" ? "secondary" : "ghost"} className="h-6 px-2 text-xs" onClick={() => setLogBanType("fail2ban")}>fail2ban</Button>
+                                  </div>
+                                  {banLogLoading ? (
+                                    <div className="text-xs text-muted-foreground">Caricamento...</div>
+                                  ) : (banLog?.entries || []).length === 0 ? (
+                                    <div className="text-xs text-muted-foreground">Nessun log trovato per {item.ip}</div>
+                                  ) : (
+                                    <div className="bg-black/50 rounded p-2 font-mono text-[10px] max-h-52 overflow-y-auto space-y-0.5">
+                                      {banLog!.entries.map((e, j) => (
+                                        <div key={j} className="break-all text-green-400/80">{e.message}</div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ];
+                        })}
                       </TableBody>
                     </Table>
                   </div>

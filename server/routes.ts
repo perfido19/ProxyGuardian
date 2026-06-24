@@ -1053,7 +1053,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter((v): v is any => !!v);
     const results = await Promise.allSettled(vpsList.map(async (vps) => {
       try {
-        await agentPost(vps, "/api/unban", { ip, jail: "iptv_ban" });
+        await agentPost(vps, "/api/unban", { ip, jail: "anti-iptv" });
         return { vpsId: vps.id, vpsName: vps.name, ok: true };
       } catch (e: any) { return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message }; }
     }));
