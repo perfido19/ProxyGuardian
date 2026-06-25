@@ -1698,6 +1698,67 @@ app.post("/api/security/stats/refresh", async (_req, res) => {
   }
 });
 
+// ─── CrowdSec ────────────────────────────────────────────────────────────────
+
+app.get("/api/crowdsec/status", async (_req, res) => {
+  try {
+    var installed = await runCmd("which cscli >/dev/null 2>&1 && echo yes || echo no");
+    if (installed.stdout.trim() !== "yes") {
+      res.json({ installed: false });
+      return;
+    }
+    var svc = await runCmd("systemctl is-active crowdsec 2>/dev/null || echo inactive");
+    var bouncer = await runCmd("systemctl is-active crowdsec-firewall-bouncer 2>/dev/null || echo inactive");
+    res.json({
+      installed: true,
+      crowdsecActive: svc.stdout.trim() === "active",
+      bouncerActive: bouncer.stdout.trim() === "active",
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/crowdsec/decisions", async (_req, res) => {
+  try {
+    var r = await runCmd("sudo cscli decisions list -o json 2>/dev/null || echo '[]'");
+    var raw = r.stdout.trim();
+    var decisions = [];
+    try { decisions = JSON.parse(raw); } catch { decisions = []; }
+    if (!Array.isArray(decisions)) decisions = [];
+    res.json(decisions);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/crowdsec/alerts", async (_req, res) => {
+  try {
+    var r = await runCmd("sudo cscli alerts list -o json 2>/dev/null || echo '[]'");
+    var raw = r.stdout.trim();
+    var alerts = [];
+    try { alerts = JSON.parse(raw); } catch { alerts = []; }
+    if (!Array.isArray(alerts)) alerts = [];
+    res.json(alerts);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/crowdsec/unban", async (req, res) => {
+  try {
+    var ip = typeof req.body.ip === "string" ? req.body.ip.trim() : "";
+    if (!/^[0-9a-fA-F.:\/]{1,43}$/.test(ip)) {
+      res.status(400).json({ error: "Invalid IP" });
+      return;
+    }
+    var r = await runCmd("sudo cscli decisions delete --ip " + ip + " 2>&1 || true");
+    res.json({ ok: true, output: r.stdout.trim() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Background loops ─────────────────────────────────────────────────────────
 
 const lastServiceRestart: Record<string, number> = {};

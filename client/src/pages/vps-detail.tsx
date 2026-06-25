@@ -39,6 +39,8 @@ interface NetbirdPeer { name: string; ip: string; latency: string; connected: bo
 interface NetbirdStatus { running: boolean; connected: boolean; ip: string | null; peers: NetbirdPeer[]; }
 interface AntiIptvBan { ip: string; date: string; usernames: string[]; active: boolean; }
 interface AntiIptvData { entries: AntiIptvBan[]; activeCount: number; }
+interface CrowdSecStatus { installed: boolean; crowdsecActive: boolean; bouncerActive: boolean; }
+interface CrowdSecDecision { id: number; origin: string; scenario: string; scope: string; value: string; type: string; duration: string; created_at?: string; until?: string; }
 
 const REFETCH = 60000;
 
@@ -87,6 +89,7 @@ export default function VpsDetail() {
   const [showAddRule, setShowAddRule] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("services");
   const [antiIptvSearch, setAntiIptvSearch] = useState("");
+  const [crowdSecSearch, setCrowdSecSearch] = useState("");
   const [logIp, setLogIp] = useState<string | null>(null);
   const [logBanType, setLogBanType] = useState<"nginx_access" | "fail2ban">("fail2ban");
   const [ruleForm, setRuleForm] = useState({ target: "DROP", protocol: "all", source: "", dport: "", position: "append" });
@@ -169,6 +172,20 @@ export default function VpsDetail() {
     queryKey: [`vps-${id}-anti-iptv`],
     queryFn: async () => { const r = await apiRequest("GET", proxy("/api/anti-iptv/banned")); return r.json(); },
     enabled: !!vps && activeTab === "anti-iptv",
+    refetchInterval: 30000,
+  });
+
+  const { data: crowdSecStatus, refetch: refetchCrowdSecStatus } = useQuery<CrowdSecStatus>({
+    queryKey: [`vps-${id}-crowdsec-status`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/crowdsec/status")); return r.json(); },
+    enabled: !!vps && activeTab === "crowdsec",
+    refetchInterval: REFETCH,
+  });
+
+  const { data: crowdSecDecisions, isLoading: crowdSecLoading, refetch: refetchCrowdSec } = useQuery<CrowdSecDecision[]>({
+    queryKey: [`vps-${id}-crowdsec-decisions`],
+    queryFn: async () => { const r = await apiRequest("GET", proxy("/api/crowdsec/decisions")); return r.json(); },
+    enabled: !!vps && activeTab === "crowdsec" && (crowdSecStatus?.installed ?? false),
     refetchInterval: 30000,
   });
 
@@ -288,6 +305,15 @@ export default function VpsDetail() {
       toast({ title: "Log pulito", description: `${data.removed} entry scadute rimosse, ${data.kept} mantenute` });
     },
     onError: (e: any) => toast({ title: "Errore cleanup", description: e.message, variant: "destructive" }),
+  });
+
+  const unbanCrowdSecMutation = useMutation({
+    mutationFn: async (ip: string) => {
+      const r = await apiRequest("POST", proxy("/api/crowdsec/unban"), { ip });
+      return r.json();
+    },
+    onSuccess: () => { refetchCrowdSec(); toast({ title: "Decisione CrowdSec rimossa" }); },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
   const nginxTestMutation = useMutation({
@@ -534,6 +560,8 @@ export default function VpsDetail() {
             <TabsTrigger value="netbird">NetBird</TabsTrigger>
             <TabsTrigger value="anti-iptv">
               Anti-IPTV {antiIptv && antiIptv.activeCount > 0 ? <span className="ml-1 bg-destructive text-white text-xs rounded-full px-1.5">{antiIptv.activeCount}</span> : ""}</TabsTrigger>
+            <TabsTrigger value="crowdsec">
+              CrowdSec {crowdSecDecisions && crowdSecDecisions.length > 0 ? <span className="ml-1 bg-destructive text-white text-xs rounded-full px-1.5">{crowdSecDecisions.length}</span> : ""}</TabsTrigger>
           </TabsList>
         </div>
 
@@ -1441,6 +1469,111 @@ export default function VpsDetail() {
               </Card>
             );
           })()}
+        </TabsContent>
+
+        <TabsContent value="crowdsec" className="pt-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />CrowdSec</CardTitle>
+                  <CardDescription>
+                    {!crowdSecStatus?.installed
+                      ? "Non installato su questo VPS"
+                      : `${crowdSecDecisions?.length ?? 0} decisioni attive · bouncer ${crowdSecStatus.bouncerActive ? "attivo" : "inattivo"}`}
+                  </CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => { refetchCrowdSecStatus(); refetchCrowdSec(); }}>
+                    <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {crowdSecStatus && (
+                <div className="flex gap-3 flex-wrap">
+                  <Badge variant={crowdSecStatus.installed ? "default" : "secondary"}>
+                    {crowdSecStatus.installed ? "Installato" : "Non installato"}
+                  </Badge>
+                  {crowdSecStatus.installed && (
+                    <>
+                      <Badge variant={crowdSecStatus.crowdsecActive ? "default" : "destructive"} className={crowdSecStatus.crowdsecActive ? "bg-green-600 text-white" : ""}>
+                        daemon {crowdSecStatus.crowdsecActive ? "attivo" : "inattivo"}
+                      </Badge>
+                      <Badge variant={crowdSecStatus.bouncerActive ? "default" : "destructive"} className={crowdSecStatus.bouncerActive ? "bg-green-600 text-white" : ""}>
+                        bouncer {crowdSecStatus.bouncerActive ? "attivo" : "inattivo"}
+                      </Badge>
+                    </>
+                  )}
+                </div>
+              )}
+              {crowdSecStatus?.installed && (
+                <>
+                  {crowdSecLoading ? <LoadingState message="Caricamento decisioni..." /> : (
+                    <>
+                      {(crowdSecDecisions?.length ?? 0) > 0 && (
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            placeholder="Cerca IP o scenario..."
+                            value={crowdSecSearch}
+                            onChange={e => setCrowdSecSearch(e.target.value)}
+                            className="pl-8"
+                          />
+                        </div>
+                      )}
+                      {!crowdSecDecisions?.length ? (
+                        <p className="text-center text-muted-foreground py-8">Nessuna decisione attiva</p>
+                      ) : (
+                        <div className="border rounded-md overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>IP / Valore</TableHead>
+                                <TableHead>Scenario</TableHead>
+                                <TableHead>Origine</TableHead>
+                                <TableHead>Tipo</TableHead>
+                                <TableHead>Scadenza</TableHead>
+                                <TableHead className="text-right">Azioni</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {(crowdSecDecisions ?? [])
+                                .filter(d => {
+                                  if (!crowdSecSearch) return true;
+                                  const q = crowdSecSearch.toLowerCase();
+                                  return d.value.includes(q) || (d.scenario || "").toLowerCase().includes(q);
+                                })
+                                .map((d) => (
+                                  <TableRow key={d.id}>
+                                    <TableCell><IpCell ip={d.value} deferFetch /></TableCell>
+                                    <TableCell className="text-xs font-mono text-muted-foreground max-w-[200px] truncate" title={d.scenario}>{d.scenario}</TableCell>
+                                    <TableCell><Badge variant="outline" className="text-xs">{d.origin}</Badge></TableCell>
+                                    <TableCell><Badge className="bg-destructive text-white text-xs">{d.type}</Badge></TableCell>
+                                    <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{d.duration || d.until || "—"}</TableCell>
+                                    <TableCell className="text-right">
+                                      <Button size="sm" variant="ghost" onClick={() => unbanCrowdSecMutation.mutate(d.value)} disabled={unbanCrowdSecMutation.isPending}>
+                                        <ShieldOff className="w-4 h-4 mr-1" />Sblocca
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+              {crowdSecStatus && !crowdSecStatus.installed && (
+                <p className="text-muted-foreground text-sm py-4">
+                  CrowdSec non è installato su questo VPS. Abilitalo nel deploy script per i nuovi VPS.
+                </p>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>

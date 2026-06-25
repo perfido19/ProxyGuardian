@@ -32,6 +32,7 @@ export default function DeployVps() {
   const [embeddedConfigs, setEmbeddedConfigs] = useState<Record<string, boolean>>({});
   const [installAsnBlock, setInstallAsnBlock] = useState(true);
   const [installAntiIptv, setInstallAntiIptv] = useState(false);
+  const [installCrowdSec, setInstallCrowdSec] = useState(false);
 
   const handleGenerate = async () => {
     if (!vpsName.trim()) {
@@ -49,6 +50,7 @@ export default function DeployVps() {
         proxyPort: parseInt(proxyPort) || 8880,
         installAsnBlock,
         installAntiIptv,
+        installCrowdSec,
       });
       const data = await res.json();
       setScript(data.script);
@@ -171,7 +173,7 @@ export default function DeployVps() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-lg border p-4 bg-muted/20">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 rounded-lg border p-4 bg-muted/20">
               <label className="flex items-start gap-3 cursor-pointer">
                 <Checkbox checked={installAsnBlock} onCheckedChange={checked => setInstallAsnBlock(checked === true)} />
                 <div className="space-y-1">
@@ -187,6 +189,15 @@ export default function DeployVps() {
                   <div className="text-sm font-medium leading-none">Installa Anti-IPTV</div>
                   <p className="text-xs text-muted-foreground">
                     Selezione per installare lo script anti-IPTV.
+                  </p>
+                </div>
+              </label>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <Checkbox checked={installCrowdSec} onCheckedChange={checked => setInstallCrowdSec(checked === true)} />
+                <div className="space-y-1">
+                  <div className="text-sm font-medium leading-none">Installa CrowdSec</div>
+                  <p className="text-xs text-muted-foreground">
+                    IDS/IPS con blocklist community e coordinamento fleet.
                   </p>
                 </div>
               </label>

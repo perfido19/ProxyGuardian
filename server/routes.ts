@@ -1446,6 +1446,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "unknown", vpsName: "unknown", ok: false, newVersion: null, error: "rejected" }));
   });
 
+  // ─── Fleet CrowdSec ───────────────────────────────────────────────────────────
+
+  app.get("/api/fleet/crowdsec/summary", requireAuth, async (_req, res) => {
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.all(vpsList.map(async (vps) => {
+      try {
+        const [statusData, decisionsData] = await Promise.allSettled([
+          agentGet(vps, "/api/crowdsec/status", 5000),
+          agentGet(vps, "/api/crowdsec/decisions", 8000),
+        ]);
+        const status = statusData.status === "fulfilled" ? statusData.value : null;
+        const decisions = decisionsData.status === "fulfilled" && Array.isArray(decisionsData.value)
+          ? decisionsData.value
+          : [];
+        return {
+          vpsId: vps.id,
+          vpsName: vps.name,
+          installed: status?.installed ?? false,
+          crowdsecActive: status?.crowdsecActive ?? false,
+          bouncerActive: status?.bouncerActive ?? false,
+          activeDecisions: decisions.length,
+          error: null,
+        };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, installed: false, crowdsecActive: false, bouncerActive: false, activeDecisions: 0, error: e.message };
+      }
+    }));
+    res.json(results);
+  });
+
   // ─── Fleet Logrotate ───────────────────────────────────────────────────────────
 
   app.get("/api/fleet/logrotate/status", requireAuth, async (_req, res) => {
@@ -1545,6 +1575,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const pPort = parseDeployPort(req.body?.proxyPort, 8880);
       const installAsnBlock = parseDeployToggle(req.body?.installAsnBlock, true);
       const installAntiIptv = parseDeployToggle(req.body?.installAntiIptv, false);
+      const installCrowdSec = parseDeployToggle(req.body?.installCrowdSec, false);
 
       if (!rawName || !DEPLOY_VPS_NAME_RE.test(rawName)) {
         return res.status(400).json({ error: "Nome VPS non valido: usa solo lettere, numeri, spazi e .()_-" });
@@ -1714,6 +1745,31 @@ else
 fi`
         : `# ── ASN BLOCK ──────────────────────────────────────────────
 info "ASN block disabilitato per questo deploy"`;
+
+      const crowdSecSetup = installCrowdSec
+        ? `# ── CROWDSEC ────────────────────────────────────────────────
+info "Installing CrowdSec..."
+curl -fsSL https://packagecloud.io/crowdsec/crowdsec/gpgkey | gpg --dearmor -o /usr/share/keyrings/crowdsec-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/ubuntu \$(lsb_release -cs) main" > /etc/apt/sources.list.d/crowdsec.list
+apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y crowdsec crowdsec-firewall-bouncer-iptables
+
+cscli hub update >/dev/null 2>&1 || true
+cscli collections install crowdsecurity/nginx >/dev/null 2>&1 || warn "Collection nginx parziale"
+cscli scenarios install crowdsecurity/nginx-req-limit-exceeded >/dev/null 2>&1 || true
+cscli scenarios install crowdsecurity/http-probing >/dev/null 2>&1 || true
+
+echo "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli *" > /etc/sudoers.d/pgagent-crowdsec
+chmod 440 /etc/sudoers.d/pgagent-crowdsec
+visudo -c >/dev/null 2>&1 || warn "Verifica manuale /etc/sudoers.d/pgagent-crowdsec"
+
+systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
+systemctl restart crowdsec
+sleep 2
+systemctl restart crowdsec-firewall-bouncer || warn "crowdsec-firewall-bouncer restart fallito"
+ok "CrowdSec installato (firewall bouncer iptables)"`
+        : `# ── CROWDSEC ────────────────────────────────────────────────
+info "CrowdSec disabilitato per questo deploy"`;
 
       const antiIptvSetup = installAntiIptv
         ? `# ── ANTI-IPTV ──────────────────────────────────────────────
@@ -1971,6 +2027,8 @@ ${optionalPackageSetup}
 ${asnBlockSetup}
 
 ${antiIptvSetup}
+
+${crowdSecSetup}
 
 # ── SYSCTL ─────────────────────────────────────────────────
 info "Applying sysctl settings..."
@@ -2268,6 +2326,7 @@ fi
           proxyPort: pPort,
           installAsnBlock,
           installAntiIptv,
+          installCrowdSec,
         },
         embeddedConfigs: {
           countryWhitelist: !!countryWhitelist && countryWhitelist.trim().length > 0,
@@ -2277,6 +2336,7 @@ fi
           ipWhitelist: !!ipWhitelist && ipWhitelist.trim().length > 0,
           exclusionIp: !!exclusionIp && exclusionIp.trim().length > 0,
           antiIptv: installAntiIptv,
+          crowdSec: installCrowdSec,
           modsecRelaxed: true,
           nginxOptimized: true,
         },
