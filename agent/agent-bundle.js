@@ -26061,13 +26061,24 @@ app.get("/api/crowdsec/decisions", async (_req, res) => {
   try {
     var r = await runCmd("sudo cscli decisions list -o json 2>/dev/null || echo '[]'");
     var raw = r.stdout.trim();
-    var decisions = [];
+    var parsed = [];
     try {
-      decisions = JSON.parse(raw);
+      parsed = JSON.parse(raw);
     } catch {
-      decisions = [];
+      parsed = [];
     }
-    if (!Array.isArray(decisions)) decisions = [];
+    if (!Array.isArray(parsed)) parsed = [];
+    var decisions = [];
+    for (var i = 0; i < parsed.length; i++) {
+      var item = parsed[i];
+      if (item && Array.isArray(item.decisions) && item.decisions.length > 0) {
+        for (var j = 0; j < item.decisions.length; j++) {
+          decisions.push(item.decisions[j]);
+        }
+      } else if (item && item.value && item.type) {
+        decisions.push(item);
+      }
+    }
     res.json(decisions);
   } catch (err) {
     res.status(500).json({ error: err.message });

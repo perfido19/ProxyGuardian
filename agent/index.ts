@@ -1738,9 +1738,21 @@ app.get("/api/crowdsec/decisions", async (_req, res) => {
   try {
     var r = await runCmd("sudo cscli decisions list -o json 2>/dev/null || echo '[]'");
     var raw = r.stdout.trim();
-    var decisions = [];
-    try { decisions = JSON.parse(raw); } catch { decisions = []; }
-    if (!Array.isArray(decisions)) decisions = [];
+    var parsed: any[] = [];
+    try { parsed = JSON.parse(raw); } catch { parsed = []; }
+    if (!Array.isArray(parsed)) parsed = [];
+    // cscli v1.7+ returns alert objects with nested decisions[] — flatten them
+    var decisions: any[] = [];
+    for (var i = 0; i < parsed.length; i++) {
+      var item = parsed[i];
+      if (item && Array.isArray(item.decisions) && item.decisions.length > 0) {
+        for (var j = 0; j < item.decisions.length; j++) {
+          decisions.push(item.decisions[j]);
+        }
+      } else if (item && item.value && item.type) {
+        decisions.push(item);
+      }
+    }
     res.json(decisions);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
