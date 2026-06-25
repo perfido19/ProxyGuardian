@@ -1,0 +1,12 @@
+type: leaky
+name: local/iptv-panel-api-probe
+description: "IP probes panel_api.php — admin panel reconnaissance (blocked by nginx, always 403)"
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.request contains 'panel_api.php' and evt.Parsed.status == '403'"
+groupby: "evt.Parsed.remote_addr"
+capacity: 2
+leakspeed: "5m"
+blackhole: "1h"
+labels:
+  service: http
+  type: scan
+  remediation: true

@@ -1,0 +1,12 @@
+type: leaky
+name: local/iptv-xplugin-403
+description: "IP receives repeated 403 on xplugin.php — banned/invalid account keeps hammering"
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.status == '403' and evt.Parsed.request contains 'xplugin.php'"
+groupby: "evt.Parsed.remote_addr"
+capacity: 5
+leakspeed: "2m"
+blackhole: "5m"
+labels:
+  service: http
+  type: bruteforce
+  remediation: true

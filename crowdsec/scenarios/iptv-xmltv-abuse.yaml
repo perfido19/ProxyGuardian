@@ -1,0 +1,12 @@
+type: leaky
+name: local/iptv-xmltv-abuse
+description: "IP downloads xmltv.php too frequently — EPG scraping or automated playlist grabber"
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.request contains 'xmltv.php' and evt.Parsed.status == '200'"
+groupby: "evt.Parsed.remote_addr"
+capacity: 4
+leakspeed: "10m"
+blackhole: "1h"
+labels:
+  service: http
+  type: scraping
+  remediation: true

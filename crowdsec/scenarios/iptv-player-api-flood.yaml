@@ -1,0 +1,12 @@
+type: leaky
+name: local/iptv-player-api-flood
+description: "IP makes excessive player_api.php or get.php requests — M3U scraper or multi-account credential sharing"
+filter: "evt.Meta.log_type == 'http_access-log' and (evt.Parsed.request contains 'player_api.php' or evt.Parsed.request contains '/get.php')"
+groupby: "evt.Parsed.remote_addr"
+capacity: 50
+leakspeed: "6s"
+blackhole: "15m"
+labels:
+  service: http
+  type: flooding
+  remediation: true

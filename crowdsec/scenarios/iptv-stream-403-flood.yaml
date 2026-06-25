@@ -1,0 +1,12 @@
+type: leaky
+name: local/iptv-stream-403-flood
+description: "IP floods /live/ or /series/ paths getting 403 — unauthorized client retrying aggressively"
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.status == '403' and (evt.Parsed.request startsWith '/live/' or evt.Parsed.request startsWith '/series/')"
+groupby: "evt.Parsed.remote_addr"
+capacity: 15
+leakspeed: "10s"
+blackhole: "10m"
+labels:
+  service: http
+  type: flooding
+  remediation: true
