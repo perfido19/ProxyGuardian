@@ -1,0 +1,14 @@
+filter: "evt.Line.Labels.type == 'anti_iptv'"
+onsuccess: next_stage
+name: local/anti-iptv-logs
+nodes:
+  - grok:
+      pattern: "IP BANNATO: %{IP:source_ip}"
+      apply_on: Line.Raw
+    statics:
+      - meta: log_type
+        value: anti_iptv_ban
+      - meta: source_ip
+        expression: evt.Parsed.source_ip
+      - target: evt.StrTime
+        expression: evt.Line.Time.String()

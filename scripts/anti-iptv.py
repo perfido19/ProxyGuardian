@@ -223,6 +223,16 @@ def ban_ip(ip: str) -> None:
     run_cmd("ipset", "add", BAN_SET, ip, "timeout", str(BAN_SECONDS))
     ban_cache[ip] = (True, int(time.time()))
 
+    duration_h = max(1, BAN_SECONDS // 3600)
+    run_cmd(
+        "cscli", "decisions", "add",
+        "--ip", ip,
+        "--duration", f"{duration_h}h",
+        "--reason", "local/anti-iptv-credential-sharing",
+        "--type", "ban",
+        check=False,
+    )
+
     run_cmd("conntrack", "-D", "-s", ip, check=False)
     log_ban_to_file(ip)
     clear_ip_state(ip)
