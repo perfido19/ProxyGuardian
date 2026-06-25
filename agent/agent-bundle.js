@@ -26087,6 +26087,58 @@ app.post("/api/crowdsec/unban", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.post("/api/crowdsec/install", async (_req, res) => {
+  var steps = [];
+  function addStep(label, result) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? void 0 : (result.stderr || result.stdout).slice(0, 300) });
+  }
+  try {
+    var gpg = await runCmd(
+      "curl -fsSL https://packagecloud.io/crowdsec/crowdsec/gpgkey | gpg --dearmor -o /usr/share/keyrings/crowdsec-archive-keyring.gpg",
+      3e4
+    );
+    addStep("import GPG key", gpg);
+    var distro = await runCmd("lsb_release -cs 2>/dev/null || echo jammy");
+    var dist = distro.stdout.trim() || "jammy";
+    var repo = await runCmd(
+      "echo 'deb [signed-by=/usr/share/keyrings/crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/ubuntu " + dist + " main' > /etc/apt/sources.list.d/crowdsec.list",
+      5e3
+    );
+    addStep("add apt repo", repo);
+    var aptUpd = await runCmd("apt-get update -qq 2>&1", 6e4);
+    addStep("apt-get update", aptUpd);
+    var aptInst = await runCmd(
+      "DEBIAN_FRONTEND=noninteractive apt-get install -y crowdsec crowdsec-firewall-bouncer-iptables 2>&1",
+      12e4
+    );
+    addStep("apt-get install crowdsec", aptInst);
+    var hubUpd = await runCmd("cscli hub update >/dev/null 2>&1 || true", 3e4);
+    addStep("cscli hub update", { ...hubUpd, ok: true });
+    var col = await runCmd("cscli collections install crowdsecurity/nginx 2>&1 || true", 3e4);
+    addStep("install nginx collection", { ...col, ok: true });
+    var sc1 = await runCmd("cscli scenarios install crowdsecurity/nginx-req-limit-exceeded 2>&1 || true", 15e3);
+    addStep("install scenario req-limit", { ...sc1, ok: true });
+    var sc2 = await runCmd("cscli scenarios install crowdsecurity/http-probing 2>&1 || true", 15e3);
+    addStep("install scenario http-probing", { ...sc2, ok: true });
+    var sudoers = await runCmd(
+      "echo 'pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli *' > /etc/sudoers.d/pgagent-crowdsec && chmod 440 /etc/sudoers.d/pgagent-crowdsec && visudo -c >/dev/null 2>&1",
+      5e3
+    );
+    addStep("configure sudoers", sudoers);
+    var enableSvc = await runCmd("systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true", 5e3);
+    addStep("enable services", { ...enableSvc, ok: true });
+    var restartCs = await runCmd("systemctl restart crowdsec 2>&1", 15e3);
+    addStep("start crowdsec", restartCs);
+    var restartBouncer = await runCmd("systemctl restart crowdsec-firewall-bouncer 2>&1 || true", 1e4);
+    addStep("start bouncer", { ...restartBouncer, ok: true });
+    var allOk = steps.every(function(s) {
+      return s.ok;
+    });
+    res.json({ ok: allOk, steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message, steps });
+  }
+});
 var lastServiceRestart = {};
 var AUTOHEAL_COOLDOWN = 10 * 60 * 1e3;
 async function autoHealLoop() {

@@ -108,6 +108,7 @@ export const SLOW_PATHS = [
   "/api/banned-ips",
   "/api/fail2ban/jails",
   "/api/system/antibrute-stats",
+  "/api/crowdsec/install",
 ];
 
 async function agentFetch(vps: VpsConfig, path: string, options: RequestInit = {}, timeout = REQUEST_TIMEOUT): Promise<Response> {

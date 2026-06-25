@@ -316,6 +316,24 @@ export default function VpsDetail() {
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
+  const installCrowdSecMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", proxy("/api/crowdsec/install"), {});
+      return r.json() as Promise<{ ok: boolean; steps: Array<{ step: string; ok: boolean; error?: string }> }>;
+    },
+    onSuccess: (data) => {
+      refetchCrowdSecStatus();
+      refetchCrowdSec();
+      const failed = data.steps.filter(s => !s.ok);
+      if (data.ok) {
+        toast({ title: "CrowdSec installato", description: `${data.steps.length} step completati` });
+      } else {
+        toast({ title: "Installazione parziale", description: failed.map(s => s.step).join(", "), variant: "destructive" });
+      }
+    },
+    onError: (e: any) => toast({ title: "Errore installazione CrowdSec", description: e.message, variant: "destructive" }),
+  });
+
   const nginxTestMutation = useMutation({
     mutationFn: async () => {
       const r = await apiRequest("POST", proxy("/api/nginx/test"), {});
@@ -1484,6 +1502,11 @@ export default function VpsDetail() {
                   </CardDescription>
                 </div>
                 <div className="flex gap-2">
+                  {crowdSecStatus && !crowdSecStatus.installed && (
+                    <Button size="sm" onClick={() => installCrowdSecMutation.mutate()} disabled={installCrowdSecMutation.isPending}>
+                      {installCrowdSecMutation.isPending ? <LoadingState message="Installazione..." /> : <><Shield className="w-4 h-4 mr-1" />Installa CrowdSec</>}
+                    </Button>
+                  )}
                   <Button size="sm" variant="outline" onClick={() => { refetchCrowdSecStatus(); refetchCrowdSec(); }}>
                     <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
                   </Button>
