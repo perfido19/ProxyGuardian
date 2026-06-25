@@ -1,0 +1,12 @@
+type: leaky
+name: local/iptv-get-php-bulk-download
+description: "Scraping M3U: /get.php chiamato troppo spesso (scarica lista canali completa a loop)"
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.request contains 'get.php' and evt.Parsed.status == '200'"
+groupby: "evt.Parsed.remote_addr"
+capacity: 5
+leakspeed: "20m"
+blackhole: "2h"
+labels:
+  service: http
+  type: scraping
+  remediation: true

@@ -1,0 +1,12 @@
+type: leaky
+name: local/iptv-404-probe
+description: "Path enumeration: IP riceve molti 404 — scanner che enumera path"
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.status == '404'"
+groupby: "evt.Parsed.remote_addr"
+capacity: 10
+leakspeed: "30s"
+blackhole: "6h"
+labels:
+  service: http
+  type: scan
+  remediation: true

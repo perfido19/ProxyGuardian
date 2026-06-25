@@ -1,0 +1,12 @@
+type: leaky
+name: local/iptv-vod-scraper
+description: "VOD catalog scraping: IP scarica /movie/ e /series/ a ritmo sostenuto (dump catalogo pirata)"
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.status == '302' and (evt.Parsed.request startsWith '/movie/' or evt.Parsed.request startsWith '/series/')"
+groupby: "evt.Parsed.remote_addr"
+capacity: 100
+leakspeed: "5s"
+blackhole: "1h"
+labels:
+  service: http
+  type: scraping
+  remediation: true
