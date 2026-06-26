@@ -1604,6 +1604,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "", vpsName: "", metrics: null, error: "rejected" }));
   });
 
+  // ─── Fleet Sudoers Update ────────────────────────────────────────────────────
+
+  app.post("/api/fleet/update-sudoers", requireAuth, requireAdmin, async (req, res) => {
+    const { vpsIds } = req.body;
+    const all = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const targets = vpsIds && Array.isArray(vpsIds)
+      ? all.filter(v => vpsIds.includes(v.id))
+      : all;
+    const results = await Promise.allSettled(targets.map(async (vps) => {
+      try {
+        const r = await agentPost(vps, "/api/system/update-sudoers", {}, 15000);
+        return { vpsId: vps.id, vpsName: vps.name, ok: r.ok === true };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message };
+      }
+    }));
+    res.json(results.map(r => r.status === "fulfilled" ? r.value : { ok: false }));
+  });
+
   // ─── Fleet Logrotate ───────────────────────────────────────────────────────────
 
   app.get("/api/fleet/logrotate/status", requireAuth, async (_req, res) => {

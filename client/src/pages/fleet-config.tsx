@@ -76,6 +76,7 @@ export default function FleetConfig() {
   const [cleanupApplying, setCleanupApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [logrotateApplying, setLogrotateApplying] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [netbirdUpdating, setNetbirdUpdating] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
+  const [sudoersUpdating, setSudoersUpdating] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
 
   const { data: statuses, isLoading, refetch, isFetching } = useQuery<VpsNginxStatus[]>({
@@ -259,6 +260,24 @@ export default function FleetConfig() {
     }
   };
 
+  const applySudoersUpdate = async () => {
+    setSudoersUpdating(true);
+    try {
+      const res = await apiRequest("POST", "/api/fleet/update-sudoers", {});
+      const results: Array<{ vpsId: string; vpsName: string; ok: boolean; error?: string }> = await res.json();
+      const failed = results.filter(r => !r.ok);
+      if (failed.length === 0) {
+        toast({ title: "Sudoers aggiornati", description: `${results.length} VPS aggiornati` });
+      } else {
+        toast({ title: "Update parziale", description: `${failed.length} VPS falliti: ${failed.map(f => f.vpsName).join(", ")}`, variant: "destructive" });
+      }
+    } catch (e: any) {
+      toast({ title: "Errore sudoers", description: e.message, variant: "destructive" });
+    } finally {
+      setSudoersUpdating(false);
+    }
+  };
+
   const installSshKey = async (vpsId: string) => {
     setInstalling(prev => ({ ...prev, [vpsId]: "running" }));
     try {
@@ -355,6 +374,16 @@ export default function FleetConfig() {
             <Radio className="w-3.5 h-3.5" />
             Aggiorna NetBird
             <span className="font-mono text-[10px] opacity-70">{NETBIRD_TARGET}</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={applySudoersUpdate}
+            disabled={sudoersUpdating}
+            className="gap-1.5"
+          >
+            <Key className="w-3.5 h-3.5" />
+            {sudoersUpdating ? "Aggiornamento..." : "Aggiorna Sudoers fleet"}
           </Button>
         </div>
       </div>
