@@ -761,7 +761,6 @@ AS45117      # Ishans Network
 AS138096     # PT INFORMASI NUSANTARA TEKNOLOGI
 AS208859     # FACT LTD
 AS132559     # Gatik Business Solutions
-AS43289      # Trabia SRL
 AS19114      # Otecel S.A.
 AS21574      # Century Telecom Ltda
 AS270062     # FIBERNET TV SAS
