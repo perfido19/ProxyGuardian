@@ -2438,6 +2438,20 @@ ${installAntiIptv ? `systemctl enable anti-iptv >/dev/null 2>&1 || true
 systemctl restart anti-iptv >/dev/null 2>&1 || true` : ""}
 sleep 2
 
+# ── Firewall: lockdown porta agente (solo dashboard NetBird) ──────────────────
+DASHBOARD_NETBIRD_IP="100.116.132.180"
+if command -v iptables &>/dev/null; then
+  iptables -D INPUT -p tcp --dport "\$AGENT_PORT" -j DROP 2>/dev/null || true
+  iptables -D INPUT -p tcp --dport "\$AGENT_PORT" -j DROP 2>/dev/null || true
+  iptables -D INPUT -p tcp --dport "\$AGENT_PORT" -s "\$DASHBOARD_NETBIRD_IP" -j ACCEPT 2>/dev/null || true
+  iptables -D INPUT -p tcp --dport "\$AGENT_PORT" -s "\$DASHBOARD_NETBIRD_IP" -j ACCEPT 2>/dev/null || true
+  iptables -I INPUT 1 -p tcp --dport "\$AGENT_PORT" -j DROP
+  iptables -I INPUT 1 -p tcp --dport "\$AGENT_PORT" -s "\$DASHBOARD_NETBIRD_IP" -j ACCEPT
+  mkdir -p /etc/iptables
+  iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+  ok "Firewall: porta \$AGENT_PORT accessibile solo da \$DASHBOARD_NETBIRD_IP"
+fi
+
 echo ""
 echo -e "\${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
 echo -e "\${GREEN}   DEPLOY COMPLETATO ✓\${NC}"

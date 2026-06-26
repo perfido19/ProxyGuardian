@@ -37,6 +37,9 @@ else
   warn "NetBird non rilevato — agent in ascolto su 0.0.0.0 (proteggi la porta $AGENT_PORT con firewall!)"
 fi
 
+# IP NetBird dashboard (usato per il lockdown porta agente)
+DASHBOARD_NETBIRD_IP="${DASHBOARD_NETBIRD_IP:-100.116.132.180}"
+
 PUBLIC_IP=$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
 HOSTNAME=$(hostname -f 2>/dev/null || hostname)
 
@@ -231,6 +234,28 @@ systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null 2>&1
 systemctl restart "$SERVICE_NAME"
 sleep 2
+
+# ── Firewall: lockdown porta agente (solo dashboard) ─────────────────────────
+if command -v iptables &>/dev/null; then
+  # Rimuovi eventuali regole preesistenti sulla porta agente
+  iptables -D INPUT -p tcp --dport "$AGENT_PORT" -j DROP 2>/dev/null || true
+  iptables -D INPUT -p tcp --dport "$AGENT_PORT" -j DROP 2>/dev/null || true
+  iptables -D INPUT -p tcp --dport "$AGENT_PORT" -s "$DASHBOARD_NETBIRD_IP" -j ACCEPT 2>/dev/null || true
+  iptables -D INPUT -p tcp --dport "$AGENT_PORT" -s "$DASHBOARD_NETBIRD_IP" -j ACCEPT 2>/dev/null || true
+  # ACCEPT dashboard in pos 1, poi DROP tutto
+  iptables -I INPUT 1 -p tcp --dport "$AGENT_PORT" -j DROP
+  iptables -I INPUT 1 -p tcp --dport "$AGENT_PORT" -s "$DASHBOARD_NETBIRD_IP" -j ACCEPT
+  # Persisti regole
+  mkdir -p /etc/iptables
+  iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+  # Abilita iptables-persistent se disponibile
+  if dpkg -l iptables-persistent &>/dev/null 2>&1; then
+    systemctl enable netfilter-persistent 2>/dev/null || true
+  fi
+  ok "Firewall: porta $AGENT_PORT accessibile solo da $DASHBOARD_NETBIRD_IP"
+else
+  warn "iptables non disponibile — porta $AGENT_PORT non protetta"
+fi
 
 # ── NetBird watchdog (timer ogni 5min) ──────────────────────────────────────
 cat > /usr/local/sbin/netbird-watchdog.sh << 'WDEOF'
