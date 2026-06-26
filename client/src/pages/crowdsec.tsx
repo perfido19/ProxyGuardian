@@ -430,16 +430,17 @@ function MetricheTab() {
 
   const installedVps = (data || []).filter(g => !g.skipped && g.metrics);
 
-  // Aggregate bucket metrics across VPS
-  const bucketMap: Record<string, { poured: number; overflow: number; underflow: number; discard: number; vps: string[] }> = {};
+  // Aggregate scenario metrics across VPS (cscli metrics -o json uses key "scenarios")
+  const bucketMap: Record<string, { pour: number; overflow: number; underflow: number; instantiation: number; curr_count: number; vps: string[] }> = {};
   for (const group of installedVps) {
-    const buckets = group.metrics?.buckets || {};
-    for (const [scenario, stats] of Object.entries<any>(buckets)) {
-      if (!bucketMap[scenario]) bucketMap[scenario] = { poured: 0, overflow: 0, underflow: 0, discard: 0, vps: [] };
-      bucketMap[scenario].poured += stats.poured || 0;
+    const scenarios = group.metrics?.scenarios || {};
+    for (const [scenario, stats] of Object.entries<any>(scenarios)) {
+      if (!bucketMap[scenario]) bucketMap[scenario] = { pour: 0, overflow: 0, underflow: 0, instantiation: 0, curr_count: 0, vps: [] };
+      bucketMap[scenario].pour += stats.pour || 0;
       bucketMap[scenario].overflow += stats.overflow || 0;
       bucketMap[scenario].underflow += stats.underflow || 0;
-      bucketMap[scenario].discard += stats.discard || 0;
+      bucketMap[scenario].instantiation += stats.instantiation || 0;
+      bucketMap[scenario].curr_count += stats.curr_count || 0;
       if (!bucketMap[scenario].vps.includes(group.vpsName)) bucketMap[scenario].vps.push(group.vpsName);
     }
   }
@@ -467,10 +468,10 @@ function MetricheTab() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Scenario</TableHead>
-                  <TableHead className="text-right">Poured</TableHead>
+                  <TableHead className="text-right">Pour</TableHead>
                   <TableHead className="text-right">Overflow (ban)</TableHead>
                   <TableHead className="text-right">Underflow</TableHead>
-                  <TableHead className="text-right">Discard</TableHead>
+                  <TableHead className="text-right">Attivi</TableHead>
                   <TableHead>VPS</TableHead>
                 </TableRow>
               </TableHeader>
@@ -478,12 +479,12 @@ function MetricheTab() {
                 {buckets.map(([name, s]) => (
                   <TableRow key={name}>
                     <TableCell className="font-mono text-xs">{name}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{s.poured.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-mono text-sm">{s.pour.toLocaleString()}</TableCell>
                     <TableCell className={`text-right font-mono text-sm font-bold ${s.overflow > 0 ? "text-red-400" : "text-muted-foreground"}`}>
                       {s.overflow.toLocaleString()}
                     </TableCell>
                     <TableCell className="text-right font-mono text-sm text-muted-foreground">{s.underflow.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-sm text-muted-foreground">{s.discard.toLocaleString()}</TableCell>
+                    <TableCell className={`text-right font-mono text-sm ${s.curr_count > 0 ? "text-orange-400" : "text-muted-foreground"}`}>{s.curr_count}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{s.vps.join(", ")}</TableCell>
                   </TableRow>
                 ))}
@@ -505,8 +506,9 @@ function MetricheTab() {
                     {Object.entries<any>(acq).map(([src, stats]) => (
                       <div key={src} className="flex items-center gap-4 text-xs">
                         <span className="font-mono text-muted-foreground truncate max-w-[300px]" title={src}>{src}</span>
-                        <span className="ml-auto text-foreground">{(stats.events_read || 0).toLocaleString()} eventi</span>
-                        <span className="text-muted-foreground">{((stats.bytes_read || 0) / 1024 / 1024).toFixed(1)} MB</span>
+                        <span className="ml-auto text-foreground">{(stats.reads || 0).toLocaleString()} lette</span>
+                        <span className="text-green-500">{(stats.parsed || 0).toLocaleString()} parsed</span>
+                        <span className="text-muted-foreground">{(stats.unparsed || 0).toLocaleString()} unparsed</span>
                       </div>
                     ))}
                   </div>
