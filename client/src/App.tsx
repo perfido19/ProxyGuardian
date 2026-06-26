@@ -48,6 +48,7 @@ import SshConsole from "@/pages/ssh-console";
 import Logrotate from "@/pages/logrotate";
 import DeployVps from "@/pages/deploy-vps";
 import IpInvestigator from "@/pages/ip-investigator";
+import CrowdSec from "@/pages/crowdsec";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -159,6 +160,7 @@ function Router() {
       {user?.role === "admin" && <Route path="/logrotate" component={Logrotate} />}
       {user?.role === "admin" && <Route path="/deploy" component={DeployVps} />}
       <Route path="/ip-investigator" component={IpInvestigator} />
+      <Route path="/crowdsec" component={CrowdSec} />
       <Route component={NotFound} />
     </Switch>
   );

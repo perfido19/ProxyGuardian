@@ -9,8 +9,8 @@ import { open as openMaxMind, type Reader, validate as validateIp } from "maxmin
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
-import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import session from "express-session";
@@ -1474,6 +1474,134 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }));
     res.json(results);
+  });
+
+  // ─── Scenario management (server-side YAML files) ────────────────────────────
+
+  const SCENARIOS_DIR = join(process.cwd(), "crowdsec", "scenarios");
+
+  app.get("/api/crowdsec/scenarios", requireAuth, (_req, res) => {
+    try {
+      if (!existsSync(SCENARIOS_DIR)) return res.json([]);
+      const names = readdirSync(SCENARIOS_DIR)
+        .filter((f: string) => f.endsWith(".yaml") || f.endsWith(".yml"))
+        .map((f: string) => f.replace(/\.(yaml|yml)$/, ""));
+      const scenarios = names.map((name: string) => {
+        try {
+          const content = readFileSync(join(SCENARIOS_DIR, name + ".yaml"), "utf-8");
+          return { name, content };
+        } catch {
+          return { name, content: "" };
+        }
+      });
+      res.json(scenarios);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/crowdsec/scenarios/:name", requireAuth, (req, res) => {
+    const name = req.params.name;
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) return res.status(400).json({ error: "Invalid name" });
+    try {
+      const content = readFileSync(join(SCENARIOS_DIR, name + ".yaml"), "utf-8");
+      res.json({ name, content });
+    } catch (e: any) {
+      res.status(404).json({ error: "Scenario not found" });
+    }
+  });
+
+  app.post("/api/crowdsec/scenarios/:name", requireAuth, requireOperator, async (req, res) => {
+    const name = req.params.name;
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) return res.status(400).json({ error: "Invalid name" });
+    const content = typeof req.body.content === "string" ? req.body.content : "";
+    if (!content.trim()) return res.status(400).json({ error: "Content required" });
+    if (!existsSync(SCENARIOS_DIR)) mkdirSync(SCENARIOS_DIR, { recursive: true });
+    writeFileSync(join(SCENARIOS_DIR, name + ".yaml"), content, "utf-8");
+    // Deploy to all CrowdSec VPS
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const deployResults = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const status = await agentGet(vps, "/api/crowdsec/status", 5000);
+        if (!status.installed) return { vpsId: vps.id, vpsName: vps.name, ok: false, reason: "not installed" };
+        const r = await agentPost(vps, "/api/crowdsec/scenario", { name, content }, 15000);
+        return { vpsId: vps.id, vpsName: vps.name, ok: r.ok === true };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, reason: e.message };
+      }
+    }));
+    res.json({ saved: true, deploy: deployResults.map(r => r.status === "fulfilled" ? r.value : { ok: false }) });
+  });
+
+  app.delete("/api/crowdsec/scenarios/:name", requireAuth, requireOperator, async (req, res) => {
+    const name = req.params.name;
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) return res.status(400).json({ error: "Invalid name" });
+    const filePath = join(SCENARIOS_DIR, name + ".yaml");
+    if (existsSync(filePath)) {
+      try { unlinkSync(filePath); } catch { /* ignore */ }
+    }
+    // Undeploy from all CrowdSec VPS
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const deployResults = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const status = await agentGet(vps, "/api/crowdsec/status", 5000);
+        if (!status.installed) return { vpsId: vps.id, vpsName: vps.name, ok: false, reason: "not installed" };
+        const r = await agentDelete(vps, `/api/crowdsec/scenario/${name}`, 15000);
+        return { vpsId: vps.id, vpsName: vps.name, ok: r.ok === true };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, reason: e.message };
+      }
+    }));
+    res.json({ deleted: true, deploy: deployResults.map(r => r.status === "fulfilled" ? r.value : { ok: false }) });
+  });
+
+  app.get("/api/fleet/crowdsec/decisions", requireAuth, async (_req, res) => {
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const status = await agentGet(vps, "/api/crowdsec/status", 5000);
+        if (!status.installed) return { vpsId: vps.id, vpsName: vps.name, decisions: [], skipped: true };
+        const decisions = await agentGet(vps, "/api/crowdsec/decisions", 10000);
+        return { vpsId: vps.id, vpsName: vps.name, decisions: Array.isArray(decisions) ? decisions : [], skipped: false };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, decisions: [], error: e.message };
+      }
+    }));
+    res.json(results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "", vpsName: "", decisions: [], error: "rejected" }));
+  });
+
+  app.post("/api/fleet/crowdsec/unban", requireAuth, requireOperator, async (req, res) => {
+    const { ip } = req.body;
+    if (!ip || typeof ip !== "string" || !/^[0-9a-fA-F.:/]{1,43}$/.test(ip)) {
+      return res.status(400).json({ error: "IP non valido" });
+    }
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const status = await agentGet(vps, "/api/crowdsec/status", 5000);
+        if (!status.installed) return { vpsId: vps.id, vpsName: vps.name, ok: false, reason: "not installed" };
+        const r = await agentPost(vps, "/api/crowdsec/unban", { ip }, 10000);
+        return { vpsId: vps.id, vpsName: vps.name, ok: r.ok === true };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, reason: e.message };
+      }
+    }));
+    res.json(results.map(r => r.status === "fulfilled" ? r.value : { ok: false }));
+  });
+
+  app.get("/api/fleet/crowdsec/metrics", requireAuth, async (_req, res) => {
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const results = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const status = await agentGet(vps, "/api/crowdsec/status", 5000);
+        if (!status.installed) return { vpsId: vps.id, vpsName: vps.name, metrics: null, skipped: true };
+        const data = await agentGet(vps, "/api/crowdsec/metrics", 15000);
+        return { vpsId: vps.id, vpsName: vps.name, metrics: data.metrics || null, skipped: false };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, metrics: null, error: e.message };
+      }
+    }));
+    res.json(results.map(r => r.status === "fulfilled" ? r.value : { vpsId: "", vpsName: "", metrics: null, error: "rejected" }));
   });
 
   // ─── Fleet Logrotate ───────────────────────────────────────────────────────────

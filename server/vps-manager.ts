@@ -109,6 +109,7 @@ export const SLOW_PATHS = [
   "/api/fail2ban/jails",
   "/api/system/antibrute-stats",
   "/api/crowdsec/install",
+  "/api/crowdsec/metrics",
 ];
 
 async function agentFetch(vps: VpsConfig, path: string, options: RequestInit = {}, timeout = REQUEST_TIMEOUT): Promise<Response> {
@@ -131,6 +132,17 @@ export async function agentGet(vps: VpsConfig, path: string, timeout?: number): 
 
 export async function agentPost(vps: VpsConfig, path: string, body: any, timeout = REQUEST_TIMEOUT): Promise<any> {
   const res = await agentFetch(vps, path, { method: "POST", body: JSON.stringify(body) }, timeout);
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text;
+    try { const parsed = JSON.parse(text); msg = parsed.error || parsed.message || text; } catch {}
+    throw new Error(`${vps.name}: ${msg}`);
+  }
+  return res.json();
+}
+
+export async function agentDelete(vps: VpsConfig, path: string, timeout = REQUEST_TIMEOUT): Promise<any> {
+  const res = await agentFetch(vps, path, { method: "DELETE" }, timeout);
   if (!res.ok) {
     const text = await res.text();
     let msg = text;

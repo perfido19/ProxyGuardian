@@ -1786,6 +1786,61 @@ app.post("/api/crowdsec/unban", async (req, res) => {
   }
 });
 
+app.get("/api/crowdsec/metrics", async (_req, res) => {
+  try {
+    var installed = await runCmd("which cscli >/dev/null 2>&1 && echo yes || echo no");
+    if (installed.stdout.trim() !== "yes") {
+      res.json({ installed: false, buckets: {}, acquisition: {} });
+      return;
+    }
+    var r = await runCmd("sudo cscli metrics -o json 2>/dev/null || echo '{}'");
+    var raw = r.stdout.trim();
+    var metrics: any = {};
+    try { metrics = JSON.parse(raw); } catch { metrics = {}; }
+    res.json({ installed: true, metrics });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/crowdsec/scenario", async (req, res) => {
+  try {
+    var name = typeof req.body.name === "string" ? req.body.name.trim() : "";
+    var content = typeof req.body.content === "string" ? req.body.content : "";
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
+      res.status(400).json({ error: "Nome scenario non valido" });
+      return;
+    }
+    if (!content.trim()) {
+      res.status(400).json({ error: "Contenuto richiesto" });
+      return;
+    }
+    var scenarioPath = "/etc/crowdsec/scenarios/" + name + ".yaml";
+    await writeFile(scenarioPath, content, "utf-8");
+    var reload = await runCmd("sudo systemctl reload-or-restart crowdsec 2>&1 || sudo systemctl restart crowdsec 2>&1 || true");
+    res.json({ ok: true, path: scenarioPath, reload: reload.stdout.trim() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/crowdsec/scenario/:name", async (req, res) => {
+  try {
+    var name = req.params.name;
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
+      res.status(400).json({ error: "Nome scenario non valido" });
+      return;
+    }
+    var scenarioPath = "/etc/crowdsec/scenarios/" + name + ".yaml";
+    var { unlink } = await import("fs/promises");
+    try { await unlink(scenarioPath); } catch { /* already gone */ }
+    var reload = await runCmd("sudo systemctl reload-or-restart crowdsec 2>&1 || sudo systemctl restart crowdsec 2>&1 || true");
+    res.json({ ok: true, reload: reload.stdout.trim() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/crowdsec/install", async (_req, res) => {
   var steps: Array<{ step: string; ok: boolean; error?: string }> = [];
   function addStep(label: string, result: { ok: boolean; stderr: string; stdout: string }) {
