@@ -136,6 +136,8 @@ ProxyGuardian/
 - **Anti-IPTV main backend** (80.244.4.35): `MAX_USERNAME=6` (impostato 2026-06-20) — soglia più alta perché il main vede traffico aggregato cross-VPS con username diversi legittimi. Script Python `/usr/local/sbin/anti-iptv.py`, LOGFILE=`/home/xtreamcodes/iptv_xtream_codes/logs/main.access.log`. Servizio `anti-iptv.service` attivo e enabled. Chain `ANTI_IPTV` in posizione 1 INPUT.
 - **BanSync interval**: 60s (era 5min). Configurato in `startBanSyncPoller(60000)` in `server/routes.ts`.
 - **nginx rate limiting fleet**: zona `auth_slow` (`10r/m`) aggiunta nell'`http {}` block + `limit_req zone=auth_slow burst=5 nodelay` nel location `player_api.php|get.php|xmltv.php|panel_api.php` su tutti i 53 VPS. Zona esistente `login_api` (1r/s) rimane.
+- **NetBird P2P fleet (2026-06-28)**: tutti i 53 VPS aggiornati con `iptables -I INPUT -p udp --dport 51820 -j ACCEPT` + `iptables-save > /etc/iptables/rules.v4`. Senza questa regola il WireGuard handshake in ingresso veniva droppato dal DROP finale e NetBird cadeva su relay (latenza 390ms+). Con il fix: 56/56 peer P2P diretti (0 relay). **Ogni nuovo VPS deployato deve ricevere questa regola.**
+- **VPS 9.6GB disk (gruppo "rob" e alcuni "merc")**: disco si riempie per journal (`/var/log/journal`) e log xtreamcodes (`/opt/log/YYYYMMDD`). Pulizia periodica: `journalctl --vacuum-size=80M` e `find /opt/log -maxdepth 1 -type d -name "2026*" -mtime +30 -exec rm -rf {} +`.
 
 ## Endpoint Agent — Riferimento Rapido
 | Metodo | Path | Descrizione |
