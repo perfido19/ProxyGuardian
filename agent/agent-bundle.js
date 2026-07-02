@@ -24611,8 +24611,10 @@ app.get("/api/banned-ips", async (_req, res) => {
     const { stdout: jailList } = await runCmd("sudo fail2ban-client status 2>/dev/null | grep -i 'jail list' | cut -d: -f2");
     const jails = jailList.split(",").map((j) => j.trim()).filter(Boolean);
     const bannedIps = [];
-    for (const jail of jails) {
-      const { stdout } = await runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`);
+    const jailResults = await Promise.all(jails.map((jail) => runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`)));
+    for (let ji = 0; ji < jails.length; ji++) {
+      const jail = jails[ji];
+      const { stdout } = jailResults[ji];
       const listLine = stdout.split("\n").find((l) => /banned ip list/i.test(l)) || "";
       const ips = listLine.match(/\d+\.\d+\.\d+\.\d+/g) || [];
       for (const ip of ips) {
@@ -24680,8 +24682,8 @@ app.get("/api/stats", async (_req, res) => {
     const { stdout: jailList } = await runCmd("sudo fail2ban-client status 2>/dev/null | grep -i 'jail list' | cut -d: -f2 || echo ''");
     const jails = jailList.split(",").map((j) => j.trim()).filter(Boolean);
     let totalBans24h = 0;
-    for (const jail of jails) {
-      const { stdout } = await runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`);
+    const jailStatsResults = await Promise.all(jails.map((jail) => runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`)));
+    for (const { stdout } of jailStatsResults) {
       const match = stdout.match(/Currently banned:\s*(\d+)/i);
       if (match) totalBans24h += parseInt(match[1]);
     }
