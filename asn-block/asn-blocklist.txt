@@ -23,7 +23,6 @@ AS14618	     # Amazon.com
 AS62785 	 # Amazon.com Services LLC
 AS16509	     # AMAZON-02
 AS50360      # Tamatiya EOOD
-AS13335      # CLOUDFLARENET
 AS37963      # Hangzhou Alibaba Advertising Co.,Ltd.
 AS9318       # SK Broadband Co Ltd KOREA
 AS55990      # Huawei Cloud Service data center CHINA
@@ -124,13 +123,11 @@ AS9121       # Turk Telekom
 AS17676      # Softbank BB Corp.
 AS213220     # Delta Ltd
 AS8048       # CANTV Servicios, Venezuela
-AS20115      # CHARTER-20115
 AS7018       # ATT-INTERNET4
 AS22773      # ASN-CXA-ALL-CCI-22773-RDC
 AS4788       # TM Net, Internet Service Provider
 AS395954     # LEASEWEB-USA-LAX
 AS10796      # WC-10796-MIDWEST
-AS20001      # WC-20001-PACWEST
 AS11427      # TWC-11427-TEXAS
 AS33363      # BHN-33363
 AS328608     # Africa-on-Cloud-AS
@@ -386,7 +383,6 @@ AS202468     # Noyan Abr Arvan Co.
 AS26210      # AXS Bolivia S. A.
 AS28624      # PROVEDORA CMA INTERNET LTDA
 AS138915     # Kaopu Cloud HK Limited
-AS327934     # Tunisie-Telecom
 AS328672     # Silicon-Sky-Consulting-AS
 AS40065      # CNSERVERS
 AS33588      # BRESNAN-33588
@@ -1099,7 +1095,7 @@ AS135872     # GTPL KCBPL BROADBAND PVT LTD
 AS268661     # INFRANET FIBRA
 AS269338     # jato net telecomunicaçoes ltda
 AS262773     # PROXXIMA TELECOMUNICACOES SA
-AS61716      # Rede Tupiniquim de Comunicação Ltda - ME
+AS61716      # Rede Tupiniquim de Comunicação Ltda - Me
 AS265960     # FNETCOM TELECOMUNICACAO E INFORMATICA LTDA
 AS268860     # 74JC INFORMATICA EIRELI - ME
 AS22927      # Telefonica de Argentina
@@ -1144,7 +1140,6 @@ AS51559      # Netinternet Bilisim Teknolojileri AS
 AS263508     # SIMNET TELECOMUNICACOES LTDA
 AS266020     # ICLICK TELECOM
 AS44533      # Davydov Vladimir Dmitrievich
-AS1257       # Tele2 Sverige AB
 AS18144      # Enecom,Inc.
 AS263979     # CYBERNETRS LTDA - ME
 AS262725     # RG SILVEIRA LTDA
@@ -1232,7 +1227,6 @@ AS134760     # Chinanet HE
 AS137693     # Chinanet GX
 AS196854     # LLC Isatel Tajikistan
 AS266181     # Golden Link
-AS41564      # Fiber Grid
 AS28573      # NET Serviços de Comunicação S.A.
 AS139923     # Fastmos Co Limited
 AS8346       # SONATEL-AS Autonomous System
@@ -1262,3 +1256,549 @@ AS212512     # Detai Prosperous Technologies Limited
 ASAS208637   # 4 Vendeta Ltd
 AS215439     # PLAY2GO INTERNATIONAL LIMITED · Ace Data Centers II, LLC
 AS50188      # KOLNET Sp. z o.o.
+AS34534      # FBW NETWORKS SAS
+AS197450     # Sunucun Bilgi Iletisim Teknolojileri ve Ticaret Ltd. Sti.
+AS16347      # ADISTA SAS
+AS395965     # Carrytel
+AS32613      # Leaseweb Canada Inc.
+AS214094     # Association Osservatorio Nessuno ODV
+AS5617       # Orange Polska Spolka Akcyjna
+AS44051      # Fornex Hosting S.L.
+AS39521      # Tngnet B.v.
+AS44620      # Netlen Internet Hizmetleri Ltd. Sti.
+AS58002      # JSC Svyazinform
+AS57529      # JSC GTNT
+AS206300     # YUNYOO LTD
+AS200897     # JORMUNGAND LLC
+AS216154     # CLODO CLOUD SERVICE CO. L.L.C
+AS48287      # JSC RU-CENTER
+AS206888     # HanMing HK Limited
+AS35100      # Patrik Lagerman
+AS30081      # CacheFly
+AS2914       # NTT America, Inc.
+AS35594      # Reliable Software, Ltd.
+AS44382      # Fiba Cloud Operation Company, LLC
+AS204339     # FIRST SERVER LIMITED
+AS22611      # InMotion Hosting, Inc.
+AS206134     # NEKOBYTE INTERNATIONAL LIMITED
+AS45177      # Devoli
+AS131965     # Xserver Inc.
+AS214640     # Hostup AB
+AS14670      # WHG Hosting Services Ltd
+AS211507     # Julian Achter
+AS400992     # ZhouyiSat Communications
+AS134291     # TECHNO FAQ DIGITAL MEDIA
+AS27284      # Fourplex Telecom LLC
+AS38917      # INTERCOMTEL Limited Company
+AS197695     # Domain names registrar REG.RU, Ltd
+AS34602      # MEGASVYAZ LLC
+AS202422     # G-Core Labs S.A.
+AS34351      # MTS PJSC
+AS26383      # Baxet Group Inc.
+AS202831     # Ablaykhan Akylbekovich Sharimov
+AS37061      # Safaricom Limited
+AS46783      # EASY LINK LLC
+AS395793     # Arisk Communications inc.
+AS55803      # Hostopia Australia Web Pty Ltd
+AS210546     # CHSL ONE LTD
+AS215730     # H2NEXUS LTD
+AS214882     # Hadi Santosa
+AS205673     # Lanet Network Ltd
+AS135407     # Trans World Enterprise Services (Private) Limited
+AS62068      # SpectraIP B.V.
+AS209373     # SWISSNET LLC
+AS41560      # UGMK-Telecom LLC
+AS26527      # LightWave Networks
+AS51561      # ICUK Computing Services Limited
+AS25521      # Industrial Media Network LLC
+AS213702     # QWINS LTD
+AS17970      # SKYBroadband SKYCable Corporation
+AS979        # NetLab Global
+AS17306      # JAB Wireless, INC.
+AS37545      # Burundi Backbone System SM
+AS8641       # BACKBONE AS of Nauka-Svyaz
+AS203273     # NetCrafters OU
+AS11272      # CSpire Fiber
+AS197897     # 5KOM OOD
+AS397966     # ReadyDedis, LLC
+AS9123       # JSC TIMEWEB
+AS9002       # RETN Limited
+AS47242      # Host SpA
+AS212706     # LIVI HOSTING LTD
+AS7684       # SAKURA Internet Inc.
+AS131275     # Logon Broadband Pvt. Limited
+AS205431     # HostLab LLC
+AS29182      # JSC IOT
+AS202252     # OCKNet GmbH
+AS214941     # UPCELL TELEKOMUNIKASYON LIMITED SIRKETI
+AS20860      # IOMART CLOUD SERVICES LIMITED
+AS136258     # BrainStorm Network, Inc
+AS197499     #  PE Pivovar Aleksej Nikolaevich
+AS28974      # ACTIVE OPERATIONS LLC
+AS216334     # New Hosting Technologies LLC
+AS209693     # OC NETWORKS LIMITED
+AS43022      # Seech-Infocom Ltd.
+AS42610      # OJSC National Cable Networks
+AS48014      # AlbHost SH.P.K.
+AS201178     # Euronet Telekomunikasyon A.S.
+AS44851      # BG Retel AS
+AS51570      # JSC ER-Telecom Holding
+AS48790      # INVICOM Sp. z o.o.
+AS63473      # HostHatch, LLC
+AS50926      # AXARNET COMUNICACIONES, S.L.
+AS216045     # HASAN YAVUZ
+AS139659     # LUCIDACLOUD LIMITED
+AS56564      # Webmaster Agency Ltd
+AS1836       # green.ch AG
+AS12418      # Quantum CJSC
+AS399629     # BL Networks
+AS209854     # Cyberzone S.A.
+AS36002      # GoMami Networks
+AS209272     # Alviva Holding Limited
+AS211619     # MAXKO d.o.o.
+AS214677     # Matteo Martelloni trading as DELUXHOST
+AS212165     # Alex Group LLC
+AS1177       # TIPZOR MEDIA SRL
+AS57251      # LLC Intelcom
+AS43641      # SOLLUTIUM EU Sp z.o.o.
+AS212477     # RoyaleHosting BV
+AS8764       # Telia Lietuva, AB
+AS50616      # ONE ALBANIA SH.A.One Telecommunications Albania
+AS198983     # Joseph Hofmann trading as Tornado Datacenter GmbH & Co. KG
+AS31082      # Valor Information Technologies, S.L.
+AS214743     # Cogento Backbone Limited
+AS154321     # CORENET CLOUD SDN. BHD.
+AS199834     # IP Solus Inc
+AS2852       # CESNET z.s.p.o.
+AS3212       # Telemach Slovenija d.o.o.
+AS329101     # Icon Fiber Solutions ltd
+AS214707     # RCell LLC
+AS50053      # VDSka hosting
+AS48763      # LLC SMART CENTER
+AS43991      # Voronezh Telecom LLC
+AS47583      # Hostinger International Limited
+AS134926     # Micro Hosting Private Limited
+AS4618       # Internet Thailand Company Limited
+AS27882      # Telefónica Celular de Bolivia S.A.
+AS21409      # Ikoula Net SAS
+AS398704     # STACKS INC
+AS14956      # RouterHosting LLC
+AS4621       # UNINET-TH
+AS29355      # Kcell JSC
+AS245        # PRC-AS
+AS2601       # RADIOLINK-AS
+AS2702       # INTERSERVE
+AS3563       # PILOT-ASN
+AS6060       # MAGI-NET-GW
+AS6186       # GARCIA-ASN
+AS6207       # BUNNY-COMMUNICATIONS
+AS6729       # DEMENIN-AS
+AS7411       # WINTERSTORM
+AS7857       # EMPIRE2-ASN
+AS7907       # NETWORD-CORP
+AS8129       # CAIWIRELESS
+AS8649       # Webtraffic
+AS9164       # R-TEL-AS
+AS11938     # ABANTU
+AS13875     # AS13875-MX-FIBER
+AS17447     # NET4-IN
+AS17612     # RINNAI-AS-KR
+AS17994     # SPARK-AS-AP
+AS20724     # GLOBALTELEHOST
+AS23865     # NETINNOVATIONLLC-AS-AP
+AS24426     # CNNIC-SINO-I
+AS24544     # LAWSCLOUDINFRASTRUCTURELIMITED-AS-HK
+AS25288     # LIR-UKRAINE-AS
+AS25862     # ISNX
+AS26173     # King s_Cross_N.V.
+AS26561     # NETRIDGE
+AS26701     # AADS
+AS26833     # ETCC
+AS27463     # AS-GLOBALTELEHOST
+AS30490     # ETHRN
+AS31561     # NINE-IX
+AS33042     # NETIFACE-TORONTO
+AS33993     # UFO-AS
+AS34985     # NETINNOVATIONLLC-AS-AP
+AS35478     # DATACENTER
+AS35624     # SILVERSTAR-AS
+AS35830     # BTTGROUP-AS
+AS36680     # NETIFACELLC
+AS37707     # SEY-IX-PEERING
+AS38149     # RATELINDONET-AS-ID
+AS38337     # CNNIC-NTNet
+AS38871     # InfoMove-HK-AP
+AS38946     # SMARTMEDIANETWORK-1-AS
+AS39600     # BUNNY-TECHNOLOGY-LLC
+AS39720     # MANILICH-AS
+AS40193     # AS-TRIT
+AS40665     # SPCTR
+AS40963     # PRAID-AS
+AS41155     # orbitdc
+AS42192     # India
+AS42419     # TAVRIA-TRANSSERVIS-AS
+AS42505     # R-TEL-AS
+AS42881     # Kontrast
+AS43444     # BNS-AS
+AS43463     # BST-LT
+AS43481     # PITLINE-AS
+AS43613     # SOWA
+AS43668     # BIGNET-AS
+AS43743     # KRUIZUA-AS
+AS44208     # Farahoosh
+AS44386     # OZON-AS
+AS44801     # R-TEL-AS
+AS46370     # GRANDWEB
+AS46664     # VDI-NETWORK
+AS47105     # as-vd
+AS47893     # R-TEL-AS
+AS47926     # LIRUKRAINE
+AS47945     # R-TEL-AS
+AS48198     # AVTOTRANS-EURO-AS
+AS48214     # GAJNET-CDN-IRAN
+AS48589     # TIGER
+AS48693     # NTSERVICE-AS
+AS49418     # AS-NETSHIELD
+AS49443     # Contrust-Solutions
+AS50236     # Vertexlink_Communications
+AS51045     # DEMENIN-AS
+AS51124     # ITPLUS-UA-AS
+AS51381     # ELITETEAM-PEERING-AZ1
+AS51447      # ROOTLAYERNET
+AS51511      # TRADE-EXPRESS-AS
+AS51722      # AS-PIXOOF
+AS52209      # LORDVPSNLNETWORKNL
+AS53958      # BART-BM
+AS54497      # LHWEBTECH-AS
+AS54801      # ZILLION-NETWORK
+AS55154      # MADGEN-01
+AS55748      # MORSE-JP
+AS56291      # ACE-AS-AP
+AS56362      # PITLINE-AS
+AS56584      # INTER-IX
+AS56873      # ELITETEAM-ANTIDDOS
+AS57100      # WEBNETWORK
+AS57415      # R-TEL-AS
+AS58192      # DDOS-PROTECTION-GAJNET
+AS58854      # kaopy
+AS58961      # OPENIP-AS
+AS59651      # AS-QualityNetwork
+AS59683      # iridatelecom
+AS60223      # NETIFACE-AS
+AS60842      # HUIZE-HOLDINGS-AS
+AS60974      # Naicoms
+AS61003      # GLOBALTELEHOST
+AS61879      # América_Latina_Educacional_Adm._e_Serviços_LTDA
+AS62206      # PITLINE-AS
+AS62380      # BUNEA-HIGH-PEER-NETWORK
+AS62563      # AS-GLOBALTELEHOST
+AS63881      # MDI-AS-ID
+AS131388     # HTS-AS-VN
+AS131750     # SUFIANET-AS-ID
+AS131831     # NEXONKOREA-AS-KR
+AS132574     # AI-1720-132574
+AS132827     # GATEWAY-AS-AP
+AS132930     # HERBALVE-AS-IN
+AS133320     # ALPHA-AS-AP
+AS133488     # SERVICE-AS-AP
+AS133668     # INFOBB-AS-IN
+AS133692     # Fastnet-AS-IN
+AS133731     # CLOUDIE-AS-AP
+AS133994     # RMHOSPITALITY-AS-IN
+AS134121     # RAINBOW-HK
+AS134176     # CLOUDIE-AS-AP
+AS134196     # ANYUN-INTERNET-TECHNOLOGY-HK-CO-LIMITED
+AS135271     # GLOBTELGROUP-AS-AP
+AS135752     # EVOKEDS-AS
+AS136367     # HERBZOOT-AS-IN
+AS136923     # WIT-AS-AP
+AS137156     # BLUEB-AS
+AS138749     # ROBUSTED-AS-IN
+AS138808     # INTECHMANDIRI-AS-ID
+AS140125     # CYBERAUTICS-AS-IN
+AS140129     # MSBSPL-AS-IN
+AS140155     # HOSTNET-AS-IN
+AS140184     # SFNSNPL-AS
+AS140208     # OBHOST-AS-AP
+AS140666     # ADPL-AS-AP
+AS140787     # LAMA-AS-VN
+AS140869     # TGL-AS-AP
+AS140941     # FULLTIMEHOSTING-AS-AP
+AS141333     # ROCKETGP-AS-IN
+AS141567     # INTERSP-AS-IN
+AS141803     # INVISION-AS-IN
+AS141835     # IMPACT-AS-IN
+AS141836     # IMAGINE-AS-IN
+AS141853     # SRJNH-AS-IN
+AS141875     # ZEN4-AS-IN
+AS142062     # HQTC-AS-AP
+AS142430     # DIGIVPS-AS-AP
+AS142519     # SMTPM-AS-IN
+AS142622     # DIL-AS-AP
+AS146887     # MAINT-IN-IRINN
+AS147211     # PRAGATHI-AS-IN
+AS147269     # DATAWINGS-AS-IN
+AS147287     # DATAPARA1-AS-IN
+AS147291     # KHALIDGROUP-AS-AP
+AS149181     # BHAGWAT-AS-IN
+AS149196     # ZAIFCOMP-AS-IN
+AS149197     # GIRDHARI-AS-IN
+AS149208     # RAKESSEN-AS-IN
+AS149242     # ANANYAA-AS-IN
+AS149286     # NETINNOVATIONLLC-AS-AP
+AS150030     # ALGO-AS-IN
+AS150036     # HEEBS-AS-IN
+AS150082     # GARGASSO-AS-IN
+AS150091     # VEDIMA-AS-IN
+AS150100     # ARKCOM-AS-IN
+AS150101     # YASHITS-AS-IN
+AS150102     # ITSERVICE-AS-IN
+AS150604     # GLOBALSOL-AS-IN
+AS150813     # MINHTHOIPC-VN
+AS150860     # JETCLOUD-VN
+AS151604     # WEBWIRESOLUTIONS-AS-AP
+AS152149     # AHAMEDIT-AS-AP
+AS152170     # SAJIBWEBHOST-AS-AP
+AS152192     # GMTECH-AS-AP
+AS152194     # CTGSERVERLIMITED-AS-AP
+AS152327     # RASUWEBHOST-AS-AP
+AS152485     # HOSTER-AS-IN
+AS152486     # NTSHIELD-AS-IN
+AS154177     # LIGHT4-AS-AP
+AS154206     # CDN1COM-AS-AP
+AS197170     # TECHTIES-AS
+AS197176     # KylieCDN-AS
+AS197555     # SMARTMIETEN
+AS197769     # VPSDEDICATED-AS
+AS198071     # BERCHSOLUTIONS-AS
+AS198189     # STEALTHVM
+AS198571     # PlainProxies
+AS198926     # Tajook
+AS198981     # NETSHIELD-BYOIP
+AS199052     # AS-AQUAHOST
+AS199420     # FLYGROUP-AS
+AS199467     # Hossein_Zangooei
+AS199639     # Matej
+AS200010     # OLFE
+AS200130     # SIMON-MARIACHER
+AS200593     # PROSPERO-AS
+AS200699     # DATASHIELD_NL
+AS201292     # AS-AGRO
+AS201380     # ALFABISNES-AS
+AS201572     # EKO-INICIATIVE-AS
+AS201626     # PODILLIA-AS
+AS201738     # UFO-TECHNOLOGIES-LIMITED
+AS201813     # CoreLink
+AS201824     # stat-cons-as
+AS201836     # GARANT-AS
+AS202144     # CHEMPIR-AS
+AS202171     # TORERO-AS
+AS202226     # GreatFlower
+AS202267     # DOBROSVIT-AS
+AS202302     # NETH-AS
+AS202318     # EKOINICIATIVE-AS
+AS202383     # EL-K-STIL-AS
+AS202388     # CLUB-NADIYA-AS
+AS202412     # OMEGATECH-AS
+AS202481     # REAPOLIS-AS
+AS203044     # telepatiya
+AS203120     # GTGL
+AS203861     # MITEFLUX-AS
+AS203950     # Contrust-Solutions
+AS204490     # ASKONTEL
+AS204502     # LIVELA-AS
+AS204552     # POPILNYANET-AS
+AS204610     # IMASOFTWARE-AS
+AS204794     # Contrust-Solutions
+AS204868     # Contrust-Solutions
+AS204872     # Contrust-Solutions
+AS205083     # DATASHIELD_FILTER
+AS205397     # AS-69HOST
+AS205486     # LKGF
+AS205745     # Contrust-Solutions
+AS205759     # GHOSTYNETWORKS
+AS205770     # Contrust-Solutions
+AS205775     # neoncorenetworks
+AS205884     # Contrust-Solutions
+AS206005     # Contrust-Solutions
+AS206127     # Contrust-Solutions
+AS206305     # Contrust-Solutions
+AS206340     # AMPERAURA-AS
+AS206413     # Contrust-Solutions
+AS206535     # Contrust-Solutions
+AS206560     # Contrust-Solutions
+AS206582     # Contrust-Solutions
+AS206590     # Contrust-Solutions
+AS206623     # Contrust-Solutions
+AS206644     # Contrust-Solutions
+AS206728     # MEDIALAND-AS
+AS206744     # Contrust-Solutions
+AS206750     # Contrust-Solutions
+AS206831     # THOMASDUBOIS
+AS207184     # TELCHAK-AS
+AS207566     # LD007-AS
+AS207957     # ServHost-AS
+AS207986     # OZON-BANK-AS
+AS208198     # Eylul-NET
+AS208241     # RADIO-LINK-PLUS
+AS208317     # Contrust-Solutions
+AS208525     # AIRULIMITED
+AS208846     # ATOM3-AS
+AS209121     # NOVYTSKA-AS
+AS209274     # Kraken-Network-ISP
+AS209375     # Contrust-Solutions
+AS209425     # KOI-AS
+AS209868     # Contrust-Solutions
+AS209883     # Contrust-Solutions
+AS209889     # Contrust-Solutions
+AS209896     # LexistarAllianceLTD
+AS209944     # EJX
+AS209946     # ALINDA-AS
+AS209961     # Contrust-Solutions
+AS209963     # Contrust-Solutions
+AS209982     # Contrust-Solutions
+AS210006     # ASKZ
+AS210240     # NTC-AS
+AS210316     # ELEKOMS-AS
+AS210530     # ip2con
+AS210654     # SRVN-AS
+AS210703     # FIRSTBYTE-AS
+AS210705     # RapidoServer
+AS210707     # Company
+AS210714     # WORLD-NET-ISP-Provider
+AS210756     # EdgeCenterLLC
+AS210848     # TK-NET
+AS210950     # ERISHENNYA-ASN
+AS211066     # RYZEHOSTING-TRADING
+AS211121     # India
+AS211199     # LIPTEL-AS
+AS211238     # DCYBER
+AS211659     # STIMUL-AS
+AS211663     # GALEON-AS
+AS211762     # REGION40
+AS211922     # IPDISTR
+AS211955     # NOTBADHOSTING
+AS212017     # CUBILLO
+AS212283     # ROZA-AS
+AS212448     # turkbil
+AS212622     # LIVECOMM-AS
+AS212651     # D-CONECT-AS
+AS212666     # ipv4-net
+AS212867     # SIPALTO
+AS213035     # AS-SERVERION
+AS213137     # Contrust
+AS213200     # FZink
+AS213355     # HGN-AS
+AS213373     # IPCONNECT
+AS213388     # IIC-AS
+AS213389     # ASPODOLSK
+AS213441     # SLAYER-AS
+AS213448     # NETIFACEUK-AS
+AS213474     # HOMELINE-AS
+AS213511     # VSVK
+AS213652     # Sunucun-Cloud
+AS213725     # UK-03AI
+AS213753     # interedge
+AS213791     # XeniaHosting
+AS213832     # LAYERSENTRY-AS
+AS213897     # BUBBLES-AS
+AS213921     # DA-MOTORS-AS
+AS213995     # FROSTYHOSTING-AS
+AS213999     # THE-CLIENTS
+AS214018     # IIC-AS
+AS214351     # FEMOIT
+AS214357     # First-Host
+AS214422     # NET67X
+AS214472     # STORMINDUSTRIES
+AS214497     # WHITELABEL
+AS214576     # BRM5-AS
+AS214717     # DOLPHINHOST-AS
+AS214927     # PSB-AS
+AS214940     # KPRONET
+AS215127     # TEAPOT
+AS215136     # Ryzehosting
+AS215183     # zhaikov-as
+AS215310     # USERCLOUD
+AS215340     # MySim-Nigeria
+AS215376     # mlcloud
+AS215402     # ASAD-AS
+AS215460     # FELCLOUD
+AS215462     # BUGGZ-HOSTING
+AS215474     # BIIL-RU-AS
+AS215731     # NovusLabs
+AS215765     # RADIO-LINK-SMART
+AS215930     # COD
+AS216341     # OPTIMA-AS
+AS216475     # nktelecom
+AS266702     # MEGALINK_S.R.L.
+AS266724     # MYRIAM_PILAR_ESCOBAR_VEGA_(DON_SERVER)
+AS327837     # SEY-IX-MANAGEMENT
+AS327952     # AS-NATCOM
+AS328095     # BLUEGATE-EXCHANGE-AS
+AS328819     # BPL-AS
+AS328958     # CL21-AS
+AS329007     # ELENDE
+AS329325     # Maxko-for-Gaming-Development
+AS398638     # JELLYDIGITAL
+AS398741     # AS-VERTEXLINK-01
+AS399073     # TBB-ASN
+AS399471     # AS-SERVERION
+AS399979     # AS-493NETWORKING
+AS400018     # CLOUD
+AS400171     # AS-AINFO
+AS400328     # INTELLIGENCE
+AS400377     # AS-DC
+AS400506     # BAIAS
+AS400641     # IPV4HOLDINGS
+AS401109     # ZHONGGUANCUN-CO
+AS401110     # AS-SOVYCLOUD
+AS401116     # NYBULA
+AS401616     # PNL
+AS401626     # NETIFACE-TORONTO
+AS401696     # COGNETCLOUD
+AS402075     # PEEKABO
+AS402253     # SKN-NETWORK-1
+AS329023     # Treten Networks Limited
+AS9541       # Cyber Internet Services (Pvt) Ltd.
+AS29614      # Ghana Telecommunications Company Limited
+AS37468      # Angola Cables
+AS328939     # Sprint Internet Limited
+AS327819     # AZAM MEDIA LIMITED
+AS212552     # BitCommand LLC
+AS8796       # FTNET DATA INC
+AS17561      # LARUS Limited
+AS151858     # INTERDIGI JOINT STOCK COMPANY
+AS135918     # VIET DIGITAL TECHNOLOGY LIABILITY COMPANY
+AS135685     # Deserver Hosting Hub Private Limited
+AS265078     # JHS TELECOMUNICACOES LTDA
+AS142565     # Bangmod Cloud Pte. Ltd.
+AS197893     # Elsuhd Company for Communications Services, Cybersecurity, Information Technology, Electron
+AS52783      # ALCANS TELECOM LTDA
+AS31363      # JSC ER-Telecom Holding
+AS58772      # CHINANET Fujian province Fuzhou IDC network
+AS18209      # Atria Convergence Technologies Ltd.
+AS61173      # Green Web Samaneh Novin PJSC
+AS146943     # Tier 4 Cloud Services
+AS210022     # Trade Link Logistics General Trading & Contracting Company W.L.L., L.L.C.
+AS41202      # UNITEL LLC
+AS212645     # Globalsat Dooel
+AS41608      # NextGenWebs, S.L.
+AS215285     # Bonyan Sepehr Kir PJSC
+AS213251     # Metaliance ISP Systems e.k
+AS61053      # UAB ESNET
+AS53120      # MUNDIVOX TELECOMUNICACOES LTDA
+AS17222      # MUNDIVOX DO BRIL LTDA
+AS22884      # TOTAL PLAY TELECOMUNICACIONES, S.A.P.I. DE C.V.
+AS28670      # CST-REDEL SERVICOS DE TELECOMUNICACOES LTDA.
+AS14259      # Gtd Internet S.A.
+AS215307     # Movetel LTD
+AS197984     # State Unitary Enterprise Scientific Engineering and Marketing Researches Center UNICON.UZ
+AS43581      # Ztv Corp LLC
+AS207350     # Arshia adi
+AS327934     # SOCIETE NATIONALE DES TELECOMMUNICATIONS (Tunisie Telecom)
+AS270256     # VILDONET TELECOM
+AS14868      # Ligga Telecomunicacoes S.A.
+AS25607      # IBW Communications
+AS63859      # PT. Eka M Republik
+AS394695     # PDR
+AS17638      # N for TIANJIN Provincial Net of CT
