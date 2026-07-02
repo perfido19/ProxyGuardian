@@ -25919,19 +25919,37 @@ function parseAntiIptvFields(variant, content) {
   if (mBan) out.banSeconds = parseInt(mBan[1], 10);
   return out;
 }
+async function getAntiIptvRuntimeStatus(variant) {
+  var activeR = await runCmd("systemctl is-active anti-iptv 2>/dev/null");
+  var activeState = activeR.stdout.trim().toLowerCase();
+  var active;
+  if (activeState !== "") {
+    active = activeState === "active";
+  } else {
+    var procName = variant === "py" ? "anti-iptv.py" : "anti-iptv.sh";
+    active = (await runCmd(`pgrep -f ${procName} > /dev/null 2>&1`)).ok;
+  }
+  var enabledR = await runCmd("systemctl is-enabled anti-iptv 2>/dev/null");
+  var enabledState = enabledR.stdout.trim().toLowerCase();
+  var enabled;
+  if (enabledState !== "") {
+    enabled = enabledState === "enabled";
+  } else {
+    var linkR = await runCmd("test -L /etc/systemd/system/multi-user.target.wants/anti-iptv.service && echo yes");
+    enabled = linkR.stdout.trim() === "yes";
+  }
+  return { active, enabled };
+}
 app.get("/api/anti-iptv/detect", async (_req, res) => {
   try {
     var variant = detectAntiIptvVariant();
-    var activeR = await runCmd("systemctl is-active anti-iptv 2>/dev/null");
-    var enabledR = await runCmd("systemctl is-enabled anti-iptv 2>/dev/null");
-    var active = activeR.stdout.trim() === "active";
-    var enabled = enabledR.stdout.trim() === "enabled";
+    var status = variant !== "none" ? await getAntiIptvRuntimeStatus(variant) : { active: false, enabled: false };
     var fields = { maxUsername: null, windowSeconds: null, banSeconds: null };
     if (variant !== "none") {
       var contentR = await runCmd(`sudo cat ${antiIptvScriptPath(variant)} 2>/dev/null`);
       if (contentR.ok) fields = parseAntiIptvFields(variant, contentR.stdout);
     }
-    res.json({ variant, active, enabled, maxUsername: fields.maxUsername, windowSeconds: fields.windowSeconds, banSeconds: fields.banSeconds });
+    res.json({ variant, active: status.active, enabled: status.enabled, maxUsername: fields.maxUsername, windowSeconds: fields.windowSeconds, banSeconds: fields.banSeconds });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -25978,8 +25996,8 @@ app.post("/api/anti-iptv/params", async (req, res) => {
     }
     await sudoWriteFile(scriptPath, content);
     var restartWarning = "";
-    var activeCheckR = await runCmd("systemctl is-active anti-iptv 2>/dev/null");
-    if (activeCheckR.stdout.trim() === "active") {
+    var statusCheck = await getAntiIptvRuntimeStatus(variant);
+    if (statusCheck.active) {
       var restartR = await runCmd("sudo systemctl restart anti-iptv");
       if (!restartR.ok) restartWarning = `restart failed: ${restartR.stderr}`;
     }
