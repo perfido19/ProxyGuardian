@@ -298,8 +298,6 @@ const CONFIG_PATHS: Record<string, string> = {
   "asn-whitelist.txt": "/etc/asn-whitelist-nets.txt",
   "asn-blocklist.txt": "/etc/asn-blocklist.txt",
   "asn-log-stats.py": "/usr/local/bin/asn-log-stats.py",
-  "anti-iptv.sh": "/usr/local/sbin/anti-iptv.sh",
-  "anti-iptv.py": "/usr/local/sbin/anti-iptv.py",
 };
 
 app.get("/api/config/:filename", async (req, res) => {
@@ -329,15 +327,7 @@ app.post("/api/config/:filename", async (req, res) => {
     if (req.params.filename === "jail.local" || req.params.filename === "fail2ban.local") {
       await runCmd("sudo fail2ban-client reload 2>/dev/null || true");
     }
-    let restartWarning = "";
-    if (req.params.filename === "anti-iptv.sh" || req.params.filename === "anti-iptv.py") {
-      const activeR = await runCmd("systemctl is-active anti-iptv 2>/dev/null");
-      if (activeR.stdout.trim() === "active") {
-        const restartR = await runCmd("sudo systemctl restart anti-iptv");
-        if (!restartR.ok) restartWarning = `restart failed: ${restartR.stderr}`;
-      }
-    }
-    res.json({ ok: true, message: `${req.params.filename} updated`, restartWarning: restartWarning || undefined });
+    res.json({ ok: true, message: `${req.params.filename} updated` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1564,30 +1554,120 @@ app.post("/api/agent/update", express.raw({ type: "*/*", limit: "10mb" }), async
 
 // ─── Anti-IPTV ────────────────────────────────────────────────────────────────
 
+function antiIptvScriptPath(variant: string): string {
+  return variant === "sh" ? "/usr/local/sbin/anti-iptv.sh" : "/usr/local/sbin/anti-iptv.py";
+}
+
+function detectAntiIptvVariant(): string {
+  var shExists = existsSync("/usr/local/sbin/anti-iptv.sh");
+  var pyExists = existsSync("/usr/local/sbin/anti-iptv.py");
+  return pyExists ? "py" : (shExists ? "sh" : "none");
+}
+
+// Regex a coppie [ricerca, indice-gruppo-valore] per estrarre i parametri dal contenuto live dello script.
+// Bash: "MAX_USERNAME=4" (valore diretto nella variabile).
+// Python: "MAX_USERNAME = int(os.environ.get(\"MAX_USERNAME\", \"3\"))" (default hardcoded, nessun override env).
+var ANTI_IPTV_FIELD_PATTERNS: Record<string, Record<string, RegExp>> = {
+  sh: {
+    maxUsername: /^MAX_USERNAME=(\d+)/m,
+    windowSeconds: /^WINDOW_SECONDS=(\d+)/m,
+    banSeconds: /^BAN_SECONDS=(\d+)/m,
+  },
+  py: {
+    maxUsername: /MAX_USERNAME\s*=\s*int\(os\.environ\.get\(\s*["']MAX_USERNAME["']\s*,\s*["'](\d+)["']/,
+    windowSeconds: /WINDOW_SECONDS\s*=\s*int\(os\.environ\.get\(\s*["']WINDOW_SECONDS["']\s*,\s*["'](\d+)["']/,
+    banSeconds: /BAN_SECONDS\s*=\s*int\(os\.environ\.get\(\s*["']BAN_SECONDS["']\s*,\s*["'](\d+)["']/,
+  },
+};
+
+function parseAntiIptvFields(variant: string, content: string): { maxUsername: number | null; windowSeconds: number | null; banSeconds: number | null } {
+  var patterns = ANTI_IPTV_FIELD_PATTERNS[variant];
+  var out: { maxUsername: number | null; windowSeconds: number | null; banSeconds: number | null } = { maxUsername: null, windowSeconds: null, banSeconds: null };
+  if (!patterns) return out;
+  var mMax = content.match(patterns.maxUsername);
+  var mWin = content.match(patterns.windowSeconds);
+  var mBan = content.match(patterns.banSeconds);
+  if (mMax) out.maxUsername = parseInt(mMax[1], 10);
+  if (mWin) out.windowSeconds = parseInt(mWin[1], 10);
+  if (mBan) out.banSeconds = parseInt(mBan[1], 10);
+  return out;
+}
+
 app.get("/api/anti-iptv/detect", async (_req, res) => {
   try {
-    var shExists = existsSync("/usr/local/sbin/anti-iptv.sh");
-    var pyExists = existsSync("/usr/local/sbin/anti-iptv.py");
-    var variant: string = pyExists ? "py" : (shExists ? "sh" : "none");
+    var variant = detectAntiIptvVariant();
 
     var activeR = await runCmd("systemctl is-active anti-iptv 2>/dev/null");
     var enabledR = await runCmd("systemctl is-enabled anti-iptv 2>/dev/null");
     var active = activeR.stdout.trim() === "active";
     var enabled = enabledR.stdout.trim() === "enabled";
 
-    var maxUsername: number | null = null;
+    var fields = { maxUsername: null as number | null, windowSeconds: null as number | null, banSeconds: null as number | null };
     if (variant !== "none") {
-      var scriptPath = variant === "sh" ? "/usr/local/sbin/anti-iptv.sh" : "/usr/local/sbin/anti-iptv.py";
-      var contentR = await runCmd(`sudo cat ${scriptPath} 2>/dev/null`);
-      if (contentR.ok) {
-        var match = variant === "sh"
-          ? contentR.stdout.match(/MAX_USERNAME=["']?(\d+)/)
-          : contentR.stdout.match(/os\.environ\.get\(\s*["']MAX_USERNAME["']\s*,\s*["']?(\d+)/);
-        if (match) maxUsername = parseInt(match[1], 10);
+      var contentR = await runCmd(`sudo cat ${antiIptvScriptPath(variant)} 2>/dev/null`);
+      if (contentR.ok) fields = parseAntiIptvFields(variant, contentR.stdout);
+    }
+
+    res.json({ variant: variant, active: active, enabled: enabled, maxUsername: fields.maxUsername, windowSeconds: fields.windowSeconds, banSeconds: fields.banSeconds });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/anti-iptv/params", async (req, res) => {
+  try {
+    var variant = detectAntiIptvVariant();
+    if (variant === "none") return res.status(400).json({ error: "Script anti-iptv non installato" });
+
+    var body = req.body || {};
+    var updates: Record<string, number> = {};
+    if (body.maxUsername !== undefined && body.maxUsername !== null && body.maxUsername !== "") updates.maxUsername = parseInt(body.maxUsername, 10);
+    if (body.windowSeconds !== undefined && body.windowSeconds !== null && body.windowSeconds !== "") updates.windowSeconds = parseInt(body.windowSeconds, 10);
+    if (body.banSeconds !== undefined && body.banSeconds !== null && body.banSeconds !== "") updates.banSeconds = parseInt(body.banSeconds, 10);
+
+    var fieldNames = Object.keys(updates);
+    if (fieldNames.length === 0) return res.status(400).json({ error: "Nessun campo da aggiornare" });
+    for (var fi = 0; fi < fieldNames.length; fi++) {
+      if (!Number.isInteger(updates[fieldNames[fi]]) || updates[fieldNames[fi]] <= 0) {
+        return res.status(400).json({ error: `Valore non valido per ${fieldNames[fi]}` });
       }
     }
 
-    res.json({ variant, active, enabled, maxUsername });
+    var scriptPath = antiIptvScriptPath(variant);
+    var contentR = await runCmd(`sudo cat ${scriptPath} 2>/dev/null`);
+    if (!contentR.ok || !contentR.stdout) return res.status(500).json({ error: "Impossibile leggere lo script live" });
+
+    var content = contentR.stdout;
+    var patterns = ANTI_IPTV_FIELD_PATTERNS[variant];
+    var applied: Record<string, number> = {};
+    var skipped: string[] = [];
+
+    for (var ui = 0; ui < fieldNames.length; ui++) {
+      var field = fieldNames[ui];
+      var pattern = patterns[field];
+      var m = content.match(pattern);
+      if (!m) { skipped.push(field); continue; }
+      var fullMatch = m[0];
+      var valueGroup = m[1];
+      var patchedMatch = fullMatch.slice(0, fullMatch.lastIndexOf(valueGroup)) + String(updates[field]) + fullMatch.slice(fullMatch.lastIndexOf(valueGroup) + valueGroup.length);
+      content = content.slice(0, (m.index as number)) + patchedMatch + content.slice((m.index as number) + fullMatch.length);
+      applied[field] = updates[field];
+    }
+
+    if (Object.keys(applied).length === 0) {
+      return res.status(422).json({ error: "Nessun campo riconosciuto nello script live", skipped: skipped });
+    }
+
+    await sudoWriteFile(scriptPath, content);
+
+    var restartWarning = "";
+    var activeCheckR = await runCmd("systemctl is-active anti-iptv 2>/dev/null");
+    if (activeCheckR.stdout.trim() === "active") {
+      var restartR = await runCmd("sudo systemctl restart anti-iptv");
+      if (!restartR.ok) restartWarning = `restart failed: ${restartR.stderr}`;
+    }
+
+    res.json({ ok: true, applied: applied, skipped: skipped, restartWarning: restartWarning || undefined });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

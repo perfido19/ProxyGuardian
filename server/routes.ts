@@ -700,40 +700,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ ok: true, results });
   });
 
-  // ─── Fleet Anti-IPTV script (repo-backed) ───────────────────────────────────
+  // ─── Fleet Anti-IPTV params ──────────────────────────────────────────────────
 
-  const SCRIPTS_DIR = join(process.cwd(), "scripts");
-
-  function readScriptFile(name: string): string {
-    const p = join(SCRIPTS_DIR, name);
-    try { return existsSync(p) ? readFileSync(p, "utf-8") : ""; } catch { return ""; }
-  }
-
-  function writeScriptFile(name: string, content: string): void {
-    if (!existsSync(SCRIPTS_DIR)) mkdirSync(SCRIPTS_DIR, { recursive: true });
-    writeFileSync(join(SCRIPTS_DIR, name), content, "utf-8");
-    try {
-      execSync(
-        `git -C "${process.cwd()}" add scripts/ && ` +
-        `(git -C "${process.cwd()}" diff --staged --quiet || ` +
-        `git -C "${process.cwd()}" -c user.name="Dashboard" -c user.email="dashboard@local" commit -m "chore: update anti-iptv fleet script (${name})")`,
-        { stdio: "pipe" }
-      );
-    } catch {}
-  }
-
-  interface AntiIptvDetect { variant: "sh" | "py" | "none"; active: boolean; enabled: boolean; maxUsername: number | null }
+  interface AntiIptvDetect { variant: "sh" | "py" | "none"; active: boolean; enabled: boolean; maxUsername: number | null; windowSeconds: number | null; banSeconds: number | null }
 
   async function detectAntiIptvFleet(): Promise<Array<{ vpsId: string; vpsName: string; error?: string } & Partial<AntiIptvDetect>>> {
     const allVps = getAllVps().filter(v => v.enabled);
     const results = await Promise.all(allVps.map(async safe => {
       const vps = getVpsById(safe.id);
-      if (!vps) return { vpsId: safe.id, vpsName: safe.name, variant: "none" as const, active: false, enabled: false, maxUsername: null };
+      if (!vps) return { vpsId: safe.id, vpsName: safe.name, variant: "none" as const, active: false, enabled: false, maxUsername: null, windowSeconds: null, banSeconds: null };
       try {
         const data = await agentGet(vps, "/api/anti-iptv/detect");
-        return { vpsId: vps.id, vpsName: vps.name, variant: data.variant, active: !!data.active, enabled: !!data.enabled, maxUsername: data.maxUsername };
+        return { vpsId: vps.id, vpsName: vps.name, variant: data.variant, active: !!data.active, enabled: !!data.enabled, maxUsername: data.maxUsername, windowSeconds: data.windowSeconds, banSeconds: data.banSeconds };
       } catch (e: any) {
-        return { vpsId: vps.id, vpsName: vps.name, variant: "none" as const, active: false, enabled: false, maxUsername: null, error: e.message };
+        return { vpsId: vps.id, vpsName: vps.name, variant: "none" as const, active: false, enabled: false, maxUsername: null, windowSeconds: null, banSeconds: null, error: e.message };
       }
     }));
     return results;
@@ -743,27 +723,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(await detectAntiIptvFleet());
   });
 
-  app.get("/api/fleet/anti-iptv/script/:variant", requireAuth, (req, res) => {
-    const { variant } = req.params;
-    if (variant !== "sh" && variant !== "py") return res.status(400).json({ error: "Invalid variant" });
-    res.json({ content: readScriptFile(`anti-iptv.${variant}`) });
-  });
+  app.post("/api/fleet/anti-iptv/params", requireAuth, requireAdmin, async (req, res) => {
+    const { vpsIds, maxUsername, windowSeconds, banSeconds } = req.body;
+    const body: Record<string, number> = {};
+    if (maxUsername !== undefined && maxUsername !== null && maxUsername !== "") body.maxUsername = Number(maxUsername);
+    if (windowSeconds !== undefined && windowSeconds !== null && windowSeconds !== "") body.windowSeconds = Number(windowSeconds);
+    if (banSeconds !== undefined && banSeconds !== null && banSeconds !== "") body.banSeconds = Number(banSeconds);
+    if (Object.keys(body).length === 0) return res.status(400).json({ error: "Nessun campo da aggiornare" });
 
-  app.post("/api/fleet/anti-iptv/script/:variant", requireAuth, requireAdmin, async (req, res) => {
-    const { variant } = req.params;
-    if (variant !== "sh" && variant !== "py") return res.status(400).json({ error: "Invalid variant" });
-    const { content, vpsIds } = req.body;
-    if (typeof content !== "string") return res.status(400).json({ error: "content required" });
-    writeScriptFile(`anti-iptv.${variant}`, content);
+    const targetIds: string[] = vpsIds === "all"
+      ? getAllVps().filter(v => v.enabled).map(v => v.id)
+      : (Array.isArray(vpsIds) ? vpsIds : []);
+    if (targetIds.length === 0) return res.status(400).json({ error: "Nessun VPS selezionato" });
 
-    const requestedIds: string[] = vpsIds === "all" ? getAllVps().map(v => v.id) : (Array.isArray(vpsIds) ? vpsIds : []);
-    const detected = await detectAntiIptvFleet();
-    const detectedById = new Map(detected.map(d => [d.vpsId, d]));
-    const matchedIds = requestedIds.filter(id => detectedById.get(id)?.variant === variant);
-    const skipped = requestedIds.filter(id => !matchedIds.includes(id));
-
-    const results = await bulkPost(matchedIds, `/api/config/anti-iptv.${variant}`, { content });
-    res.json({ ok: true, targeted: matchedIds, skipped, results });
+    const results = await bulkPost(targetIds, "/api/anti-iptv/params", body);
+    res.json({ ok: true, results });
   });
 
   // ─── Backup / Restore ─────────────────────────────────────────────────────
