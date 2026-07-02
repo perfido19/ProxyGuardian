@@ -132,6 +132,9 @@ $AGENT_USER ALL=(ALL) NOPASSWD: /bin/chmod 600 /root/.ssh/authorized_keys
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /var/cache/nginx/epg /var/cache/nginx/streaming
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/epg
 $AGENT_USER ALL=(ALL) NOPASSWD: /bin/chown -R www-data /var/cache/nginx/streaming
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.sh
+$AGENT_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.py
+$AGENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart anti-iptv
 SUDOEOF
 chmod 440 /etc/sudoers.d/proxy-guardian-agent
 ok "Sudoers configurati"
