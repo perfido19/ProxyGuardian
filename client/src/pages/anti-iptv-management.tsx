@@ -80,8 +80,8 @@ export default function AntiIptvManagement() {
 
   const [selected, setSelected] = useState<string[]>([]);
   const [maxUsername, setMaxUsername] = useState("");
-  const [windowSeconds, setWindowSeconds] = useState("");
-  const [banSeconds, setBanSeconds] = useState("");
+  const [windowHours, setWindowHours] = useState("");
+  const [banDays, setBanDays] = useState("");
   const [lastResult, setLastResult] = useState<ParamsResponse | null>(null);
 
   const rows = data || [];
@@ -96,8 +96,8 @@ export default function AntiIptvManagement() {
       const res = await apiRequest("POST", "/api/fleet/anti-iptv/params", {
         vpsIds: selected,
         maxUsername: maxUsername || undefined,
-        windowSeconds: windowSeconds || undefined,
-        banSeconds: banSeconds || undefined,
+        windowSeconds: windowHours ? Number(windowHours) * 3600 : undefined,
+        banSeconds: banDays ? Number(banDays) * 86400 : undefined,
       });
       return res.json() as Promise<ParamsResponse>;
     },
@@ -115,7 +115,7 @@ export default function AntiIptvManagement() {
     onError: () => toast({ title: "Errore", description: "Applicazione parametri non riuscita", variant: "destructive" }),
   });
 
-  const noFieldFilled = !maxUsername && !windowSeconds && !banSeconds;
+  const noFieldFilled = !maxUsername && !windowHours && !banDays;
 
   return (
     <div className="space-y-6">
@@ -148,12 +148,12 @@ export default function AntiIptvManagement() {
                 <Input id="maxUsername" type="number" min={1} placeholder="es. 4" value={maxUsername} onChange={e => setMaxUsername(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="windowSeconds">WINDOW_SECONDS (finestra, sec.)</Label>
-                <Input id="windowSeconds" type="number" min={1} placeholder="es. 21600 = 6h" value={windowSeconds} onChange={e => setWindowSeconds(e.target.value)} />
+                <Label htmlFor="windowHours">Finestra (ore)</Label>
+                <Input id="windowHours" type="number" min={1} step={1} placeholder="es. 6" value={windowHours} onChange={e => setWindowHours(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="banSeconds">BAN_SECONDS (durata ban, sec.)</Label>
-                <Input id="banSeconds" type="number" min={1} placeholder="es. 604800 = 7g" value={banSeconds} onChange={e => setBanSeconds(e.target.value)} />
+                <Label htmlFor="banDays">Durata ban (giorni)</Label>
+                <Input id="banDays" type="number" min={1} step={1} placeholder="es. 7" value={banDays} onChange={e => setBanDays(e.target.value)} />
               </div>
             </div>
             <div className="flex items-center justify-between">
