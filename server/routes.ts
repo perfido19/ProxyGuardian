@@ -1133,7 +1133,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const vps = getVpsById(safe.id);
       if (!vps) { completed++; return; }
       try {
-        const data = await agentGet(vps, "/api/banned-ips", 5000);
+        const data = await agentGet(vps, "/api/banned-ips", 12000);
         safeWrite(`event: result\ndata: ${JSON.stringify({ vpsId: vps.id, vpsName: vps.name, success: true, data })}\n\n`);
       } catch (e: any) {
         safeWrite(`event: result\ndata: ${JSON.stringify({ vpsId: vps.id, vpsName: vps.name, success: false, error: e.message })}\n\n`);
