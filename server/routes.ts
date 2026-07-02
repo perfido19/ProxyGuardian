@@ -149,6 +149,8 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.py",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart anti-iptv",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/cat /usr/local/sbin/anti-iptv.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/cat /usr/local/sbin/anti-iptv.py",
   "",
 ].join("\n");
 const DEPLOY_LOGROTATE_CONF = [

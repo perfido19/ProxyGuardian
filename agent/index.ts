@@ -862,6 +862,8 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.py",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart anti-iptv",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/cat /usr/local/sbin/anti-iptv.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/cat /usr/local/sbin/anti-iptv.py",
   "",
 ].join("\n");
 
@@ -1576,7 +1578,7 @@ app.get("/api/anti-iptv/detect", async (_req, res) => {
     var maxUsername: number | null = null;
     if (variant !== "none") {
       var scriptPath = variant === "sh" ? "/usr/local/sbin/anti-iptv.sh" : "/usr/local/sbin/anti-iptv.py";
-      var contentR = await runCmd(`cat ${scriptPath} 2>/dev/null`);
+      var contentR = await runCmd(`sudo cat ${scriptPath} 2>/dev/null`);
       if (contentR.ok) {
         var match = variant === "sh"
           ? contentR.stdout.match(/MAX_USERNAME=["']?(\d+)/)
