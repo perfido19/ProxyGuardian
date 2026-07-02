@@ -1,4 +1,4 @@
-import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Users, Network, Search, ShieldCheck, Globe, Rocket, Settings2, TerminalSquare, RotateCw, CloudUpload, ScanSearch, ShieldAlert } from "lucide-react";
+import { LayoutDashboard, Server, Shield, AlertTriangle, FileText, Users, Network, Search, ShieldCheck, Globe, Rocket, Settings2, TerminalSquare, RotateCw, CloudUpload, ScanSearch, ShieldAlert, Tv } from "lucide-react";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter } from "@/components/ui/sidebar";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -13,6 +13,7 @@ const menuItems = [
   { title: "Ricerca", url: "/ricerca", icon: Search },
   { title: "IP Investigator", url: "/ip-investigator", icon: ScanSearch },
   { title: "CrowdSec", url: "/crowdsec", icon: ShieldAlert },
+  { title: "Anti-IPTV", url: "/anti-iptv-management", icon: Tv },
   { title: "VPS", url: "/vps", icon: Network },
 ];
 

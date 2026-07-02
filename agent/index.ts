@@ -298,6 +298,8 @@ const CONFIG_PATHS: Record<string, string> = {
   "asn-whitelist.txt": "/etc/asn-whitelist-nets.txt",
   "asn-blocklist.txt": "/etc/asn-blocklist.txt",
   "asn-log-stats.py": "/usr/local/bin/asn-log-stats.py",
+  "anti-iptv.sh": "/usr/local/sbin/anti-iptv.sh",
+  "anti-iptv.py": "/usr/local/sbin/anti-iptv.py",
 };
 
 app.get("/api/config/:filename", async (req, res) => {
@@ -327,7 +329,15 @@ app.post("/api/config/:filename", async (req, res) => {
     if (req.params.filename === "jail.local" || req.params.filename === "fail2ban.local") {
       await runCmd("sudo fail2ban-client reload 2>/dev/null || true");
     }
-    res.json({ ok: true, message: `${req.params.filename} updated` });
+    let restartWarning = "";
+    if (req.params.filename === "anti-iptv.sh" || req.params.filename === "anti-iptv.py") {
+      const activeR = await runCmd("systemctl is-active anti-iptv 2>/dev/null");
+      if (activeR.stdout.trim() === "active") {
+        const restartR = await runCmd("sudo systemctl restart anti-iptv");
+        if (!restartR.ok) restartWarning = `restart failed: ${restartR.stderr}`;
+      }
+    }
+    res.json({ ok: true, message: `${req.params.filename} updated`, restartWarning: restartWarning || undefined });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -849,6 +859,9 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec-firewall-bouncer",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.py",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart anti-iptv",
   "",
 ].join("\n");
 
@@ -1548,6 +1561,35 @@ app.post("/api/agent/update", express.raw({ type: "*/*", limit: "10mb" }), async
 });
 
 // ─── Anti-IPTV ────────────────────────────────────────────────────────────────
+
+app.get("/api/anti-iptv/detect", async (_req, res) => {
+  try {
+    var shExists = existsSync("/usr/local/sbin/anti-iptv.sh");
+    var pyExists = existsSync("/usr/local/sbin/anti-iptv.py");
+    var variant: string = pyExists ? "py" : (shExists ? "sh" : "none");
+
+    var activeR = await runCmd("systemctl is-active anti-iptv 2>/dev/null");
+    var enabledR = await runCmd("systemctl is-enabled anti-iptv 2>/dev/null");
+    var active = activeR.stdout.trim() === "active";
+    var enabled = enabledR.stdout.trim() === "enabled";
+
+    var maxUsername: number | null = null;
+    if (variant !== "none") {
+      var scriptPath = variant === "sh" ? "/usr/local/sbin/anti-iptv.sh" : "/usr/local/sbin/anti-iptv.py";
+      var contentR = await runCmd(`cat ${scriptPath} 2>/dev/null`);
+      if (contentR.ok) {
+        var match = variant === "sh"
+          ? contentR.stdout.match(/MAX_USERNAME=["']?(\d+)/)
+          : contentR.stdout.match(/os\.environ\.get\(\s*["']MAX_USERNAME["']\s*,\s*["']?(\d+)/);
+        if (match) maxUsername = parseInt(match[1], 10);
+      }
+    }
+
+    res.json({ variant, active, enabled, maxUsername });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get("/api/anti-iptv/status", async (_req, res) => {
   try {

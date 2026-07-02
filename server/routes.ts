@@ -146,6 +146,9 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/logrotate.d/proxyguardian",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/logrotate *",
   "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 644 /etc/logrotate.d/proxyguardian",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.py",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart anti-iptv",
   "",
 ].join("\n");
 const DEPLOY_LOGROTATE_CONF = [
@@ -693,6 +696,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/fleet/asn/sync-github", requireAuth, requireAdmin, async (_req, res) => {
     const results = await bulkPost(getAsnBlocklistTargetVpsIds(), "/api/asn/update-lists", {});
     res.json({ ok: true, results });
+  });
+
+  // ─── Fleet Anti-IPTV script (repo-backed) ───────────────────────────────────
+
+  const SCRIPTS_DIR = join(process.cwd(), "scripts");
+
+  function readScriptFile(name: string): string {
+    const p = join(SCRIPTS_DIR, name);
+    try { return existsSync(p) ? readFileSync(p, "utf-8") : ""; } catch { return ""; }
+  }
+
+  function writeScriptFile(name: string, content: string): void {
+    if (!existsSync(SCRIPTS_DIR)) mkdirSync(SCRIPTS_DIR, { recursive: true });
+    writeFileSync(join(SCRIPTS_DIR, name), content, "utf-8");
+    try {
+      execSync(
+        `git -C "${process.cwd()}" add scripts/ && ` +
+        `(git -C "${process.cwd()}" diff --staged --quiet || ` +
+        `git -C "${process.cwd()}" -c user.name="Dashboard" -c user.email="dashboard@local" commit -m "chore: update anti-iptv fleet script (${name})")`,
+        { stdio: "pipe" }
+      );
+    } catch {}
+  }
+
+  interface AntiIptvDetect { variant: "sh" | "py" | "none"; active: boolean; enabled: boolean; maxUsername: number | null }
+
+  async function detectAntiIptvFleet(): Promise<Array<{ vpsId: string; vpsName: string; error?: string } & Partial<AntiIptvDetect>>> {
+    const allVps = getAllVps().filter(v => v.enabled);
+    const results = await Promise.all(allVps.map(async safe => {
+      const vps = getVpsById(safe.id);
+      if (!vps) return { vpsId: safe.id, vpsName: safe.name, variant: "none" as const, active: false, enabled: false, maxUsername: null };
+      try {
+        const data = await agentGet(vps, "/api/anti-iptv/detect");
+        return { vpsId: vps.id, vpsName: vps.name, variant: data.variant, active: !!data.active, enabled: !!data.enabled, maxUsername: data.maxUsername };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, variant: "none" as const, active: false, enabled: false, maxUsername: null, error: e.message };
+      }
+    }));
+    return results;
+  }
+
+  app.get("/api/fleet/anti-iptv/summary", requireAuth, async (_req, res) => {
+    res.json(await detectAntiIptvFleet());
+  });
+
+  app.get("/api/fleet/anti-iptv/script/:variant", requireAuth, (req, res) => {
+    const { variant } = req.params;
+    if (variant !== "sh" && variant !== "py") return res.status(400).json({ error: "Invalid variant" });
+    res.json({ content: readScriptFile(`anti-iptv.${variant}`) });
+  });
+
+  app.post("/api/fleet/anti-iptv/script/:variant", requireAuth, requireAdmin, async (req, res) => {
+    const { variant } = req.params;
+    if (variant !== "sh" && variant !== "py") return res.status(400).json({ error: "Invalid variant" });
+    const { content, vpsIds } = req.body;
+    if (typeof content !== "string") return res.status(400).json({ error: "content required" });
+    writeScriptFile(`anti-iptv.${variant}`, content);
+
+    const requestedIds: string[] = vpsIds === "all" ? getAllVps().map(v => v.id) : (Array.isArray(vpsIds) ? vpsIds : []);
+    const detected = await detectAntiIptvFleet();
+    const detectedById = new Map(detected.map(d => [d.vpsId, d]));
+    const matchedIds = requestedIds.filter(id => detectedById.get(id)?.variant === variant);
+    const skipped = requestedIds.filter(id => !matchedIds.includes(id));
+
+    const results = await bulkPost(matchedIds, `/api/config/anti-iptv.${variant}`, { content });
+    res.json({ ok: true, targeted: matchedIds, skipped, results });
   });
 
   // ─── Backup / Restore ─────────────────────────────────────────────────────

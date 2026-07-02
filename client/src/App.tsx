@@ -49,6 +49,7 @@ import Logrotate from "@/pages/logrotate";
 import DeployVps from "@/pages/deploy-vps";
 import IpInvestigator from "@/pages/ip-investigator";
 import CrowdSec from "@/pages/crowdsec";
+import AntiIptvManagement from "@/pages/anti-iptv-management";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -161,6 +162,7 @@ function Router() {
       {user?.role === "admin" && <Route path="/deploy" component={DeployVps} />}
       <Route path="/ip-investigator" component={IpInvestigator} />
       <Route path="/crowdsec" component={CrowdSec} />
+      <Route path="/anti-iptv-management" component={AntiIptvManagement} />
       <Route component={NotFound} />
     </Switch>
   );
