@@ -25470,8 +25470,13 @@ app.get("/api/system/diagnose", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+var JAILS_CACHE_TTL_MS = 6e4;
+var jailsCache = null;
 app.get("/api/fail2ban/jails", async (_req, res) => {
   try {
+    if (jailsCache && Date.now() - jailsCache.ts < JAILS_CACHE_TTL_MS) {
+      return res.json(jailsCache.data);
+    }
     const { stdout: jailList } = await runCmd("sudo fail2ban-client status | grep 'Jail list' | cut -d: -f2");
     const jailNames = jailList.split(",").map((j) => j.trim()).filter(Boolean);
     const jails = await Promise.all(jailNames.map(async (name) => {
@@ -25488,6 +25493,7 @@ app.get("/api/fail2ban/jails", async (_req, res) => {
         findTime: parseInt(findTimeR.stdout.trim()) || 600
       };
     }));
+    jailsCache = { data: jails, ts: Date.now() };
     res.json(jails);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -25536,6 +25542,7 @@ app.post("/api/fail2ban/jails/:name", async (req, res) => {
     } catch {
     }
   }
+  jailsCache = null;
   res.json({ ok: true, message: `Jail ${name} updated` });
 });
 app.get("/api/system/antibrute-stats", async (_req, res) => {

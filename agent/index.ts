@@ -1124,8 +1124,17 @@ app.get("/api/system/diagnose", async (_req, res) => {
 
 // ─── Fail2ban jails ───────────────────────────────────────────────────────────
 
+// bantime/maxretry/findtime sono config statica (cambia solo via POST qui sotto):
+// cache breve evita di rilanciare 3 processi fail2ban-client per jail (Python + IPC,
+// costoso) a ogni refresh della dashboard — su VPS con molte jail satura la CPU.
+const JAILS_CACHE_TTL_MS = 60000;
+let jailsCache: { data: any; ts: number } | null = null;
+
 app.get("/api/fail2ban/jails", async (_req, res) => {
   try {
+    if (jailsCache && Date.now() - jailsCache.ts < JAILS_CACHE_TTL_MS) {
+      return res.json(jailsCache.data);
+    }
     const { stdout: jailList } = await runCmd("sudo fail2ban-client status | grep 'Jail list' | cut -d: -f2");
     const jailNames = jailList.split(",").map(j => j.trim()).filter(Boolean);
     const jails = await Promise.all(jailNames.map(async name => {
@@ -1142,6 +1151,7 @@ app.get("/api/fail2ban/jails", async (_req, res) => {
         findTime: parseInt(findTimeR.stdout.trim()) || 600,
       };
     }));
+    jailsCache = { data: jails, ts: Date.now() };
     res.json(jails);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1191,6 +1201,7 @@ app.post("/api/fail2ban/jails/:name", async (req, res) => {
     } catch {}
   }
 
+  jailsCache = null;
   res.json({ ok: true, message: `Jail ${name} updated` });
 });
 
