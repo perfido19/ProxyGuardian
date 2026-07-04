@@ -25962,6 +25962,51 @@ async function getAntiIptvRuntimeStatus(variant) {
   }
   return { active, enabled };
 }
+function isValidIpOrCidr(value) {
+  var m = value.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/);
+  if (!m) return false;
+  for (var i = 1; i <= 4; i++) {
+    var octet = parseInt(m[i], 10);
+    if (octet < 0 || octet > 255) return false;
+  }
+  if (m[5] !== void 0) {
+    var prefix = parseInt(m[5], 10);
+    if (prefix < 0 || prefix > 32) return false;
+  }
+  return true;
+}
+app.post("/api/anti-iptv/whitelist", async (req, res) => {
+  try {
+    var entries = req.body && req.body.entries;
+    if (!Array.isArray(entries)) return res.status(400).json({ error: "entries deve essere un array" });
+    var clean = [];
+    for (var i = 0; i < entries.length; i++) {
+      var e = String(entries[i]).trim();
+      if (!e) continue;
+      if (!isValidIpOrCidr(e)) return res.status(400).json({ error: "Valore non valido: " + e });
+      clean.push(e);
+    }
+    await runCmd("sudo ipset create iptv_whitelist hash:net -exist");
+    var restoreInput = "flush iptv_whitelist\n";
+    for (var j = 0; j < clean.length; j++) {
+      restoreInput += "add iptv_whitelist " + clean[j] + " -exist\n";
+    }
+    await new Promise(function(resolve, reject) {
+      var child = require("child_process").spawn("sudo", ["ipset", "restore"], { stdio: ["pipe", "ignore", "ignore"] });
+      child.on("error", reject);
+      child.on("close", function(code) {
+        if (code === 0) resolve();
+        else reject(new Error("ipset restore exit " + code));
+      });
+      child.stdin.write(restoreInput, "utf-8");
+      child.stdin.end();
+    });
+    await runCmd("sudo sh -c 'ipset save > /etc/ipset.conf'");
+    res.json({ ok: true, count: clean.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.get("/api/anti-iptv/detect", async (_req, res) => {
   try {
     var variant = detectAntiIptvVariant();
