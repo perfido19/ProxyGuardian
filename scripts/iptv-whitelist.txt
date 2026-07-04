@@ -1,2 +1,3 @@
 # Whitelist anti-iptv fleet-wide — un IP o CIDR per riga, commenti con #
 # Sincronizzata su tutti i VPS enabled tramite dashboard → Anti-IPTV
+100.116.132.180 # IP NetBird dashboard/gestione (ubuntu.netbird.cloud) — mai bannare, falso positivo trovato 2026-07-04 su gruppo new salerno
