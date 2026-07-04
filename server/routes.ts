@@ -740,6 +740,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ ok: true, results });
   });
 
+  const IPTV_WHITELIST_PATH = join(process.cwd(), "scripts", "iptv-whitelist.txt");
+
+  function readIptvWhitelistFile(): string {
+    try { return existsSync(IPTV_WHITELIST_PATH) ? readFileSync(IPTV_WHITELIST_PATH, "utf-8") : ""; } catch { return ""; }
+  }
+
+  function parseIptvWhitelistEntries(content: string): string[] {
+    return content.split("\n")
+      .map(line => line.split("#")[0].trim())
+      .filter(Boolean);
+  }
+
+  const IP_OR_CIDR_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/;
+  function isValidIpOrCidr(value: string): boolean {
+    const m = value.match(IP_OR_CIDR_RE);
+    if (!m) return false;
+    for (let i = 1; i <= 4; i++) {
+      const octet = parseInt(m[i], 10);
+      if (octet < 0 || octet > 255) return false;
+    }
+    if (m[5] !== undefined) {
+      const prefix = parseInt(m[5], 10);
+      if (prefix < 0 || prefix > 32) return false;
+    }
+    return true;
+  }
+
+  app.get("/api/fleet/anti-iptv/whitelist", requireAuth, (_req, res) => {
+    res.json({ content: readIptvWhitelistFile() });
+  });
+
+  app.post("/api/fleet/anti-iptv/whitelist", requireAuth, requireAdmin, async (req, res) => {
+    const { content } = req.body;
+    if (typeof content !== "string") return res.status(400).json({ error: "content required" });
+    const entries = parseIptvWhitelistEntries(content);
+    const invalid = entries.filter(e => !isValidIpOrCidr(e));
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: `Righe non valide: ${invalid.join(", ")}` });
+    }
+    writeFileSync(IPTV_WHITELIST_PATH, content, "utf-8");
+    const targetVpsIds = getAllVps().filter(v => v.enabled).map(v => v.id);
+    const syncResults = await bulkPost(targetVpsIds, "/api/anti-iptv/whitelist", { entries });
+    res.json({ ok: true, content, syncResults });
+  });
+
   // ─── Backup / Restore ─────────────────────────────────────────────────────
 
   const DATA_DIR_PATH = join(process.cwd(), "data");

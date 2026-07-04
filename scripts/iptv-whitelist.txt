@@ -1,0 +1,2 @@
+# Whitelist anti-iptv fleet-wide — un IP o CIDR per riga, commenti con #
+# Sincronizzata su tutti i VPS enabled tramite dashboard → Anti-IPTV
