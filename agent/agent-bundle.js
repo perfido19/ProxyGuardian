@@ -24606,8 +24606,13 @@ app.post("/api/services/:name/action", async (req, res) => {
   const status = await getServiceStatus(name);
   res.json({ ok: result.ok, stderr: result.stderr, service: status });
 });
+var BANNED_IPS_CACHE_TTL_MS = 15e3;
+var bannedIpsCache = null;
 app.get("/api/banned-ips", async (_req, res) => {
   try {
+    if (bannedIpsCache && Date.now() - bannedIpsCache.ts < BANNED_IPS_CACHE_TTL_MS) {
+      return res.json(bannedIpsCache.data);
+    }
     const { stdout: jailList } = await runCmd("sudo fail2ban-client status 2>/dev/null | grep -i 'jail list' | cut -d: -f2");
     const jails = jailList.split(",").map((j) => j.trim()).filter(Boolean);
     const bannedIps = [];
@@ -24632,6 +24637,7 @@ app.get("/api/banned-ips", async (_req, res) => {
         bannedIps.push({ ip: iptvIps[i], jail: "anti-iptv", banTime: (/* @__PURE__ */ new Date()).toISOString() });
       }
     }
+    bannedIpsCache = { data: bannedIps, ts: Date.now() };
     res.json(bannedIps);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -24643,16 +24649,19 @@ app.post("/api/unban", async (req, res) => {
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return res.status(400).json({ error: "Invalid IP" });
   if (jail === "anti-iptv") {
     const result2 = await runCmd("sudo ipset del iptv_ban " + ip + " 2>&1");
+    bannedIpsCache = null;
     res.json({ ok: result2.ok, message: result2.ok ? ip + " rimosso da iptv_ban" : result2.stderr });
     return;
   }
   const result = await runCmd(`sudo fail2ban-client set ${jail} unbanip ${ip}`);
+  bannedIpsCache = null;
   res.json({ ok: result.ok, message: result.ok ? `${ip} unbanned from ${jail}` : result.stderr });
 });
 app.post("/api/unban-all", async (_req, res) => {
   const { stdout, ok } = await runCmd("sudo fail2ban-client unban --all 2>&1");
   if (!ok) return res.status(500).json({ error: stdout });
   const unbannedCount = parseInt(stdout.trim()) || 0;
+  bannedIpsCache = null;
   res.json({ ok: true, unbannedCount });
 });
 app.post("/api/unban-jail", async (req, res) => {
@@ -24661,6 +24670,7 @@ app.post("/api/unban-jail", async (req, res) => {
   if (!/^[\w-]+$/.test(jail)) return res.status(400).json({ error: "Invalid jail name" });
   if (jail === "anti-iptv") {
     var result = await runCmd("sudo ipset flush iptv_ban 2>&1");
+    bannedIpsCache = null;
     return res.json({ ok: result.ok, unbannedCount: 0 });
   }
   var jailStatus = await runCmd("sudo fail2ban-client status " + jail + " 2>&1");
@@ -24673,6 +24683,7 @@ app.post("/api/unban-jail", async (req, res) => {
     var r = await runCmd("sudo fail2ban-client set " + jail + " unbanip " + ips[i] + " 2>&1");
     if (r.ok) unbannedCount++;
   }
+  bannedIpsCache = null;
   res.json({ ok: true, unbannedCount });
 });
 app.get("/api/stats", async (_req, res) => {
