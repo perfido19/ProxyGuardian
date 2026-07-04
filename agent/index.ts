@@ -239,7 +239,12 @@ app.get("/api/stats", async (_req, res) => {
       if (match) totalBans24h += parseInt(match[1]);
     }
 
-    res.json({ totalBans24h, activeConnections, blockedCountries: 0, totalRequests24h: 0, topBannedIps: [], bansByCountry: [], banTimeline: [] });
+    // Log ruota daily (vedi /etc/logrotate.d/proxyguardian) quindi il file corrente
+    // copre gia' circa le ultime 24h.
+    const { stdout: reqCountOut } = await runCmd("wc -l < /var/log/nginx/access.log 2>/dev/null || echo 0");
+    const totalRequests24h = parseInt(reqCountOut.trim()) || 0;
+
+    res.json({ totalBans24h, activeConnections, blockedCountries: 0, totalRequests24h, topBannedIps: [], bansByCountry: [], banTimeline: [] });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

@@ -24687,7 +24687,9 @@ app.get("/api/stats", async (_req, res) => {
       const match = stdout.match(/Currently banned:\s*(\d+)/i);
       if (match) totalBans24h += parseInt(match[1]);
     }
-    res.json({ totalBans24h, activeConnections, blockedCountries: 0, totalRequests24h: 0, topBannedIps: [], bansByCountry: [], banTimeline: [] });
+    const { stdout: reqCountOut } = await runCmd("wc -l < /var/log/nginx/access.log 2>/dev/null || echo 0");
+    const totalRequests24h = parseInt(reqCountOut.trim()) || 0;
+    res.json({ totalBans24h, activeConnections, blockedCountries: 0, totalRequests24h, topBannedIps: [], bansByCountry: [], banTimeline: [] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
