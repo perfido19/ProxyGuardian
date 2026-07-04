@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { LoadingState } from "@/components/loading-state";
@@ -38,6 +39,20 @@ interface ParamsResult {
 interface ParamsResponse {
   ok: boolean;
   results: ParamsResult[];
+}
+
+interface WhitelistSyncResult {
+  vpsId: string;
+  vpsName: string;
+  success: boolean;
+  data?: any;
+  error?: string;
+}
+
+interface WhitelistResponse {
+  ok: boolean;
+  content: string;
+  syncResults: WhitelistSyncResult[];
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -83,6 +98,40 @@ export default function AntiIptvManagement() {
   const [windowHours, setWindowHours] = useState("");
   const [banDays, setBanDays] = useState("");
   const [lastResult, setLastResult] = useState<ParamsResponse | null>(null);
+
+  const { data: whitelistData } = useQuery<{ content: string }>({
+    queryKey: ["/api/fleet/anti-iptv/whitelist"],
+  });
+  const [whitelistText, setWhitelistText] = useState("");
+  const [whitelistSyncResult, setWhitelistSyncResult] = useState<WhitelistResponse | null>(null);
+  const [whitelistDirty, setWhitelistDirty] = useState(false);
+
+  if (whitelistData && !whitelistDirty && whitelistText === "") {
+    setWhitelistText(whitelistData.content);
+  }
+
+  const whitelistMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/fleet/anti-iptv/whitelist", { content: whitelistText });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || "Errore sconosciuto");
+      }
+      return res.json() as Promise<WhitelistResponse>;
+    },
+    onSuccess: (res) => {
+      setWhitelistSyncResult(res);
+      setWhitelistDirty(false);
+      const ok = res.syncResults.filter(r => r.success).length;
+      const fail = res.syncResults.filter(r => !r.success).length;
+      toast({
+        title: "Whitelist sincronizzata",
+        description: `${ok} successi, ${fail} errori su ${res.syncResults.length} VPS`,
+        variant: fail > 0 ? "destructive" : "default",
+      });
+    },
+    onError: (err: Error) => toast({ title: "Errore", description: err.message, variant: "destructive" }),
+  });
 
   const rows = data || [];
   const selectableIds = useMemo(() => rows.filter(r => r.variant !== "none").map(r => r.vpsId), [rows]);
@@ -212,6 +261,61 @@ export default function AntiIptvManagement() {
                     <TableCell className="font-mono text-sm">{row.maxUsername ?? "—"}</TableCell>
                     <TableCell className="font-mono text-sm">{formatDuration(row.windowSeconds)}</TableCell>
                     <TableCell className="font-mono text-sm">{formatDuration(row.banSeconds)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Whitelist</CardTitle>
+          <CardDescription>
+            IP o CIDR mai bannati dall'anti-iptv, uno per riga (es. <code>1.2.3.4</code> o <code>1.2.3.0/24</code>). Commenti con <code>#</code>. Sincronizzata su tutti i VPS enabled al salvataggio.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Textarea
+            value={whitelistText}
+            onChange={e => { setWhitelistText(e.target.value); setWhitelistDirty(true); }}
+            rows={8}
+            className="font-mono text-sm"
+            placeholder="1.2.3.4&#10;5.6.7.0/24"
+            disabled={!isAdmin}
+          />
+          {isAdmin && (
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                onClick={() => whitelistMutation.mutate()}
+                disabled={whitelistMutation.isPending}
+              >
+                {whitelistMutation.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Save className="w-4 h-4 mr-1" />}
+                Salva whitelist
+              </Button>
+            </div>
+          )}
+          {whitelistSyncResult && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>VPS</TableHead>
+                  <TableHead>Esito</TableHead>
+                  <TableHead>Dettaglio</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {whitelistSyncResult.syncResults.map(r => (
+                  <TableRow key={r.vpsId}>
+                    <TableCell className="font-mono text-xs">{r.vpsName}</TableCell>
+                    <TableCell>
+                      {r.success
+                        ? <Badge className="bg-green-600 text-white">OK</Badge>
+                        : <Badge className="bg-destructive text-white">Errore</Badge>}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{r.error || "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
