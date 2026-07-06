@@ -1996,7 +1996,13 @@ cscli collections install crowdsecurity/nginx >/dev/null 2>&1 || warn "Collectio
 cscli scenarios install crowdsecurity/nginx-req-limit-exceeded >/dev/null 2>&1 || true
 cscli scenarios install crowdsecurity/http-probing >/dev/null 2>&1 || true
 
-echo "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli *" > /etc/sudoers.d/pgagent-crowdsec
+cat > /etc/sudoers.d/pgagent-crowdsec << 'SUDOEOF'
+pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli *
+pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/scenarios/*
+pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/crowdsec/scenarios/*
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload-or-restart crowdsec
+pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec
+SUDOEOF
 chmod 440 /etc/sudoers.d/pgagent-crowdsec
 visudo -c >/dev/null 2>&1 || warn "Verifica manuale /etc/sudoers.d/pgagent-crowdsec"
 

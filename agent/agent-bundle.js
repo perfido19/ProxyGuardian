@@ -26337,7 +26337,7 @@ app.post("/api/crowdsec/scenario", async (req, res) => {
       return;
     }
     var scenarioPath = "/etc/crowdsec/scenarios/" + name + ".yaml";
-    await (0, import_promises.writeFile)(scenarioPath, content, "utf-8");
+    await sudoWriteFile(scenarioPath, content);
     var reload = await runCmd("sudo systemctl reload-or-restart crowdsec");
     if (!reload.ok) reload = await runCmd("sudo systemctl restart crowdsec");
     var active = await runCmd("systemctl is-active crowdsec");
@@ -26355,11 +26355,7 @@ app.delete("/api/crowdsec/scenario/:name", async (req, res) => {
       return;
     }
     var scenarioPath = "/etc/crowdsec/scenarios/" + name + ".yaml";
-    var { unlink } = await Promise.resolve().then(() => __toESM(require("fs/promises"), 1));
-    try {
-      await unlink(scenarioPath);
-    } catch {
-    }
+    await runCmd("sudo rm -f " + scenarioPath);
     var reload = await runCmd("sudo systemctl reload-or-restart crowdsec");
     if (!reload.ok) reload = await runCmd("sudo systemctl restart crowdsec");
     var active = await runCmd("systemctl is-active crowdsec");
