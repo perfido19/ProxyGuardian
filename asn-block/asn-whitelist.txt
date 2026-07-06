@@ -18,6 +18,9 @@ domain:stun.netbird.io
 domain:turn.netbird.io
 domain:streamline-vl-tlv-0.relay.netbird.io
 
+# --- Dashboard ProxyGuardian ---
+185.229.236.50/32     # Dashboard/LAPI centrale (AS60798 Servereasy — era nel blocklist, droppava i propri handshake NetBird verso la fleet)
+
 # --- Aggiungi qui altri prefissi o domini da escludere ---
 # Esempi:
 # 192.168.0.0/16       # Rete locale
