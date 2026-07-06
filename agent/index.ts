@@ -86,6 +86,16 @@ function sudoWriteFile(filePath: string, content: string): Promise<void> {
   });
 }
 
+function sudoRm(filePath: string): Promise<void> {
+  return new Promise<void>(function(resolve, reject) {
+    var child = spawn("sudo", ["rm", "-f", filePath], { stdio: ["ignore", "ignore", "ignore"] });
+    child.on("error", reject);
+    child.on("close", function(code: number) {
+      if (code === 0) resolve(); else reject(new Error("rm exit " + code + " for " + filePath));
+    });
+  });
+}
+
 const ALLOWED_SERVICES = new Set(["nginx", "fail2ban", "mariadb"]);
 
 const PGREP_NAMES: Record<string, string[]> = {
@@ -2065,7 +2075,7 @@ app.delete("/api/crowdsec/scenario/:name", async (req, res) => {
       return;
     }
     var scenarioPath = "/etc/crowdsec/scenarios/" + name + ".yaml";
-    await runCmd("sudo rm -f " + scenarioPath);
+    try { await sudoRm(scenarioPath); } catch { /* already gone */ }
     var reload = await runCmd("sudo systemctl reload-or-restart crowdsec");
     if (!reload.ok) reload = await runCmd("sudo systemctl restart crowdsec");
     var active = await runCmd("systemctl is-active crowdsec");

@@ -1998,8 +1998,8 @@ cscli scenarios install crowdsecurity/http-probing >/dev/null 2>&1 || true
 
 cat > /etc/sudoers.d/pgagent-crowdsec << 'SUDOEOF'
 pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli *
-pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/scenarios/*
-pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/crowdsec/scenarios/*
+pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/scenarios/*.yaml
+pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/crowdsec/scenarios/*.yaml
 pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload-or-restart crowdsec
 pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec
 SUDOEOF

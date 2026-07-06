@@ -24552,6 +24552,16 @@ function sudoWriteFile(filePath, content) {
     child.stdin.end();
   });
 }
+function sudoRm(filePath) {
+  return new Promise(function(resolve, reject) {
+    var child = (0, import_child_process.spawn)("sudo", ["rm", "-f", filePath], { stdio: ["ignore", "ignore", "ignore"] });
+    child.on("error", reject);
+    child.on("close", function(code) {
+      if (code === 0) resolve();
+      else reject(new Error("rm exit " + code + " for " + filePath));
+    });
+  });
+}
 var ALLOWED_SERVICES = /* @__PURE__ */ new Set(["nginx", "fail2ban", "mariadb"]);
 var PGREP_NAMES = {
   nginx: ["nginx"],
@@ -26355,7 +26365,10 @@ app.delete("/api/crowdsec/scenario/:name", async (req, res) => {
       return;
     }
     var scenarioPath = "/etc/crowdsec/scenarios/" + name + ".yaml";
-    await runCmd("sudo rm -f " + scenarioPath);
+    try {
+      await sudoRm(scenarioPath);
+    } catch {
+    }
     var reload = await runCmd("sudo systemctl reload-or-restart crowdsec");
     if (!reload.ok) reload = await runCmd("sudo systemctl restart crowdsec");
     var active = await runCmd("systemctl is-active crowdsec");
