@@ -26338,8 +26338,11 @@ app.post("/api/crowdsec/scenario", async (req, res) => {
     }
     var scenarioPath = "/etc/crowdsec/scenarios/" + name + ".yaml";
     await (0, import_promises.writeFile)(scenarioPath, content, "utf-8");
-    var reload = await runCmd("sudo systemctl reload-or-restart crowdsec 2>&1 || sudo systemctl restart crowdsec 2>&1 || true");
-    res.json({ ok: true, path: scenarioPath, reload: reload.stdout.trim() });
+    var reload = await runCmd("sudo systemctl reload-or-restart crowdsec");
+    if (!reload.ok) reload = await runCmd("sudo systemctl restart crowdsec");
+    var active = await runCmd("systemctl is-active crowdsec");
+    var isActive = active.stdout.trim() === "active";
+    res.json({ ok: isActive, path: scenarioPath, reload: reload.stdout || reload.stderr, active: active.stdout.trim() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -26357,8 +26360,11 @@ app.delete("/api/crowdsec/scenario/:name", async (req, res) => {
       await unlink(scenarioPath);
     } catch {
     }
-    var reload = await runCmd("sudo systemctl reload-or-restart crowdsec 2>&1 || sudo systemctl restart crowdsec 2>&1 || true");
-    res.json({ ok: true, reload: reload.stdout.trim() });
+    var reload = await runCmd("sudo systemctl reload-or-restart crowdsec");
+    if (!reload.ok) reload = await runCmd("sudo systemctl restart crowdsec");
+    var active = await runCmd("systemctl is-active crowdsec");
+    var isActive = active.stdout.trim() === "active";
+    res.json({ ok: isActive, reload: reload.stdout || reload.stderr, active: active.stdout.trim() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
