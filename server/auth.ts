@@ -169,6 +169,18 @@ export function updateUser(
   return toSafeUser(user);
 }
 
+/** Rimuove un VPS eliminato dagli assignedVps di tutti gli utenti operator. */
+export function removeVpsFromAllUsers(vpsId: string): void {
+  let changed = false;
+  for (const user of users.values()) {
+    if (user.assignedVps?.includes(vpsId)) {
+      user.assignedVps = user.assignedVps.filter(id => id !== vpsId);
+      changed = true;
+    }
+  }
+  if (changed) saveUsers();
+}
+
 export function deleteUser(id: string): void {
   const user = users.get(id);
   if (!user) throw new Error("Utente non trovato");

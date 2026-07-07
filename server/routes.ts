@@ -8,7 +8,7 @@ import { randomBytes } from "crypto";
 import { open as openMaxMind, type Reader, validate as validateIp } from "maxmind";
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
-import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, type UserRole } from "./auth";
+import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, removeVpsFromAllUsers, type UserRole } from "./auth";
 import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { join } from "path";
@@ -502,7 +502,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     catch (e: any) { res.status(400).json({ error: e.message }); }
   });
   app.delete("/api/vps/:id", requireAuth, requireAdmin, (req, res) => {
-    try { deleteVps(req.params.id); res.json({ success: true }); }
+    try {
+      deleteVps(req.params.id);
+      removeVpsFromAllUsers(req.params.id);
+      res.json({ success: true });
+    }
     catch (e: any) { res.status(400).json({ error: e.message }); }
   });
   app.get("/api/vps/health/all", requireAuth, async (req, res) => {
