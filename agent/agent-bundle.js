@@ -24616,7 +24616,7 @@ app.post("/api/services/:name/action", async (req, res) => {
   const status = await getServiceStatus(name);
   res.json({ ok: result.ok, stderr: result.stderr, service: status });
 });
-var BANNED_IPS_CACHE_TTL_MS = 15e3;
+var BANNED_IPS_CACHE_TTL_MS = 6e4;
 var bannedIpsCache = null;
 app.get("/api/banned-ips", async (_req, res) => {
   try {

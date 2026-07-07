@@ -165,7 +165,7 @@ app.post("/api/services/:name/action", async (req, res) => {
 // costa ~1-2s indipendentemente da parallelo/sequenziale, e con molte jail supera
 // facilmente i timeout della dashboard. Cache breve: i ban durano minuti/giorni,
 // non serve rileggere ad ogni poll. Invalidata sugli unban per restare accurata.
-const BANNED_IPS_CACHE_TTL_MS = 15000;
+const BANNED_IPS_CACHE_TTL_MS = 60000;
 let bannedIpsCache: { data: any; ts: number } | null = null;
 
 app.get("/api/banned-ips", async (_req, res) => {
