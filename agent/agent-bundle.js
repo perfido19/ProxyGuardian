@@ -26448,11 +26448,15 @@ app.post("/api/crowdsec/install", async (req, res) => {
     addStep("install scenario http-probing", { ...sc2, ok: true });
     if (centralLapi) {
       var credsYaml = "url: " + centralLapi.url + "\nlogin: " + centralLapi.login + "\npassword: " + centralLapi.password + "\n";
-      await (0, import_promises.writeFile)("/tmp/pg-cs-central-creds.yaml", credsYaml, "utf-8");
+      await (0, import_promises.writeFile)("/tmp/pg-cs-central-creds.yaml", credsYaml, { encoding: "utf-8", mode: 384 });
       var credsWrite = await runCmd(
         "cat /tmp/pg-cs-central-creds.yaml | sudo tee /etc/crowdsec/local_api_credentials.yaml > /dev/null",
         5e3
       );
+      try {
+        await (0, import_promises.unlink)("/tmp/pg-cs-central-creds.yaml");
+      } catch {
+      }
       addStep("register central LAPI credentials", credsWrite);
     }
     var enableSvc = await runCmd("sudo systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true", 5e3);
@@ -26463,8 +26467,12 @@ app.post("/api/crowdsec/install", async (req, res) => {
     var confRead = await runCmd("sudo cat " + bouncerConf, 5e3);
     if (centralLapi && confRead.ok) {
       var centralConf = confRead.stdout.replace(/api_key:.*/, "api_key: " + centralLapi.bouncerKey).replace(/api_url:.*/, "api_url: " + centralLapi.url);
-      await (0, import_promises.writeFile)("/tmp/pg-bouncer-conf.yaml", centralConf, "utf-8");
+      await (0, import_promises.writeFile)("/tmp/pg-bouncer-conf.yaml", centralConf, { encoding: "utf-8", mode: 384 });
       var centralConfWrite = await runCmd("cat /tmp/pg-bouncer-conf.yaml | sudo tee " + bouncerConf + " > /dev/null", 5e3);
+      try {
+        await (0, import_promises.unlink)("/tmp/pg-bouncer-conf.yaml");
+      } catch {
+      }
       addStep("register bouncer central API key", centralConfWrite);
     } else if (confRead.ok && confRead.stdout.indexOf("api_key: <API_KEY>") !== -1) {
       await runCmd("sudo cscli bouncers delete firewall-bouncer >/dev/null 2>&1 || true", 1e4);
@@ -26472,8 +26480,12 @@ app.post("/api/crowdsec/install", async (req, res) => {
       var key = bouncerKey.stdout.trim();
       if (bouncerKey.ok && key) {
         var newConf = confRead.stdout.replace("api_key: <API_KEY>", "api_key: " + key);
-        await (0, import_promises.writeFile)("/tmp/pg-bouncer-conf.yaml", newConf, "utf-8");
+        await (0, import_promises.writeFile)("/tmp/pg-bouncer-conf.yaml", newConf, { encoding: "utf-8", mode: 384 });
         var confWrite = await runCmd("cat /tmp/pg-bouncer-conf.yaml | sudo tee " + bouncerConf + " > /dev/null", 5e3);
+        try {
+          await (0, import_promises.unlink)("/tmp/pg-bouncer-conf.yaml");
+        } catch {
+        }
         addStep("register bouncer API key", confWrite);
       } else {
         addStep("register bouncer API key", { ok: false, stderr: bouncerKey.stderr || "cscli bouncers add failed", stdout: "" });
