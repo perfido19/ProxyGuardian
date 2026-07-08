@@ -24676,6 +24676,7 @@ app.post("/api/unban", async (req, res) => {
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return res.status(400).json({ error: "Invalid IP" });
   if (jail === "anti-iptv") {
     const result2 = await runCmd("sudo ipset del iptv_ban " + ip + " 2>&1");
+    if (result2.ok) delete iptvBanTimeByIp[ip];
     bannedIpsCache = null;
     res.json({ ok: result2.ok, message: result2.ok ? ip + " rimosso da iptv_ban" : result2.stderr });
     return;
@@ -24972,6 +24973,7 @@ app.post("/api/ipset/:name/remove", async (req, res) => {
   if (!/^[\w\-]+$/.test(name)) return res.status(400).json({ error: "Nome ipset non valido" });
   if (!ip || !/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
   const result = await runCmd(`sudo ipset del ${name} ${ip}`);
+  if (result.ok && name === "iptv_ban") delete iptvBanTimeByIp[ip];
   res.json({ ok: result.ok, error: result.ok ? void 0 : result.stderr });
 });
 app.get("/api/iptables", async (_req, res) => {
