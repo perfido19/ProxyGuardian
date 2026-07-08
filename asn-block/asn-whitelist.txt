@@ -20,6 +20,10 @@ domain:streamline-vl-tlv-0.relay.netbird.io
 
 # --- Dashboard ProxyGuardian ---
 185.229.236.50/32     # Dashboard/LAPI centrale (AS60798 Servereasy — era nel blocklist, droppava i propri handshake NetBird verso la fleet)
+100.116.0.0/16         # Rete NetBird fleet (management) — mai bannabile
+
+# --- Main backend xtreamcodes ---
+80.244.4.35/32         # Main backend (upstream 8880)
 
 # --- Aggiungi qui altri prefissi o domini da escludere ---
 # Esempi:

@@ -1,0 +1,9 @@
+name: proxyguardian/fleet-whitelist
+description: "Whitelist IP/reti della gestione fleet ProxyGuardian (dashboard, main backend, NetBird) — mai bannabili"
+whitelist:
+  reason: "fleet management network (dashboard/backend/NetBird)"
+  ip:
+    - "185.229.236.50"
+    - "80.244.4.35"
+  cidr:
+    - "100.116.0.0/16"

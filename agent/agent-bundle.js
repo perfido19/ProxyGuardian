@@ -25265,6 +25265,7 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers add firewall-bouncer -o raw",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/local_api_credentials.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 440 /etc/sudoers.d/proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
   'Defaults:pgagent env_keep += "DEBIAN_FRONTEND"',
@@ -26412,6 +26413,7 @@ app.post("/api/crowdsec/install", async (req, res) => {
   if (raw && /^https?:\/\/[\w.:-]+\/?$/.test(raw.url || "") && /^[\w-]+$/.test(raw.login || "") && /^[\w-]+$/.test(raw.password || "") && /^[A-Za-z0-9+/=_-]+$/.test(raw.bouncerKey || "")) {
     centralLapi = { url: raw.url, login: raw.login, password: raw.password, bouncerKey: raw.bouncerKey };
   }
+  var fleetWhitelist = typeof (req.body && req.body.fleetWhitelist) === "string" ? req.body.fleetWhitelist : null;
   try {
     await (0, import_promises.writeFile)("/tmp/pg-sudoers-crowdsec", SUDOERS_CONTENT, "utf-8");
     var sudoersUpdate = await runCmd(
@@ -26446,6 +26448,18 @@ app.post("/api/crowdsec/install", async (req, res) => {
     addStep("install scenario req-limit", { ...sc1, ok: true });
     var sc2 = await runCmd("sudo cscli scenarios install crowdsecurity/http-probing 2>&1 || true", 15e3);
     addStep("install scenario http-probing", { ...sc2, ok: true });
+    if (fleetWhitelist) {
+      await (0, import_promises.writeFile)("/tmp/pg-cs-fleet-whitelist.yaml", fleetWhitelist, { encoding: "utf-8", mode: 384 });
+      var wlWrite = await runCmd(
+        "cat /tmp/pg-cs-fleet-whitelist.yaml | sudo tee /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml > /dev/null",
+        5e3
+      );
+      try {
+        await (0, import_promises.unlink)("/tmp/pg-cs-fleet-whitelist.yaml");
+      } catch {
+      }
+      addStep("install fleet whitelist", wlWrite);
+    }
     if (centralLapi) {
       var credsYaml = "url: " + centralLapi.url + "\nlogin: " + centralLapi.login + "\npassword: " + centralLapi.password + "\n";
       await (0, import_promises.writeFile)("/tmp/pg-cs-central-creds.yaml", credsYaml, { encoding: "utf-8", mode: 384 });

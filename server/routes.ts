@@ -176,6 +176,7 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers add firewall-bouncer -o raw",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/local_api_credentials.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec-firewall-bouncer",
@@ -1603,9 +1604,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) {
       return res.status(500).json({ error: `Provisioning LAPI centrale fallito: ${e.message}` });
     }
+    let fleetWhitelist: string | undefined;
+    try {
+      fleetWhitelist = readFileSync(join(process.cwd(), "crowdsec", "parsers", "s02-enrich", "fleet-whitelist.yaml"), "utf-8");
+    } catch { fleetWhitelist = undefined; }
     try {
       const result = await agentPost(vps, "/api/crowdsec/install", {
         centralLapi: { url: central.url, login: central.login, password: central.password, bouncerKey: central.bouncerKey },
+        fleetWhitelist,
       }, SLOW_REQUEST_TIMEOUT);
       res.json(result);
     } catch (e: any) {
@@ -1897,6 +1903,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             catch { return null; }
           })()
         : null;
+      const crowdsecFleetWhitelist = installCrowdSec
+        ? (() => {
+            try { return readFileSync(join(process.cwd(), "crowdsec", "parsers", "s02-enrich", "fleet-whitelist.yaml"), "utf-8"); }
+            catch { return null; }
+          })()
+        : null;
 
       if (!rawName || !DEPLOY_VPS_NAME_RE.test(rawName)) {
         return res.status(400).json({ error: "Nome VPS non valido: usa solo lettere, numeri, spazi e .()_-" });
@@ -2083,6 +2095,10 @@ cscli scenarios install crowdsecurity/nginx-req-limit-exceeded >/dev/null 2>&1 |
 cscli scenarios install crowdsecurity/http-probing >/dev/null 2>&1 || true
 
 # Permessi pgagent per cscli/scenari gia' nel sudoers baseline (DEPLOY_AGENT_SUDOERS)
+
+${crowdsecFleetWhitelist ? `cat > /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml << 'CSWLEOF'
+${crowdsecFleetWhitelist}
+CSWLEOF` : "# fleet-whitelist.yaml non disponibile in fase di generazione script"}
 
 ${crowdsecCentral ? `cat > /etc/crowdsec/local_api_credentials.yaml << 'CSCREDSEOF'
 url: ${crowdsecCentral.url}

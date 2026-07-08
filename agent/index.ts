@@ -899,6 +899,7 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers add firewall-bouncer -o raw",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/local_api_credentials.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 440 /etc/sudoers.d/proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
   "Defaults:pgagent env_keep += \"DEBIAN_FRONTEND\"",
@@ -2126,6 +2127,7 @@ app.post("/api/crowdsec/install", async (req, res) => {
   ) {
     centralLapi = { url: raw.url, login: raw.login, password: raw.password, bouncerKey: raw.bouncerKey };
   }
+  var fleetWhitelist = typeof (req.body && req.body.fleetWhitelist) === "string" ? req.body.fleetWhitelist : null;
   try {
     await writeFile("/tmp/pg-sudoers-crowdsec", SUDOERS_CONTENT, "utf-8");
     var sudoersUpdate = await runCmd(
@@ -2168,6 +2170,16 @@ app.post("/api/crowdsec/install", async (req, res) => {
 
     var sc2 = await runCmd("sudo cscli scenarios install crowdsecurity/http-probing 2>&1 || true", 15000);
     addStep("install scenario http-probing", { ...sc2, ok: true });
+
+    if (fleetWhitelist) {
+      await writeFile("/tmp/pg-cs-fleet-whitelist.yaml", fleetWhitelist, { encoding: "utf-8", mode: 0o600 });
+      var wlWrite = await runCmd(
+        "cat /tmp/pg-cs-fleet-whitelist.yaml | sudo tee /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml > /dev/null",
+        5000
+      );
+      try { await unlink("/tmp/pg-cs-fleet-whitelist.yaml"); } catch {}
+      addStep("install fleet whitelist", wlWrite);
+    }
 
     if (centralLapi) {
       var credsYaml = "url: " + centralLapi.url + "\nlogin: " + centralLapi.login + "\npassword: " + centralLapi.password + "\n";
