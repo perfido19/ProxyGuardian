@@ -40,9 +40,11 @@ if [[ -n "$CURRENT_MAXELEM" ]] && [[ "$CURRENT_MAXELEM" -lt 1048576 ]]; then
     iptables -D INPUT -m set --match-set "$SET" src -j LOG  2>/dev/null || true
     ipset destroy "$SET"
     ipset create "$SET" hash:net family inet maxelem 1048576
-    iptables -I INPUT 1 -m set --match-set "$SET" src \
+    iptables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+        iptables -I INPUT 1 -m state --state ESTABLISHED,RELATED -j ACCEPT
+    iptables -I INPUT 2 -m set --match-set "$SET" src \
         -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[ASN-BLOCK] " --log-level 4
-    iptables -I INPUT 2 -m set --match-set "$SET" src -j DROP
+    iptables -I INPUT 3 -m set --match-set "$SET" src -j DROP
     iptables-save > /etc/iptables/rules.v4
 fi
 
