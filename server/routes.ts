@@ -153,6 +153,10 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/scenarios/*.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/crowdsec/scenarios/*.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload-or-restart crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/cat /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers delete firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers add firewall-bouncer -o raw",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec-firewall-bouncer",
@@ -2032,6 +2036,18 @@ cscli scenarios install crowdsecurity/http-probing >/dev/null 2>&1 || true
 systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
 systemctl restart crowdsec
 sleep 2
+
+BOUNCER_CONF=/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+if grep -q 'api_key: <API_KEY>' "\$BOUNCER_CONF" 2>/dev/null; then
+  cscli bouncers delete firewall-bouncer >/dev/null 2>&1 || true
+  BOUNCER_KEY=\$(cscli bouncers add firewall-bouncer -o raw)
+  if [ -n "\$BOUNCER_KEY" ]; then
+    sed -i "s|api_key: <API_KEY>|api_key: \$BOUNCER_KEY|" "\$BOUNCER_CONF"
+  else
+    warn "Generazione API key bouncer CrowdSec fallita"
+  fi
+fi
+
 systemctl restart crowdsec-firewall-bouncer || warn "crowdsec-firewall-bouncer restart fallito"
 ok "CrowdSec installato (firewall bouncer iptables)"`
         : `# ── CROWDSEC ────────────────────────────────────────────────

@@ -885,6 +885,10 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/scenarios/*.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/crowdsec/scenarios/*.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload-or-restart crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/cat /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers delete firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers add firewall-bouncer -o raw",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 440 /etc/sudoers.d/proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
   "Defaults:pgagent env_keep += \"DEBIAN_FRONTEND\"",
@@ -2149,6 +2153,22 @@ app.post("/api/crowdsec/install", async (_req, res) => {
 
     var restartCs = await runCmd("sudo systemctl restart crowdsec 2>&1", 15000);
     addStep("start crowdsec", restartCs);
+
+    var bouncerConf = "/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml";
+    var confRead = await runCmd("sudo cat " + bouncerConf, 5000);
+    if (confRead.ok && confRead.stdout.indexOf("api_key: <API_KEY>") !== -1) {
+      await runCmd("sudo cscli bouncers delete firewall-bouncer >/dev/null 2>&1 || true", 10000);
+      var bouncerKey = await runCmd("sudo cscli bouncers add firewall-bouncer -o raw", 10000);
+      var key = bouncerKey.stdout.trim();
+      if (bouncerKey.ok && key) {
+        var newConf = confRead.stdout.replace("api_key: <API_KEY>", "api_key: " + key);
+        await writeFile("/tmp/pg-bouncer-conf.yaml", newConf, "utf-8");
+        var confWrite = await runCmd("cat /tmp/pg-bouncer-conf.yaml | sudo tee " + bouncerConf + " > /dev/null", 5000);
+        addStep("register bouncer API key", confWrite);
+      } else {
+        addStep("register bouncer API key", { ok: false, stderr: bouncerKey.stderr || "cscli bouncers add failed", stdout: "" });
+      }
+    }
 
     var restartBouncer = await runCmd("sudo systemctl restart crowdsec-firewall-bouncer 2>&1 || true", 10000);
     addStep("start bouncer", { ...restartBouncer, ok: true });
