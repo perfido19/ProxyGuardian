@@ -25264,6 +25264,7 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers delete firewall-bouncer",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers add firewall-bouncer -o raw",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/local_api_credentials.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 440 /etc/sudoers.d/proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
   'Defaults:pgagent env_keep += "DEBIAN_FRONTEND"',
@@ -26401,10 +26402,15 @@ app.delete("/api/crowdsec/scenario/:name", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.post("/api/crowdsec/install", async (_req, res) => {
+app.post("/api/crowdsec/install", async (req, res) => {
   var steps = [];
   function addStep(label, result) {
     steps.push({ step: label, ok: result.ok, error: result.ok ? void 0 : (result.stderr || result.stdout).slice(0, 300) });
+  }
+  var centralLapi = null;
+  var raw = req.body && req.body.centralLapi;
+  if (raw && /^https?:\/\/[\w.:-]+\/?$/.test(raw.url || "") && /^[\w-]+$/.test(raw.login || "") && /^[\w-]+$/.test(raw.password || "") && /^[A-Za-z0-9+/=_-]+$/.test(raw.bouncerKey || "")) {
+    centralLapi = { url: raw.url, login: raw.login, password: raw.password, bouncerKey: raw.bouncerKey };
   }
   try {
     await (0, import_promises.writeFile)("/tmp/pg-sudoers-crowdsec", SUDOERS_CONTENT, "utf-8");
@@ -26440,13 +26446,27 @@ app.post("/api/crowdsec/install", async (_req, res) => {
     addStep("install scenario req-limit", { ...sc1, ok: true });
     var sc2 = await runCmd("sudo cscli scenarios install crowdsecurity/http-probing 2>&1 || true", 15e3);
     addStep("install scenario http-probing", { ...sc2, ok: true });
+    if (centralLapi) {
+      var credsYaml = "url: " + centralLapi.url + "\nlogin: " + centralLapi.login + "\npassword: " + centralLapi.password + "\n";
+      await (0, import_promises.writeFile)("/tmp/pg-cs-central-creds.yaml", credsYaml, "utf-8");
+      var credsWrite = await runCmd(
+        "cat /tmp/pg-cs-central-creds.yaml | sudo tee /etc/crowdsec/local_api_credentials.yaml > /dev/null",
+        5e3
+      );
+      addStep("register central LAPI credentials", credsWrite);
+    }
     var enableSvc = await runCmd("sudo systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true", 5e3);
     addStep("enable services", { ...enableSvc, ok: true });
     var restartCs = await runCmd("sudo systemctl restart crowdsec 2>&1", 15e3);
     addStep("start crowdsec", restartCs);
     var bouncerConf = "/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml";
     var confRead = await runCmd("sudo cat " + bouncerConf, 5e3);
-    if (confRead.ok && confRead.stdout.indexOf("api_key: <API_KEY>") !== -1) {
+    if (centralLapi && confRead.ok) {
+      var centralConf = confRead.stdout.replace(/api_key:.*/, "api_key: " + centralLapi.bouncerKey).replace(/api_url:.*/, "api_url: " + centralLapi.url);
+      await (0, import_promises.writeFile)("/tmp/pg-bouncer-conf.yaml", centralConf, "utf-8");
+      var centralConfWrite = await runCmd("cat /tmp/pg-bouncer-conf.yaml | sudo tee " + bouncerConf + " > /dev/null", 5e3);
+      addStep("register bouncer central API key", centralConfWrite);
+    } else if (confRead.ok && confRead.stdout.indexOf("api_key: <API_KEY>") !== -1) {
       await runCmd("sudo cscli bouncers delete firewall-bouncer >/dev/null 2>&1 || true", 1e4);
       var bouncerKey = await runCmd("sudo cscli bouncers add firewall-bouncer -o raw", 1e4);
       var key = bouncerKey.stdout.trim();

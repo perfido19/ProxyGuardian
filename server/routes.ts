@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { totalmem, freemem, cpus } from "os";
-import { execSync, execFile } from "child_process";
+import { execSync, execFile, execFileSync } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { randomBytes } from "crypto";
@@ -52,6 +52,24 @@ const OPERATOR_WRITE_PATHS = [
 ];
 
 const NETBIRD_SETUP_KEY = process.env.NETBIRD_SETUP_KEY?.trim() || "";
+const CROWDSEC_LAPI_URL = process.env.CROWDSEC_LAPI_URL?.trim() || "http://100.116.132.180:8080";
+
+function crowdsecMachineName(vpsId: string): string { return `pg-${vpsId}-agent`; }
+function crowdsecBouncerName(vpsId: string): string { return `pg-${vpsId}-bouncer`; }
+
+// Esegue localmente (sul dashboard, dove gira il LAPI centrale) il provisioning
+// di machine + bouncer per un VPS, cosi' il suo CrowdSec/bouncer si registra
+// come client del LAPI centrale invece di girare come istanza isolata.
+function provisionCrowdsecCentral(vpsId: string): { url: string; login: string; password: string; bouncerKey: string } {
+  const login = crowdsecMachineName(vpsId);
+  const bouncerName = crowdsecBouncerName(vpsId);
+  const password = randomBytes(18).toString("base64").replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
+  try { execFileSync("cscli", ["machines", "delete", login], { timeout: 10000, stdio: "ignore" }); } catch {}
+  try { execFileSync("cscli", ["bouncers", "delete", bouncerName], { timeout: 10000, stdio: "ignore" }); } catch {}
+  execFileSync("cscli", ["machines", "add", login, "--password", password, "--url", CROWDSEC_LAPI_URL, "--force"], { timeout: 15000 });
+  const bouncerKey = execFileSync("cscli", ["bouncers", "add", bouncerName, "-o", "raw"], { timeout: 15000 }).toString().trim();
+  return { url: CROWDSEC_LAPI_URL, login, password, bouncerKey };
+}
 const DEPLOY_AGENT_GIT_REF = process.env.DEPLOY_AGENT_GIT_REF?.trim() || "main";
 const DEPLOY_VPS_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 .()_-]{0,79}$/;
 const DEPLOY_HOST_RE = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
@@ -157,6 +175,7 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers delete firewall-bouncer",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli bouncers add firewall-bouncer -o raw",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/local_api_credentials.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec-firewall-bouncer",
@@ -1575,6 +1594,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ─── Fleet CrowdSec ───────────────────────────────────────────────────────────
 
+  app.post("/api/crowdsec/install/:id", requireAuth, requireAdmin, async (req, res) => {
+    const vps = getVpsById(req.params.id);
+    if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    let central: { url: string; login: string; password: string; bouncerKey: string };
+    try {
+      central = provisionCrowdsecCentral(vps.id);
+    } catch (e: any) {
+      return res.status(500).json({ error: `Provisioning LAPI centrale fallito: ${e.message}` });
+    }
+    try {
+      const result = await agentPost(vps, "/api/crowdsec/install", {
+        centralLapi: { url: central.url, login: central.login, password: central.password, bouncerKey: central.bouncerKey },
+      }, SLOW_REQUEST_TIMEOUT);
+      res.json(result);
+    } catch (e: any) {
+      res.status(502).json({ error: e.message });
+    }
+  });
+
   app.get("/api/fleet/crowdsec/summary", requireAuth, async (_req, res) => {
     const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
     const results = await Promise.all(vpsList.map(async (vps) => {
@@ -1850,6 +1888,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const installAsnBlock = parseDeployToggle(req.body?.installAsnBlock, true);
       const installAntiIptv = parseDeployToggle(req.body?.installAntiIptv, false);
       const installCrowdSec = parseDeployToggle(req.body?.installCrowdSec, false);
+      const crowdsecCentral = installCrowdSec
+        ? (() => {
+            const slug = (typeof req.body?.vpsName === "string" ? req.body.vpsName : "vps")
+              .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30) || "vps";
+            const suffix = randomBytes(3).toString("hex");
+            try { return provisionCrowdsecCentral(`${slug}-${suffix}`); }
+            catch { return null; }
+          })()
+        : null;
 
       if (!rawName || !DEPLOY_VPS_NAME_RE.test(rawName)) {
         return res.status(400).json({ error: "Nome VPS non valido: usa solo lettere, numeri, spazi e .()_-" });
@@ -2037,12 +2084,21 @@ cscli scenarios install crowdsecurity/http-probing >/dev/null 2>&1 || true
 
 # Permessi pgagent per cscli/scenari gia' nel sudoers baseline (DEPLOY_AGENT_SUDOERS)
 
+${crowdsecCentral ? `cat > /etc/crowdsec/local_api_credentials.yaml << 'CSCREDSEOF'
+url: ${crowdsecCentral.url}
+login: ${crowdsecCentral.login}
+password: ${crowdsecCentral.password}
+CSCREDSEOF` : "# LAPI centrale non disponibile in fase di generazione script: CrowdSec installato standalone"}
+
 systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
 systemctl restart crowdsec
 sleep 2
 
 BOUNCER_CONF=/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
-if grep -q 'api_key: <API_KEY>' "\$BOUNCER_CONF" 2>/dev/null; then
+${crowdsecCentral
+  ? `sed -i "s|api_key:.*|api_key: ${crowdsecCentral.bouncerKey}|" "\$BOUNCER_CONF"
+sed -i "s|api_url:.*|api_url: ${crowdsecCentral.url}|" "\$BOUNCER_CONF"`
+  : `if grep -q 'api_key: <API_KEY>' "\$BOUNCER_CONF" 2>/dev/null; then
   cscli bouncers delete firewall-bouncer >/dev/null 2>&1 || true
   BOUNCER_KEY=\$(cscli bouncers add firewall-bouncer -o raw)
   if [ -n "\$BOUNCER_KEY" ]; then
@@ -2050,7 +2106,7 @@ if grep -q 'api_key: <API_KEY>' "\$BOUNCER_CONF" 2>/dev/null; then
   else
     warn "Generazione API key bouncer CrowdSec fallita"
   fi
-fi
+fi`}
 
 systemctl restart crowdsec-firewall-bouncer || warn "crowdsec-firewall-bouncer restart fallito"
 ok "CrowdSec installato (firewall bouncer iptables)"`

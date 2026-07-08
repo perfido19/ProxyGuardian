@@ -82,7 +82,7 @@ function OverviewTab() {
 
   const installMutation = useMutation({
     mutationFn: async (vpsId: string) => {
-      const r = await apiRequest("POST", `/api/vps/${vpsId}/proxy/api/crowdsec/install`);
+      const r = await apiRequest("POST", `/api/crowdsec/install/${vpsId}`);
       return r.json();
     },
     onSuccess: (result: { ok: boolean; steps: Array<{ step: string; ok: boolean; error?: string }> }, vpsId) => {
