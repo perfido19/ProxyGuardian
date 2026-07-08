@@ -24618,6 +24618,7 @@ app.post("/api/services/:name/action", async (req, res) => {
 });
 var BANNED_IPS_CACHE_TTL_MS = 6e4;
 var bannedIpsCache = null;
+var iptvBanTimeByIp = {};
 app.get("/api/banned-ips", async (_req, res) => {
   try {
     if (bannedIpsCache && Date.now() - bannedIpsCache.ts < BANNED_IPS_CACHE_TTL_MS) {
@@ -24643,6 +24644,13 @@ app.get("/api/banned-ips", async (_req, res) => {
         bannedIps.push({ ip, jail, banTime: banTimeByJailIp[jail + "|" + ip] || (/* @__PURE__ */ new Date()).toISOString() });
       }
     }
+    const { stdout: iptvLog } = await runCmd("cat /var/log/anti-iptv/bans.log 2>/dev/null || echo ''");
+    const iptvLogRe = /DATA:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\nIP BANNATO:\s*(\d+\.\d+\.\d+\.\d+)/g;
+    const iptvLocalBanTimeByIp = {};
+    let iptvLogMatch;
+    while ((iptvLogMatch = iptvLogRe.exec(iptvLog)) !== null) {
+      iptvLocalBanTimeByIp[iptvLogMatch[2]] = new Date(iptvLogMatch[1]).toISOString();
+    }
     var iptvR = await runCmd("sudo ipset list iptv_ban 2>/dev/null | awk '/^Members:/{found=1;next} found && /^[0-9]/{print $1}' || echo ''");
     if (iptvR.ok && iptvR.stdout.trim()) {
       var iptvIps = iptvR.stdout.split("\n").map(function(l) {
@@ -24651,7 +24659,9 @@ app.get("/api/banned-ips", async (_req, res) => {
         return /^\d+\.\d+\.\d+\.\d+$/.test(l);
       });
       for (var i = 0; i < iptvIps.length; i++) {
-        bannedIps.push({ ip: iptvIps[i], jail: "anti-iptv", banTime: (/* @__PURE__ */ new Date()).toISOString() });
+        var iptvIp = iptvIps[i];
+        var iptvBanTime = iptvLocalBanTimeByIp[iptvIp] || iptvBanTimeByIp[iptvIp] || (/* @__PURE__ */ new Date()).toISOString();
+        bannedIps.push({ ip: iptvIp, jail: "anti-iptv", banTime: iptvBanTime });
       }
     }
     bannedIpsCache = { data: bannedIps, ts: Date.now() };
@@ -24953,6 +24963,7 @@ app.post("/api/ipset/:name/add", async (req, res) => {
   if (!ip || !/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
   if (isNetbirdRangeIp(ip)) return res.status(400).json({ error: "IP nel range NetBird (100.64.0.0/10): non bannabile, e' la rete di gestione fleet" });
   const result = await runCmd(`sudo ipset add ${name} ${ip}`);
+  if (result.ok && name === "iptv_ban") iptvBanTimeByIp[ip] = (/* @__PURE__ */ new Date()).toISOString();
   res.json({ ok: result.ok, error: result.ok ? void 0 : result.stderr });
 });
 app.post("/api/ipset/:name/remove", async (req, res) => {
