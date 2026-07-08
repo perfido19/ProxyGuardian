@@ -1162,6 +1162,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/fleet/ip-ban", requireAuth, requireAdmin, async (req, res) => {
     const { ip } = req.body;
     if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
+    const octets = ip.split(".").map(Number);
+    if (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) {
+      return res.status(400).json({ error: "IP nel range NetBird (100.64.0.0/10): non bannabile, e' la rete di gestione fleet" });
+    }
     const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter((v): v is any => !!v);
     const results = await Promise.allSettled(vpsList.map(async (vps) => {
       try { await agentPost(vps, "/api/ipset/iptv_ban/add", { ip }); return { vpsId: vps.id, vpsName: vps.name, ok: true }; }

@@ -529,11 +529,20 @@ app.get("/api/ipset/:name", async (req, res) => {
   }
 });
 
+function isNetbirdRangeIp(ip: string): boolean {
+  const base = ip.split("/")[0];
+  const parts = base.split(".").map(Number);
+  if (parts.length !== 4 || parts.some(function(n) { return isNaN(n) || n < 0 || n > 255; })) return false;
+  // CGNAT 100.64.0.0/10, usato esclusivamente dalla mesh NetBird
+  return parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127;
+}
+
 app.post("/api/ipset/:name/add", async (req, res) => {
   const { name } = req.params;
   const { ip } = req.body;
   if (!/^[\w\-]+$/.test(name)) return res.status(400).json({ error: "Nome ipset non valido" });
   if (!ip || !/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
+  if (isNetbirdRangeIp(ip)) return res.status(400).json({ error: "IP nel range NetBird (100.64.0.0/10): non bannabile, e' la rete di gestione fleet" });
   const result = await runCmd(`sudo ipset add ${name} ${ip}`);
   res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
 });

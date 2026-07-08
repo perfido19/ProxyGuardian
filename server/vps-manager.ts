@@ -230,13 +230,18 @@ export async function syncIptvBanFleet(): Promise<BanSyncResult> {
     })
   );
 
-  // 2. Unione di tutti gli IP bannati nella fleet
+  // 2. Unione di tutti gli IP bannati nella fleet (esclude il range NetBird 100.64.0.0/10 —
+  //    non deve mai propagarsi un self-ban della rete di gestione fleet)
+  const isNetbirdRangeIp = (ip: string): boolean => {
+    const octets = ip.split(".").map(Number);
+    return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
+  };
   const allBannedIps = new Set<string>();
   const vpsBanMap = new Map<string, Set<string>>();
   for (let i = 0; i < pullResults.length; i++) {
     const r = pullResults[i];
     const vps = enabled[i];
-    const ips = r.status === "fulfilled" ? r.value.ips : [];
+    const ips = (r.status === "fulfilled" ? r.value.ips : []).filter(ip => !isNetbirdRangeIp(ip));
     vpsBanMap.set(vps.id, new Set(ips));
     ips.forEach(ip => allBannedIps.add(ip));
   }
