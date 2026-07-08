@@ -70,6 +70,7 @@ labels:
 // ─── Overview tab ─────────────────────────────────────────────────────────────
 
 function OverviewTab() {
+  const { toast } = useToast();
   const { data, isLoading, refetch } = useQuery<VpsSummary[]>({
     queryKey: ["fleet-crowdsec-summary"],
     queryFn: async () => { const r = await apiRequest("GET", "/api/fleet/crowdsec/summary"); return r.json(); },
@@ -78,6 +79,27 @@ function OverviewTab() {
 
   const installed = data ? data.filter(v => v.installed) : [];
   const totalDecisions = installed.reduce((s, v) => s + v.activeDecisions, 0);
+
+  const installMutation = useMutation({
+    mutationFn: async (vpsId: string) => {
+      const r = await apiRequest("POST", `/api/vps/${vpsId}/proxy/api/crowdsec/install`);
+      return r.json();
+    },
+    onSuccess: (result: { ok: boolean; steps: Array<{ step: string; ok: boolean; error?: string }> }, vpsId) => {
+      const vpsName = data?.find(v => v.vpsId === vpsId)?.vpsName || vpsId;
+      if (result.ok) {
+        toast({ title: `CrowdSec installato su ${vpsName}` });
+      } else {
+        const failed = result.steps.filter(s => !s.ok).map(s => s.step).join(", ");
+        toast({ title: `Installazione ${vpsName}: errori`, description: failed, variant: "destructive" });
+      }
+      refetch();
+    },
+    onError: (err: Error, vpsId) => {
+      const vpsName = data?.find(v => v.vpsId === vpsId)?.vpsName || vpsId;
+      toast({ title: `Installazione ${vpsName} fallita`, description: err.message, variant: "destructive" });
+    },
+  });
 
   return (
     <div className="space-y-4">
@@ -120,7 +142,21 @@ function OverviewTab() {
                 </div>
                 {vps.error && <p className="text-xs text-destructive truncate">{vps.error}</p>}
                 {!vps.installed && !vps.error && (
-                  <p className="text-xs text-muted-foreground">Non installato</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">Non installato</p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      disabled={installMutation.isPending && installMutation.variables === vps.vpsId}
+                      onClick={() => installMutation.mutate(vps.vpsId)}
+                    >
+                      {installMutation.isPending && installMutation.variables === vps.vpsId
+                        ? <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                        : null}
+                      Installa
+                    </Button>
+                  </div>
                 )}
                 {vps.installed && (
                   <div className="flex gap-1.5 flex-wrap">

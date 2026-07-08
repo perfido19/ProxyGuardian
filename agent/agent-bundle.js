@@ -25235,15 +25235,25 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/asn-whitelist-nets.txt",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/asn-blocklist.txt",
-  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/gpg *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/gpg --batch --yes --dearmor -o /usr/share/keyrings/crowdsec-archive-keyring.gpg",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/share/keyrings/crowdsec-archive-keyring.gpg",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/apt/sources.list.d/crowdsec.list",
-  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get update",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get update -qq",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get install -y crowdsec crowdsec-firewall-bouncer-iptables",
-  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli *",
-  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/sudoers.d/pgagent-crowdsec",
-  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 440 /etc/sudoers.d/pgagent-crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli decisions list -o json",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli alerts list -o json",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli decisions delete --ip *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli metrics -o json",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli hub update",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli collections install crowdsecurity/nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli scenarios install crowdsecurity/nginx-req-limit-exceeded",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli scenarios install crowdsecurity/http-probing",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/scenarios/*.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/crowdsec/scenarios/*.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload-or-restart crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 440 /etc/sudoers.d/proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
+  'Defaults:pgagent env_keep += "DEBIAN_FRONTEND"',
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec-firewall-bouncer",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec",
@@ -26417,11 +26427,6 @@ app.post("/api/crowdsec/install", async (_req, res) => {
     addStep("install scenario req-limit", { ...sc1, ok: true });
     var sc2 = await runCmd("sudo cscli scenarios install crowdsecurity/http-probing 2>&1 || true", 15e3);
     addStep("install scenario http-probing", { ...sc2, ok: true });
-    var sudoers = await runCmd(
-      "echo 'pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli *' | sudo tee /etc/sudoers.d/pgagent-crowdsec > /dev/null && sudo chmod 440 /etc/sudoers.d/pgagent-crowdsec && sudo visudo -c >/dev/null 2>&1",
-      5e3
-    );
-    addStep("configure sudoers", sudoers);
     var enableSvc = await runCmd("sudo systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true", 5e3);
     addStep("enable services", { ...enableSvc, ok: true });
     var restartCs = await runCmd("sudo systemctl restart crowdsec 2>&1", 15e3);

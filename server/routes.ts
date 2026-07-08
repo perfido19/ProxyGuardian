@@ -136,6 +136,31 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable netbird-cleanup.service",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable netbird-cleanup.service",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/sudoers.d/proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 440 /etc/sudoers.d/proxy-guardian-agent",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/gpg --batch --yes --dearmor -o /usr/share/keyrings/crowdsec-archive-keyring.gpg",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/share/keyrings/crowdsec-archive-keyring.gpg",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/apt/sources.list.d/crowdsec.list",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get update -qq",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get install -y crowdsec crowdsec-firewall-bouncer-iptables",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli decisions list -o json",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli alerts list -o json",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli decisions delete --ip *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli metrics -o json",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli hub update",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli collections install crowdsecurity/nginx",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli scenarios install crowdsecurity/nginx-req-limit-exceeded",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli scenarios install crowdsecurity/http-probing",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/scenarios/*.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/crowdsec/scenarios/*.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload-or-restart crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec-firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec-firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop crowdsec",
+  "Defaults:pgagent env_keep += \"DEBIAN_FRONTEND\"",
   "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /root/.ssh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee -a /root/.ssh/authorized_keys",
   "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 700 /root/.ssh",
@@ -1973,10 +1998,12 @@ ${DEPLOY_WHITELIST_WATCHER_SERVICE}
 WHITELISTWATCHERSVCEOF
 
 ipset create blocked_asn hash:net family inet maxelem 1048576 -exist
+iptables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+  iptables -I INPUT 1 -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -C INPUT -m set --match-set blocked_asn src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[ASN-BLOCK] " --log-level 4 2>/dev/null || \
-  iptables -I INPUT 1 -m set --match-set blocked_asn src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[ASN-BLOCK] " --log-level 4
+  iptables -I INPUT 2 -m set --match-set blocked_asn src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[ASN-BLOCK] " --log-level 4
 iptables -C INPUT -m set --match-set blocked_asn src -j DROP 2>/dev/null || \
-  iptables -I INPUT 2 -m set --match-set blocked_asn src -j DROP
+  iptables -I INPUT 3 -m set --match-set blocked_asn src -j DROP
 ipset save > /etc/ipset.conf
 
 if grep -Eq '^[[:space:]]*AS[0-9]+' /etc/asn-blocklist.txt; then
@@ -2000,15 +2027,7 @@ cscli collections install crowdsecurity/nginx >/dev/null 2>&1 || warn "Collectio
 cscli scenarios install crowdsecurity/nginx-req-limit-exceeded >/dev/null 2>&1 || true
 cscli scenarios install crowdsecurity/http-probing >/dev/null 2>&1 || true
 
-cat > /etc/sudoers.d/pgagent-crowdsec << 'SUDOEOF'
-pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli *
-pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/scenarios/*.yaml
-pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/crowdsec/scenarios/*.yaml
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl reload-or-restart crowdsec
-pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec
-SUDOEOF
-chmod 440 /etc/sudoers.d/pgagent-crowdsec
-visudo -c >/dev/null 2>&1 || warn "Verifica manuale /etc/sudoers.d/pgagent-crowdsec"
+# Permessi pgagent per cscli/scenari gia' nel sudoers baseline (DEPLOY_AGENT_SUDOERS)
 
 systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
 systemctl restart crowdsec
