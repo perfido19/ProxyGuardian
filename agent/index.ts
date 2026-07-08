@@ -176,6 +176,16 @@ app.get("/api/banned-ips", async (_req, res) => {
     const { stdout: jailList } = await runCmd("sudo fail2ban-client status 2>/dev/null | grep -i 'jail list' | cut -d: -f2");
     const jails = jailList.split(",").map((j: string) => j.trim()).filter(Boolean);
     const bannedIps: object[] = [];
+    // fail2ban-client "get <jail> banip --with-time" e' inaffidabile (crasha con ValueError
+    // "year ... out of range" su jail con ban permanenti, bantime=-1): leggiamo l'orario reale
+    // del ban dalle righe "NOTICE [jail] Ban <ip>" del log, che riportano l'ora di sistema del VPS.
+    const { stdout: banLog } = await runCmd("grep -E 'NOTICE\\s+\\[.*\\]\\s+Ban ' /var/log/fail2ban.log 2>/dev/null || echo ''");
+    const banLineRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+.*\[([^\]]+)\]\s+Ban\s+(\d+\.\d+\.\d+\.\d+)/;
+    const banTimeByJailIp: Record<string, string> = {};
+    for (const line of banLog.split("\n")) {
+      const m = banLineRe.exec(line);
+      if (m) banTimeByJailIp[m[2] + "|" + m[3]] = new Date(m[1]).toISOString();
+    }
     // Un fail2ban-client status per jail in parallelo: su jail con banlist molto grandi (es. migliaia
     // di IP) farli in sequenza puo' superare il timeout lato dashboard e far apparire il VPS offline.
     const jailResults = await Promise.all(jails.map(jail => runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`)));
@@ -185,7 +195,7 @@ app.get("/api/banned-ips", async (_req, res) => {
       const listLine = stdout.split("\n").find(l => /banned ip list/i.test(l)) || "";
       const ips = listLine.match(/\d+\.\d+\.\d+\.\d+/g) || [];
       for (const ip of ips) {
-        bannedIps.push({ ip, jail, banTime: new Date().toISOString() });
+        bannedIps.push({ ip, jail, banTime: banTimeByJailIp[jail + "|" + ip] || new Date().toISOString() });
       }
     }
     // Aggiungi IP da ipset iptv_ban (anti-iptv.sh)

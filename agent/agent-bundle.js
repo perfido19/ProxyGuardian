@@ -24626,6 +24626,13 @@ app.get("/api/banned-ips", async (_req, res) => {
     const { stdout: jailList } = await runCmd("sudo fail2ban-client status 2>/dev/null | grep -i 'jail list' | cut -d: -f2");
     const jails = jailList.split(",").map((j) => j.trim()).filter(Boolean);
     const bannedIps = [];
+    const { stdout: banLog } = await runCmd("grep -E 'NOTICE\\s+\\[.*\\]\\s+Ban ' /var/log/fail2ban.log 2>/dev/null || echo ''");
+    const banLineRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+.*\[([^\]]+)\]\s+Ban\s+(\d+\.\d+\.\d+\.\d+)/;
+    const banTimeByJailIp = {};
+    for (const line of banLog.split("\n")) {
+      const m = banLineRe.exec(line);
+      if (m) banTimeByJailIp[m[2] + "|" + m[3]] = new Date(m[1]).toISOString();
+    }
     const jailResults = await Promise.all(jails.map((jail) => runCmd(`sudo fail2ban-client status ${jail} 2>/dev/null`)));
     for (let ji = 0; ji < jails.length; ji++) {
       const jail = jails[ji];
@@ -24633,7 +24640,7 @@ app.get("/api/banned-ips", async (_req, res) => {
       const listLine = stdout.split("\n").find((l) => /banned ip list/i.test(l)) || "";
       const ips = listLine.match(/\d+\.\d+\.\d+\.\d+/g) || [];
       for (const ip of ips) {
-        bannedIps.push({ ip, jail, banTime: (/* @__PURE__ */ new Date()).toISOString() });
+        bannedIps.push({ ip, jail, banTime: banTimeByJailIp[jail + "|" + ip] || (/* @__PURE__ */ new Date()).toISOString() });
       }
     }
     var iptvR = await runCmd("sudo ipset list iptv_ban 2>/dev/null | awk '/^Members:/{found=1;next} found && /^[0-9]/{print $1}' || echo ''");
