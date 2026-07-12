@@ -23,6 +23,7 @@ import {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface AsnEntry { asn: string; description?: string; }
+const ASN_BLOCKLIST_EXCLUDED_VPS_NAMES = new Set(["dynamoxc"]);
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
 interface AsnStat { asn: string; org: string; country: string; countryCode: string; packets: number; bytes: number; }
 interface AsnStats { updatedAt: string; totalPrefixes: number; top: AsnStat[]; }
@@ -889,6 +890,34 @@ export default function AsnBlock() {
   const allOnlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
   const onlineVps = selectedVps === "all" ? allOnlineVps : allOnlineVps.filter(v => v.id === selectedVps);
 
+  // ASN block sync status per VPS (per il pallino nel selettore): confronta la blocklist
+  // locale di ogni VPS con quella fleet centrale — verde se ha tutti gli ASN, rosso se manca qualcosa.
+  const { data: fleetBlocklistForSync } = useQuery<{ content: string }>({
+    queryKey: ["fleet-asn-blocklist-sync"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/fleet/asn/blocklist"); return r.json(); },
+  });
+  const { data: asnSyncResults } = useQuery<BulkResult[]>({
+    queryKey: ["asn-sync-status", allOnlineVps.length],
+    queryFn: async () => {
+      const r = await apiRequest("POST", "/api/vps/bulk/get", {
+        vpsIds: allOnlineVps.map(v => v.id),
+        path: "/api/config/asn-blocklist.txt",
+      });
+      return r.json();
+    },
+    enabled: allOnlineVps.length > 0,
+    refetchInterval: 120000,
+  });
+  const fleetAsnSetForSync = new Set(parseAsnBlocklist(fleetBlocklistForSync?.content || "").map(e => e.asn));
+  const asnSyncedByVpsId = new Map<string, boolean>();
+  (asnSyncResults || []).forEach(r => {
+    if (!r.success) { asnSyncedByVpsId.set(r.vpsId, false); return; }
+    const vpsAsns = new Set(parseAsnBlocklist(r.data?.content || "").map(e => e.asn));
+    let hasAllFleetAsns = true;
+    fleetAsnSetForSync.forEach(asn => { if (!vpsAsns.has(asn)) hasAllFleetAsns = false; });
+    asnSyncedByVpsId.set(r.vpsId, hasAllFleetAsns);
+  });
+
   // For per-VPS tabs: use the first online VPS or selected one
   const activeVpsId = selectedVps !== "all"
     ? selectedVps
@@ -910,7 +939,20 @@ export default function AsnBlock() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Tutti i VPS</SelectItem>
-            {(vpsList || []).map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+            {(vpsList || []).map(v => {
+              const excluded = ASN_BLOCKLIST_EXCLUDED_VPS_NAMES.has(v.name.trim().toLowerCase());
+              const synced = asnSyncedByVpsId.get(v.id);
+              const dotColor = excluded ? "bg-muted-foreground/40" : synced === undefined ? "bg-muted-foreground/20" : synced ? "bg-green-500" : "bg-red-500";
+              const dotTitle = excluded ? "Escluso dal blocklist fleet (lista dedicata)" : synced === undefined ? "Stato ASN block sconosciuto" : synced ? "ASN block aggiornato" : "ASN block NON aggiornato — mancano ASN dalla lista fleet";
+              return (
+                <SelectItem key={v.id} value={v.id}>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} title={dotTitle} />
+                    {v.name}
+                  </span>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
       </div>
