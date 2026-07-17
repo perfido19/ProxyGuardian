@@ -33,10 +33,9 @@ interface InvestigateResult {
 }
 
 function statusColor(s: string) {
-  if (s.startsWith("2")) return "text-green-500";
-  if (s.startsWith("4")) return "text-orange-400";
-  if (s.startsWith("5")) return "text-red-400";
-  return "text-muted-foreground";
+  if (s === "200") return "text-green-500";
+  if (s === "400") return "text-orange-400";
+  return "text-yellow-400";
 }
 
 function statusBadgeClass(s: string) {
