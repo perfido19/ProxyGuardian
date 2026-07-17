@@ -70,6 +70,14 @@ function provisionCrowdsecCentral(vpsId: string): { url: string; login: string; 
   const bouncerKey = execFileSync("cscli", ["bouncers", "add", bouncerName, "-o", "raw"], { timeout: 15000 }).toString().trim();
   return { url: CROWDSEC_LAPI_URL, login, password, bouncerKey };
 }
+
+// Rimuove machine + bouncer di un VPS dal LAPI centrale (chiamato su uninstall)
+function deprovisionCrowdsecCentral(vpsId: string): void {
+  const login = crowdsecMachineName(vpsId);
+  const bouncerName = crowdsecBouncerName(vpsId);
+  try { execFileSync("cscli", ["machines", "delete", login], { timeout: 10000, stdio: "ignore" }); } catch {}
+  try { execFileSync("cscli", ["bouncers", "delete", bouncerName], { timeout: 10000, stdio: "ignore" }); } catch {}
+}
 const DEPLOY_AGENT_GIT_REF = process.env.DEPLOY_AGENT_GIT_REF?.trim() || "main";
 const DEPLOY_VPS_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 .()_-]{0,79}$/;
 const DEPLOY_HOST_RE = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
@@ -184,6 +192,13 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec-firewall-bouncer",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop crowdsec-firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable crowdsec-firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get purge -y crowdsec crowdsec-firewall-bouncer-iptables",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/apt/sources.list.d/crowdsec.list",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /usr/share/keyrings/crowdsec-archive-keyring.gpg",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -rf /etc/crowdsec",
   "Defaults:pgagent env_keep += \"DEBIAN_FRONTEND\"",
   "pgagent ALL=(ALL) NOPASSWD: /bin/mkdir -p /root/.ssh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee -a /root/.ssh/authorized_keys",
@@ -1613,6 +1628,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         centralLapi: { url: central.url, login: central.login, password: central.password, bouncerKey: central.bouncerKey },
         fleetWhitelist,
       }, SLOW_REQUEST_TIMEOUT);
+      res.json(result);
+    } catch (e: any) {
+      res.status(502).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/crowdsec/disable/:id", requireAuth, requireAdmin, async (req, res) => {
+    const vps = getVpsById(req.params.id);
+    if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    try {
+      const result = await agentPost(vps, "/api/crowdsec/disable", {}, SLOW_REQUEST_TIMEOUT);
+      res.json(result);
+    } catch (e: any) {
+      res.status(502).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/crowdsec/enable/:id", requireAuth, requireAdmin, async (req, res) => {
+    const vps = getVpsById(req.params.id);
+    if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    try {
+      const result = await agentPost(vps, "/api/crowdsec/enable", {}, SLOW_REQUEST_TIMEOUT);
+      res.json(result);
+    } catch (e: any) {
+      res.status(502).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/crowdsec/uninstall/:id", requireAuth, requireAdmin, async (req, res) => {
+    const vps = getVpsById(req.params.id);
+    if (!vps) return res.status(404).json({ error: "VPS non trovato" });
+    try {
+      const result = await agentPost(vps, "/api/crowdsec/uninstall", {}, SLOW_REQUEST_TIMEOUT);
+      try { deprovisionCrowdsecCentral(vps.id); } catch {}
       res.json(result);
     } catch (e: any) {
       res.status(502).json({ error: e.message });

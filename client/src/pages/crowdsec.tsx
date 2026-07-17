@@ -101,6 +101,49 @@ function OverviewTab() {
     },
   });
 
+  const toggleMutation = useMutation({
+    mutationFn: async ({ vpsId, action }: { vpsId: string; action: "disable" | "enable" }) => {
+      const r = await apiRequest("POST", `/api/crowdsec/${action}/${vpsId}`);
+      return r.json();
+    },
+    onSuccess: (result: { ok: boolean; steps: Array<{ step: string; ok: boolean; error?: string }> }, { vpsId, action }) => {
+      const vpsName = data?.find(v => v.vpsId === vpsId)?.vpsName || vpsId;
+      const label = action === "disable" ? "Disabilitato" : "Abilitato";
+      if (result.ok) {
+        toast({ title: `CrowdSec ${label.toLowerCase()} su ${vpsName}` });
+      } else {
+        const failed = result.steps.filter(s => !s.ok).map(s => s.step).join(", ");
+        toast({ title: `${label} ${vpsName}: errori`, description: failed, variant: "destructive" });
+      }
+      refetch();
+    },
+    onError: (err: Error, { vpsId }) => {
+      const vpsName = data?.find(v => v.vpsId === vpsId)?.vpsName || vpsId;
+      toast({ title: `Operazione ${vpsName} fallita`, description: err.message, variant: "destructive" });
+    },
+  });
+
+  const uninstallMutation = useMutation({
+    mutationFn: async (vpsId: string) => {
+      const r = await apiRequest("POST", `/api/crowdsec/uninstall/${vpsId}`);
+      return r.json();
+    },
+    onSuccess: (result: { ok: boolean; steps: Array<{ step: string; ok: boolean; error?: string }> }, vpsId) => {
+      const vpsName = data?.find(v => v.vpsId === vpsId)?.vpsName || vpsId;
+      if (result.ok) {
+        toast({ title: `CrowdSec disinstallato da ${vpsName}` });
+      } else {
+        const failed = result.steps.filter(s => !s.ok).map(s => s.step).join(", ");
+        toast({ title: `Disinstallazione ${vpsName}: errori`, description: failed, variant: "destructive" });
+      }
+      refetch();
+    },
+    onError: (err: Error, vpsId) => {
+      const vpsName = data?.find(v => v.vpsId === vpsId)?.vpsName || vpsId;
+      toast({ title: `Disinstallazione ${vpsName} fallita`, description: err.message, variant: "destructive" });
+    },
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -159,16 +202,60 @@ function OverviewTab() {
                   </div>
                 )}
                 {vps.installed && (
-                  <div className="flex gap-1.5 flex-wrap">
-                    <Badge variant="outline" className={`text-xs ${vps.crowdsecActive ? "text-green-400 border-green-500/30" : "text-orange-400 border-orange-500/30"}`}>
-                      daemon {vps.crowdsecActive ? "up" : "down"}
-                    </Badge>
-                    <Badge variant="outline" className={`text-xs ${vps.bouncerActive ? "text-green-400 border-green-500/30" : "text-orange-400 border-orange-500/30"}`}>
-                      bouncer {vps.bouncerActive ? "up" : "down"}
-                    </Badge>
-                    {vps.activeDecisions > 0 && (
-                      <Badge className="text-xs bg-destructive text-white">{vps.activeDecisions} ban</Badge>
-                    )}
+                  <div className="space-y-2">
+                    <div className="flex gap-1.5 flex-wrap">
+                      <Badge variant="outline" className={`text-xs ${vps.crowdsecActive ? "text-green-400 border-green-500/30" : "text-orange-400 border-orange-500/30"}`}>
+                        daemon {vps.crowdsecActive ? "up" : "down"}
+                      </Badge>
+                      <Badge variant="outline" className={`text-xs ${vps.bouncerActive ? "text-green-400 border-green-500/30" : "text-orange-400 border-orange-500/30"}`}>
+                        bouncer {vps.bouncerActive ? "up" : "down"}
+                      </Badge>
+                      {vps.activeDecisions > 0 && (
+                        <Badge className="text-xs bg-destructive text-white">{vps.activeDecisions} ban</Badge>
+                      )}
+                    </div>
+                    <div className="flex gap-1.5 flex-wrap">
+                      {vps.crowdsecActive ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          disabled={toggleMutation.isPending && toggleMutation.variables?.vpsId === vps.vpsId}
+                          onClick={() => toggleMutation.mutate({ vpsId: vps.vpsId, action: "disable" })}
+                        >
+                          {toggleMutation.isPending && toggleMutation.variables?.vpsId === vps.vpsId && toggleMutation.variables?.action === "disable"
+                            ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ShieldOff className="w-3 h-3 mr-1" />}
+                          Disabilita
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          disabled={toggleMutation.isPending && toggleMutation.variables?.vpsId === vps.vpsId}
+                          onClick={() => toggleMutation.mutate({ vpsId: vps.vpsId, action: "enable" })}
+                        >
+                          {toggleMutation.isPending && toggleMutation.variables?.vpsId === vps.vpsId && toggleMutation.variables?.action === "enable"
+                            ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ShieldCheck className="w-3 h-3 mr-1" />}
+                          Abilita
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs border-destructive/40 text-destructive hover:bg-destructive/10"
+                        disabled={uninstallMutation.isPending && uninstallMutation.variables === vps.vpsId}
+                        onClick={() => {
+                          if (window.confirm(`Disinstallare CrowdSec da ${vps.vpsName}? Rimuove pacchetti, config e la registrazione sul LAPI centrale.`)) {
+                            uninstallMutation.mutate(vps.vpsId);
+                          }
+                        }}
+                      >
+                        {uninstallMutation.isPending && uninstallMutation.variables === vps.vpsId
+                          ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Trash2 className="w-3 h-3 mr-1" />}
+                        Disinstalla
+                      </Button>
+                    </div>
                   </div>
                 )}
               </CardContent>

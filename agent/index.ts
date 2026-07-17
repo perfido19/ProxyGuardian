@@ -937,6 +937,13 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec-firewall-bouncer",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop crowdsec-firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable crowdsec-firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get purge -y crowdsec crowdsec-firewall-bouncer-iptables",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/apt/sources.list.d/crowdsec.list",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /usr/share/keyrings/crowdsec-archive-keyring.gpg",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -rf /etc/crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.py",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart anti-iptv",
@@ -2253,6 +2260,111 @@ app.post("/api/crowdsec/install", async (req, res) => {
 
     var restartBouncer = await runCmd("sudo systemctl restart crowdsec-firewall-bouncer 2>&1 || true", 10000);
     addStep("start bouncer", { ...restartBouncer, ok: true });
+
+    var allOk = steps.every(function(s) { return s.ok; });
+    res.json({ ok: allOk, steps });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message, steps });
+  }
+});
+
+app.post("/api/crowdsec/disable", async (_req, res) => {
+  var steps: Array<{ step: string; ok: boolean; error?: string }> = [];
+  function addStep(label: string, result: { ok: boolean; stderr: string; stdout: string }) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? undefined : (result.stderr || result.stdout).slice(0, 300) });
+  }
+  try {
+    await writeFile("/tmp/pg-sudoers-crowdsec", SUDOERS_CONTENT, "utf-8");
+    var sudoersUpdate = await runCmd(
+      "cat /tmp/pg-sudoers-crowdsec | sudo tee /etc/sudoers.d/proxy-guardian-agent > /dev/null && sudo chmod 440 /etc/sudoers.d/proxy-guardian-agent",
+      10000
+    );
+    addStep("update sudoers", sudoersUpdate);
+
+    var stopBouncer = await runCmd("sudo systemctl stop crowdsec-firewall-bouncer 2>&1", 10000);
+    addStep("stop bouncer", stopBouncer);
+
+    var stopCs = await runCmd("sudo systemctl stop crowdsec 2>&1", 10000);
+    addStep("stop crowdsec", stopCs);
+
+    var disableBouncer = await runCmd("sudo systemctl disable crowdsec-firewall-bouncer 2>&1", 10000);
+    addStep("disable bouncer", disableBouncer);
+
+    var disableCs = await runCmd("sudo systemctl disable crowdsec 2>&1", 10000);
+    addStep("disable crowdsec", disableCs);
+
+    var allOk = steps.every(function(s) { return s.ok; });
+    res.json({ ok: allOk, steps });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message, steps });
+  }
+});
+
+app.post("/api/crowdsec/enable", async (_req, res) => {
+  var steps: Array<{ step: string; ok: boolean; error?: string }> = [];
+  function addStep(label: string, result: { ok: boolean; stderr: string; stdout: string }) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? undefined : (result.stderr || result.stdout).slice(0, 300) });
+  }
+  try {
+    var enableCs = await runCmd("sudo systemctl enable crowdsec 2>&1", 10000);
+    addStep("enable crowdsec", enableCs);
+
+    var enableBouncer = await runCmd("sudo systemctl enable crowdsec-firewall-bouncer 2>&1", 10000);
+    addStep("enable bouncer", enableBouncer);
+
+    var startCs = await runCmd("sudo systemctl start crowdsec 2>&1", 15000);
+    addStep("start crowdsec", startCs);
+
+    // "restart" non "start": sudoers concede solo restart per il bouncer (coerente col flusso di install).
+    var startBouncer = await runCmd("sudo systemctl restart crowdsec-firewall-bouncer 2>&1", 10000);
+    addStep("start bouncer", startBouncer);
+
+    var allOk = steps.every(function(s) { return s.ok; });
+    res.json({ ok: allOk, steps });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message, steps });
+  }
+});
+
+app.post("/api/crowdsec/uninstall", async (_req, res) => {
+  var steps: Array<{ step: string; ok: boolean; error?: string }> = [];
+  function addStep(label: string, result: { ok: boolean; stderr: string; stdout: string }) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? undefined : (result.stderr || result.stdout).slice(0, 300) });
+  }
+  try {
+    await writeFile("/tmp/pg-sudoers-crowdsec", SUDOERS_CONTENT, "utf-8");
+    var sudoersUpdate = await runCmd(
+      "cat /tmp/pg-sudoers-crowdsec | sudo tee /etc/sudoers.d/proxy-guardian-agent > /dev/null && sudo chmod 440 /etc/sudoers.d/proxy-guardian-agent",
+      10000
+    );
+    addStep("update sudoers", sudoersUpdate);
+
+    var stopBouncer = await runCmd("sudo systemctl stop crowdsec-firewall-bouncer 2>&1 || true", 10000);
+    addStep("stop bouncer", { ...stopBouncer, ok: true });
+
+    var stopCs = await runCmd("sudo systemctl stop crowdsec 2>&1 || true", 10000);
+    addStep("stop crowdsec", { ...stopCs, ok: true });
+
+    var disableBouncer = await runCmd("sudo systemctl disable crowdsec-firewall-bouncer 2>&1 || true", 10000);
+    addStep("disable bouncer", { ...disableBouncer, ok: true });
+
+    var disableCs = await runCmd("sudo systemctl disable crowdsec 2>&1 || true", 10000);
+    addStep("disable crowdsec", { ...disableCs, ok: true });
+
+    var purge = await runCmd(
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get purge -y crowdsec crowdsec-firewall-bouncer-iptables 2>&1",
+      60000
+    );
+    addStep("apt-get purge crowdsec", purge);
+
+    var rmRepo = await runCmd("sudo rm -f /etc/apt/sources.list.d/crowdsec.list 2>&1", 5000);
+    addStep("remove apt repo", { ...rmRepo, ok: true });
+
+    var rmKeyring = await runCmd("sudo rm -f /usr/share/keyrings/crowdsec-archive-keyring.gpg 2>&1", 5000);
+    addStep("remove gpg keyring", { ...rmKeyring, ok: true });
+
+    var rmEtc = await runCmd("sudo rm -rf /etc/crowdsec 2>&1", 10000);
+    addStep("remove /etc/crowdsec", { ...rmEtc, ok: true });
 
     var allOk = steps.every(function(s) { return s.ok; });
     res.json({ ok: allOk, steps });

@@ -25295,6 +25295,13 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart crowdsec-firewall-bouncer",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop crowdsec-firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable crowdsec",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl disable crowdsec-firewall-bouncer",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get purge -y crowdsec crowdsec-firewall-bouncer-iptables",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /etc/apt/sources.list.d/crowdsec.list",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -f /usr/share/keyrings/crowdsec-archive-keyring.gpg",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/rm -rf /etc/crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /usr/local/sbin/anti-iptv.py",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart anti-iptv",
@@ -26527,6 +26534,95 @@ app.post("/api/crowdsec/install", async (req, res) => {
     }
     var restartBouncer = await runCmd("sudo systemctl restart crowdsec-firewall-bouncer 2>&1 || true", 1e4);
     addStep("start bouncer", { ...restartBouncer, ok: true });
+    var allOk = steps.every(function(s) {
+      return s.ok;
+    });
+    res.json({ ok: allOk, steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message, steps });
+  }
+});
+app.post("/api/crowdsec/disable", async (_req, res) => {
+  var steps = [];
+  function addStep(label, result) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? void 0 : (result.stderr || result.stdout).slice(0, 300) });
+  }
+  try {
+    await (0, import_promises.writeFile)("/tmp/pg-sudoers-crowdsec", SUDOERS_CONTENT, "utf-8");
+    var sudoersUpdate = await runCmd(
+      "cat /tmp/pg-sudoers-crowdsec | sudo tee /etc/sudoers.d/proxy-guardian-agent > /dev/null && sudo chmod 440 /etc/sudoers.d/proxy-guardian-agent",
+      1e4
+    );
+    addStep("update sudoers", sudoersUpdate);
+    var stopBouncer = await runCmd("sudo systemctl stop crowdsec-firewall-bouncer 2>&1", 1e4);
+    addStep("stop bouncer", stopBouncer);
+    var stopCs = await runCmd("sudo systemctl stop crowdsec 2>&1", 1e4);
+    addStep("stop crowdsec", stopCs);
+    var disableBouncer = await runCmd("sudo systemctl disable crowdsec-firewall-bouncer 2>&1", 1e4);
+    addStep("disable bouncer", disableBouncer);
+    var disableCs = await runCmd("sudo systemctl disable crowdsec 2>&1", 1e4);
+    addStep("disable crowdsec", disableCs);
+    var allOk = steps.every(function(s) {
+      return s.ok;
+    });
+    res.json({ ok: allOk, steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message, steps });
+  }
+});
+app.post("/api/crowdsec/enable", async (_req, res) => {
+  var steps = [];
+  function addStep(label, result) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? void 0 : (result.stderr || result.stdout).slice(0, 300) });
+  }
+  try {
+    var enableCs = await runCmd("sudo systemctl enable crowdsec 2>&1", 1e4);
+    addStep("enable crowdsec", enableCs);
+    var enableBouncer = await runCmd("sudo systemctl enable crowdsec-firewall-bouncer 2>&1", 1e4);
+    addStep("enable bouncer", enableBouncer);
+    var startCs = await runCmd("sudo systemctl start crowdsec 2>&1", 15e3);
+    addStep("start crowdsec", startCs);
+    var startBouncer = await runCmd("sudo systemctl restart crowdsec-firewall-bouncer 2>&1", 1e4);
+    addStep("start bouncer", startBouncer);
+    var allOk = steps.every(function(s) {
+      return s.ok;
+    });
+    res.json({ ok: allOk, steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message, steps });
+  }
+});
+app.post("/api/crowdsec/uninstall", async (_req, res) => {
+  var steps = [];
+  function addStep(label, result) {
+    steps.push({ step: label, ok: result.ok, error: result.ok ? void 0 : (result.stderr || result.stdout).slice(0, 300) });
+  }
+  try {
+    await (0, import_promises.writeFile)("/tmp/pg-sudoers-crowdsec", SUDOERS_CONTENT, "utf-8");
+    var sudoersUpdate = await runCmd(
+      "cat /tmp/pg-sudoers-crowdsec | sudo tee /etc/sudoers.d/proxy-guardian-agent > /dev/null && sudo chmod 440 /etc/sudoers.d/proxy-guardian-agent",
+      1e4
+    );
+    addStep("update sudoers", sudoersUpdate);
+    var stopBouncer = await runCmd("sudo systemctl stop crowdsec-firewall-bouncer 2>&1 || true", 1e4);
+    addStep("stop bouncer", { ...stopBouncer, ok: true });
+    var stopCs = await runCmd("sudo systemctl stop crowdsec 2>&1 || true", 1e4);
+    addStep("stop crowdsec", { ...stopCs, ok: true });
+    var disableBouncer = await runCmd("sudo systemctl disable crowdsec-firewall-bouncer 2>&1 || true", 1e4);
+    addStep("disable bouncer", { ...disableBouncer, ok: true });
+    var disableCs = await runCmd("sudo systemctl disable crowdsec 2>&1 || true", 1e4);
+    addStep("disable crowdsec", { ...disableCs, ok: true });
+    var purge = await runCmd(
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get purge -y crowdsec crowdsec-firewall-bouncer-iptables 2>&1",
+      6e4
+    );
+    addStep("apt-get purge crowdsec", purge);
+    var rmRepo = await runCmd("sudo rm -f /etc/apt/sources.list.d/crowdsec.list 2>&1", 5e3);
+    addStep("remove apt repo", { ...rmRepo, ok: true });
+    var rmKeyring = await runCmd("sudo rm -f /usr/share/keyrings/crowdsec-archive-keyring.gpg 2>&1", 5e3);
+    addStep("remove gpg keyring", { ...rmKeyring, ok: true });
+    var rmEtc = await runCmd("sudo rm -rf /etc/crowdsec 2>&1", 1e4);
+    addStep("remove /etc/crowdsec", { ...rmEtc, ok: true });
     var allOk = steps.every(function(s) {
       return s.ok;
     });
