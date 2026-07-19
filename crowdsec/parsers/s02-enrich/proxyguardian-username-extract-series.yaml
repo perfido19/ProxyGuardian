@@ -1,0 +1,12 @@
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.request contains '/series/'"
+name: proxyguardian/username-extract-series
+description: "Estrae username dal path /series/<username>/... per rilevare combo-checker multi-account"
+pattern_syntax:
+  USERVAL: '[^&/\s]+'
+nodes:
+  - grok:
+      pattern: '/series/%{USERVAL:series_username}/'
+      apply_on: request
+      statics:
+        - meta: probed_username
+          expression: evt.Parsed.series_username

@@ -1,0 +1,12 @@
+filter: "evt.Meta.log_type == 'http_access-log'"
+name: proxyguardian/xff-extract
+description: "Estrae X-Forwarded-For dal log esteso ProxyGuardian (non catturato dal parser hub nginx-logs, che si ferma a http_user_agent)"
+pattern_syntax:
+  NOTDQUOTE: '[^"]+'
+nodes:
+  - grok:
+      pattern: '%{NUMBER} %{NUMBER} "%{NOTDQUOTE}" "%{NOTDQUOTE:http_user_agent}" "%{NOTDQUOTE:xff_header}" "%{NOTDQUOTE:geo_info}" "AS%{DATA:asn}" "%{NOTDQUOTE:isp}"'
+      apply_on: message
+      statics:
+        - meta: xff_header
+          expression: evt.Parsed.xff_header

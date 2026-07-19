@@ -1,0 +1,12 @@
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.request contains 'username='"
+name: proxyguardian/username-extract-qs
+description: "Estrae username= dalla query string (player_api.php) per rilevare combo-checker multi-account"
+pattern_syntax:
+  USERVAL: '[^&/\s]+'
+nodes:
+  - grok:
+      pattern: 'username=%{USERVAL:qs_username}'
+      apply_on: request
+      statics:
+        - meta: probed_username
+          expression: evt.Parsed.qs_username

@@ -1,0 +1,15 @@
+type: leaky
+name: local/iptv-multi-account-probe
+description: "Stesso IP prova N username diversi in poco tempo su player_api/get.php: combo-checker che testa una lista di credenziali, non un cliente che ritenta la propria password"
+filter: |
+  evt.Meta.log_type == 'http_access-log' &&
+  evt.Meta.probed_username != ''
+groupby: "evt.Parsed.remote_addr"
+distinct: "evt.Meta.probed_username"
+capacity: 3
+leakspeed: "5m"
+blackhole: "6h"
+labels:
+  service: http
+  type: bruteforce
+  remediation: true

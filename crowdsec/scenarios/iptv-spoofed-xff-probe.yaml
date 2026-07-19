@@ -1,0 +1,16 @@
+type: leaky
+name: local/iptv-spoofed-xff-probe
+description: "X-Forwarded-For con IP privata (RFC1918) su player_api/get.php: nessun client IPTV legittimo la manda, firma tipica di combo-checker"
+filter: |
+  evt.Meta.log_type == 'http_access-log' &&
+  (evt.Parsed.request contains 'player_api.php' or evt.Parsed.request contains 'get.php') &&
+  evt.Meta.xff_header != '' && evt.Meta.xff_header != '-' &&
+  (evt.Meta.xff_header startsWith '10.' or evt.Meta.xff_header startsWith '192.168.' or evt.Meta.xff_header matches '^172\\.(1[6-9]|2[0-9]|3[01])\\.')
+groupby: "evt.Parsed.remote_addr"
+capacity: 2
+leakspeed: "10m"
+blackhole: "6h"
+labels:
+  service: http
+  type: bruteforce
+  remediation: true

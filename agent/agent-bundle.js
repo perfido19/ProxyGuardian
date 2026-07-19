@@ -25216,6 +25216,7 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/nginx",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/ipset *",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/ipset.conf",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl start netbird",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl stop netbird",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart netbird",
@@ -26063,7 +26064,8 @@ app.post("/api/anti-iptv/whitelist", async (req, res) => {
       child.stdin.write(restoreInput, "utf-8");
       child.stdin.end();
     });
-    await runCmd("sudo sh -c 'ipset save > /etc/ipset.conf'");
+    var saved = await runCmd("sudo ipset save");
+    if (saved.ok) await sudoWriteFile("/etc/ipset.conf", saved.stdout + "\n");
     res.json({ ok: true, count: clean.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
