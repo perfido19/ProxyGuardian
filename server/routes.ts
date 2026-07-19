@@ -2161,6 +2161,13 @@ echo "deb [signed-by=/usr/share/keyrings/crowdsec-archive-keyring.gpg] https://p
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y crowdsec crowdsec-firewall-bouncer-iptables
 
+# Il postinst di crowdsec prova sempre il CAPI register (api.crowdsec.net, spesso bloccato
+# dal provider su questa fleet) — se fallisce a meta' lascia online_api_credentials.yaml
+# popolato con credenziali inutilizzabili: ogni futuro 'crowdsec -t'/reload/restart ci
+# riprova, va in timeout e crasha (FATAL). Svuotarlo sempre, e' innocuo se il register
+# fosse invece andato a buon fine (CAPI e' opzionale, non serve al funzionamento fleet).
+: > /etc/crowdsec/online_api_credentials.yaml 2>/dev/null || true
+
 cscli hub update >/dev/null 2>&1 || true
 cscli collections install crowdsecurity/nginx >/dev/null 2>&1 || warn "Collection nginx parziale"
 cscli scenarios install crowdsecurity/nginx-req-limit-exceeded >/dev/null 2>&1 || true
