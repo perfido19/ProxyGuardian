@@ -1214,14 +1214,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const { ip } = req.body;
     if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
     const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter((v): v is any => !!v);
+
     const results = await Promise.allSettled(vpsList.map(async (vps) => {
+      const actions: string[] = [];
       try {
+        // BanSync ipset (iptv_ban)
         await agentPost(vps, "/api/unban", { ip, jail: "anti-iptv" });
-        return { vpsId: vps.id, vpsName: vps.name, ok: true };
-      } catch (e: any) { return { vpsId: vps.id, vpsName: vps.name, ok: false, error: e.message }; }
+        actions.push("iptv_ban");
+      } catch { /* ipset entry may not exist on this vps, not fatal */ }
+
+      // every real fail2ban jail (404-0, nginx-abuse, block22, xtream, xtream-api, credential-stuffing, sshd, ...)
+      try {
+        const jails: Array<{ name: string }> = await agentGet(vps, "/api/fail2ban/jails", 8000);
+        await Promise.allSettled((jails || []).map(async (j) => {
+          try { await agentPost(vps, "/api/unban", { ip, jail: j.name }); actions.push(j.name); } catch { /* ip likely not banned in this jail */ }
+        }));
+      } catch { /* fail2ban not reachable on this vps */ }
+
+      // CrowdSec local decision (harmless no-op if not installed or ip not banned there)
+      try {
+        const status = await agentGet(vps, "/api/crowdsec/status", 5000);
+        if (status && status.installed) {
+          const r = await agentPost(vps, "/api/crowdsec/unban", { ip }, 10000);
+          if (r && r.ok) actions.push("crowdsec");
+        }
+      } catch { /* crowdsec not installed/reachable on this vps */ }
+
+      return { vpsId: vps.id, vpsName: vps.name, ok: true, actions };
     }));
-    const data = results.map(r => r.status === "fulfilled" ? r.value : { ok: false, error: "rejected" });
-    res.json({ ok: data.filter(d => d.ok).length, fail: data.filter(d => !d.ok).length });
+
+    const data = results.map(r => r.status === "fulfilled" ? r.value : { ok: false, actions: [] as string[] });
+    res.json({ ok: data.filter(d => d.ok).length, fail: data.filter(d => !d.ok).length, results: data });
   });
 
   app.get("/api/fleet/banned-ips/stream", requireAuth, async (req, res) => {
