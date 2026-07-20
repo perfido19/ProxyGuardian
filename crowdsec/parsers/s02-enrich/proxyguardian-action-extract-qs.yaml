@@ -1,0 +1,12 @@
+filter: "evt.Meta.log_type == 'http_access-log' and evt.Line.Raw contains 'action='"
+name: proxyguardian/action-extract-qs
+description: "Estrae action= dalla query string (player_api.php) per escludere traffico EPG legittimo dallo scenario flood"
+pattern_syntax:
+  ACTIONVAL: '[^&/\s"]+'
+nodes:
+  - grok:
+      pattern: 'action=%{ACTIONVAL:qs_action}'
+      apply_on: message
+      statics:
+        - meta: api_action
+          expression: evt.Parsed.qs_action
