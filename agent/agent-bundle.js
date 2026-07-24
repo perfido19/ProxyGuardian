@@ -26324,11 +26324,22 @@ app.get("/api/crowdsec/decisions", async (_req, res) => {
     var decisions = [];
     for (var i = 0; i < parsed.length; i++) {
       var item = parsed[i];
+      var source = item && item.source ? item.source : null;
+      var asName = source && source.as_name ? source.as_name : "";
+      var asNumber = source && source.as_number ? source.as_number : "";
+      var country = source && source.cn ? source.cn : "";
       if (item && Array.isArray(item.decisions) && item.decisions.length > 0) {
         for (var j = 0; j < item.decisions.length; j++) {
-          decisions.push(item.decisions[j]);
+          var d = item.decisions[j];
+          d.as_name = asName;
+          d.as_number = asNumber;
+          d.country = country;
+          decisions.push(d);
         }
       } else if (item && item.value && item.type) {
+        item.as_name = asName;
+        item.as_number = asNumber;
+        item.country = country;
         decisions.push(item);
       }
     }

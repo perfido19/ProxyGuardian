@@ -30,6 +30,9 @@ interface Decision {
   type: string;
   duration: string;
   until?: string;
+  as_name?: string;
+  as_number?: string;
+  country?: string;
 }
 
 interface FleetDecisionGroup {
@@ -295,7 +298,12 @@ function DecisioniTab() {
   const filtered = allDecisions.filter(d => {
     if (!search) return true;
     const q = search.toLowerCase();
-    return d.value.includes(q) || (d.scenario || "").toLowerCase().includes(q) || (d.origin || "").toLowerCase().includes(q);
+    return d.value.includes(q)
+      || (d.scenario || "").toLowerCase().includes(q)
+      || (d.origin || "").toLowerCase().includes(q)
+      || (d.as_name || "").toLowerCase().includes(q)
+      || (d.as_number || "").toLowerCase().includes(q)
+      || (d.country || "").toLowerCase().includes(q);
   });
 
   const unbanMutation = useMutation({
@@ -315,7 +323,7 @@ function DecisioniTab() {
       <div className="flex items-center justify-between gap-3">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Cerca IP, scenario..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8" />
+          <Input placeholder="Cerca IP, scenario, ASN, paese..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8" />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">{allDecisions.length} ban totali</span>
@@ -342,6 +350,7 @@ function DecisioniTab() {
                 <TableHead>Scenario</TableHead>
                 <TableHead>Origine</TableHead>
                 <TableHead>Tipo</TableHead>
+                <TableHead>ASN</TableHead>
                 <TableHead>Scadenza</TableHead>
                 <TableHead className="text-right">Azioni</TableHead>
               </TableRow>
@@ -353,6 +362,9 @@ function DecisioniTab() {
                   <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate font-mono" title={d.scenario}>{d.scenario || "—"}</TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{d.origin}</Badge></TableCell>
                   <TableCell><Badge className="bg-destructive/80 text-white text-xs">{d.type}</Badge></TableCell>
+                  <TableCell className="text-xs text-muted-foreground max-w-[220px] truncate" title={d.as_name ? `AS${d.as_number} ${d.as_name}` : ""}>
+                    {d.country ? `${d.country} · ` : ""}{d.as_number ? `AS${d.as_number}` : ""}{d.as_name ? ` ${d.as_name}` : (!d.country && !d.as_number ? "—" : "")}
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{d.duration || d.until || "—"}</TableCell>
                   <TableCell className="text-right">
                     <Button
