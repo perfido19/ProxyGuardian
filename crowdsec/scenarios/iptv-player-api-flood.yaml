@@ -29,6 +29,8 @@ filter: >
     evt.Meta.http_path contains 'action=get_vod_categories'
     ||
     evt.Meta.http_path contains 'action=get_series_categories'
+    ||
+    evt.Meta.http_path contains 'action=get_vod_info'
   )
 
 groupby: evt.Parsed.remote_addr
