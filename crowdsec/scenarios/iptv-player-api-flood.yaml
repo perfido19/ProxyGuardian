@@ -12,23 +12,23 @@ filter: >
   )
   &&
   !(
-    evt.Parsed.request contains 'action=get_live_streams'
+    evt.Meta.http_path contains 'action=get_live_streams'
     ||
-    evt.Parsed.request contains 'action=get_vod_streams'
+    evt.Meta.http_path contains 'action=get_vod_streams'
     ||
-    evt.Parsed.request contains 'action=get_series'
+    evt.Meta.http_path contains 'action=get_series'
     ||
-    evt.Parsed.request contains 'action=get_short_epg'
+    evt.Meta.http_path contains 'action=get_short_epg'
     ||
-    evt.Parsed.request contains 'get_simple_data_table'
+    evt.Meta.http_path contains 'get_simple_data_table'
     ||
-    evt.Parsed.request contains 'HTTP/1.1" 302 0'
+    evt.Parsed.status == '302'
     ||
-    evt.Parsed.request contains 'action=get_live_categories'
+    evt.Meta.http_path contains 'action=get_live_categories'
     ||
-    evt.Parsed.request contains 'action=get_vod_categories'
+    evt.Meta.http_path contains 'action=get_vod_categories'
     ||
-    evt.Parsed.request contains 'action=get_series_categories'
+    evt.Meta.http_path contains 'action=get_series_categories'
   )
 
 groupby: evt.Parsed.remote_addr
