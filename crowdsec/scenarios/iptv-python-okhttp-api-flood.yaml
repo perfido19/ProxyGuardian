@@ -23,6 +23,12 @@ filter: >
     evt.Parsed.request contains 'action=get_short_epg'
     ||
     evt.Parsed.request contains 'HTTP/1.1" 302 0'
+    ||
+    evt.Parsed.request contains 'action=get_live_categories'
+    ||
+    evt.Parsed.request contains 'action=get_vod_categories'
+    ||
+    evt.Parsed.request contains 'action=get_series_categories'
   )
 
 groupby: evt.Parsed.remote_addr
