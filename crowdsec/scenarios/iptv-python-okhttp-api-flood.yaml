@@ -22,6 +22,8 @@ filter: >
     ||
     evt.Meta.http_path contains 'action=get_short_epg'
     ||
+    evt.Meta.http_path contains 'get_simple_data_table'
+    ||
     evt.Parsed.status == '302'
     ||
     evt.Meta.http_path contains 'action=get_live_categories'
