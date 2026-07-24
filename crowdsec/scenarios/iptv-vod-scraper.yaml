@@ -1,7 +1,8 @@
 type: leaky
 name: local/iptv-vod-scraper
-description: "VOD catalog scraping: IP scarica /movie/ e /series/ a ritmo sostenuto (dump catalogo pirata)"
+description: "VOD catalog scraping: IP scarica molti file /movie/ o /series/ distinti a ritmo sostenuto (dump catalogo pirata). distinct su request evita falsi positivi da client che re-richiedono lo stesso file per retry di buffering."
 filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.status == '302' and (evt.Parsed.request startsWith '/movie/' or evt.Parsed.request startsWith '/series/')"
+distinct: "evt.Parsed.request"
 groupby: "evt.Parsed.remote_addr"
 capacity: 100
 leakspeed: "5s"
