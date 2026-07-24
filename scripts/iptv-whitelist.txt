@@ -2,6 +2,7 @@
 # Sincronizzata su tutti i VPS enabled tramite dashboard → Anti-IPTV
 51.15.0.0/16
 51.254.0.0/15
+51.255.0.0/15
 116.202.118.184
 100.116.0.0/16 # copre anche 100.116.132.180 (IP NetBird dashboard/gestione) — falso positivo anti-iptv trovato 2026-07-04 su gruppo new salerno
 185.229.236.50 # Dashboard IP pubblico

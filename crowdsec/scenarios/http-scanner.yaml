@@ -1,0 +1,40 @@
+type: leaky
+name: local/http-scanner
+
+description: "Detect HTTP directory/file scanners"
+
+filter: >
+  evt.Meta.log_type == 'http_access-log'
+  &&
+  (
+      evt.Parsed.request contains "/.env"
+      ||
+      evt.Parsed.request contains "/phpmyadmin"
+      ||
+      evt.Parsed.request contains "/wp-admin"
+      ||
+      evt.Parsed.request contains "/wp-login.php"
+      ||
+      evt.Parsed.request contains "/cgi-bin/"
+      ||
+      evt.Parsed.request contains "/vendor/"
+      ||
+      evt.Parsed.request contains "/.git/"
+      ||
+      evt.Parsed.request contains "/config.php"
+      ||
+      evt.Parsed.request contains "/backup"
+      ||
+      evt.Parsed.request contains "/admin"
+  )
+
+groupby: evt.Parsed.remote_addr
+
+capacity: 3
+leakspeed: 2m
+blackhole: 30m
+
+labels:
+  service: http
+  type: scan
+  remediation: true

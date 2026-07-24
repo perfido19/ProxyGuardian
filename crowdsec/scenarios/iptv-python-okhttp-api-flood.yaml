@@ -1,11 +1,36 @@
 type: leaky
 name: local/iptv-python-okhttp-api-flood
-description: "Scraper okhttp/python-requests: burst di call API con UA okhttp (tipico di scraper Android)"
-filter: "evt.Meta.log_type == 'http_access-log' and (evt.Parsed.request contains 'player_api.php' or evt.Parsed.request contains 'get.php') and evt.Parsed.http_user_agent contains 'okhttp'"
-groupby: "evt.Parsed.remote_addr"
+description: "Rileva burst di richieste API IPTV con User-Agent okhttp, escludendo il normale caricamento delle liste."
+
+filter: >
+  evt.Meta.log_type == 'http_access-log'
+  &&
+  (
+    evt.Parsed.request contains 'player_api.php'
+    ||
+    evt.Parsed.request contains 'get.php'
+  )
+  &&
+  evt.Parsed.http_user_agent contains 'okhttp'
+  &&
+  !(
+    evt.Parsed.request contains 'action=get_live_streams'
+    ||
+    evt.Parsed.request contains 'action=get_vod_streams'
+    ||
+    evt.Parsed.request contains 'action=get_series'
+    ||
+    evt.Parsed.request contains 'action=get_short_epg'
+    ||
+    evt.Parsed.request contains 'HTTP/1.1" 302 0'
+  )
+
+groupby: evt.Parsed.remote_addr
+
 capacity: 20
-leakspeed: "30s"
-blackhole: "30m"
+leakspeed: 30s
+blackhole: 30m
+
 labels:
   service: http
   type: scraping

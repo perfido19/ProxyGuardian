@@ -1802,3 +1802,54 @@ AS25607      # IBW Communications
 AS63859      # PT. Eka M Republik
 AS394695     # PDR
 AS17638      # N for TIANJIN Provincial Net of CT
+AS21283      # A1 Slovenija telekomunikacijske storitve,d.d.
+AS215125     # Church of Cyberology · TOR Exit and More
+AS30836      # 23VNet Kft. · ATW Internet Kft
+AS213873     # OUIDO Hosting · MOJI
+AS399820     # SPARKED HOST LLC
+AS200912     # Joel Krause
+AS22295      # Advin Services LLC
+AS2027       # MilkyWan Association
+AS400226     # StormyCloud Inc · StormyCloud Inc
+AS215238     # IRFAN TUGRA ONEM · Verisunucu.net
+AS42237      # w1n ltd · w1n ltd
+AS6698       # Virtual Systems LLC · Virtual Systems LLC
+AS206996     # ZAP-Hosting GmbH · ZAP-Hosting GmbH
+AS11721      # StylenTech LLC
+AS201308     # Castlegem SRL
+AS215659     # Aokigahara SRL · SimpliQ Tech SRL
+AS40663      # IncogNet LLC · IncogNET LLC
+AS212508     # Lowhosting services of Davide Gennari
+AS39405      # Eurofiber France SAS
+AS62248      # Modirum Mdpay Ou
+AS924        # Cloudie Networks LLC
+AS6315       # XMission, L.C.
+AS8473       # Bahnhof AB
+AS13030      # Init7 (Switzerland) Ltd.
+AS14178      # Megacable Comunicaciones de Mexico, S.A. de C.V.
+AS20766      # Association Gitoyen
+AS20904      # Cinia Oy · ElectronicFrontierFinland
+AS36103      # Central Utah Telephone, Inc.
+AS36149      # Hawaiian Telcom Services Company, Inc.
+AS36375      # University of Michigan
+AS38071      # Aftab IT Limited.
+AS41668      # JSC ER-Telecom Holding
+AS45542      # VietNam National University Ha Noi
+AS55720      # Gigabit Hosting Sdn Bhd
+AS136565     # CyberWorld
+AS137702     # Nanjing, Jiangsu Province, P.R.China.
+AS140995     # The 1 Web Solution
+AS142036     # Hosteons Pte. Ltd.
+AS150692     # Golden Dragon 2000
+AS153003     # Digital Shield Technology Company Limited
+AS213732     # Peyman Ertebatat Pouya Company (Ltd)
+AS328364     # Host Africa (Pty) Ltd
+AS205119     # TELEKS DOOEL Skopje
+AS61431      # TELECOMMUNICATION COMPANY KAMA - LINK LLC.
+AS136829     # Dinas Kominfo Kota Pekalongan
+AS61280      # Fgup grchc
+AS63737      # VIETSERVER SERVICES TECHNOLOGY COMPANY LIMITED
+AS402226     # OnlyScans LLC
+AS52362      # Servicios Innovadores de Comunicacion y Entretenimiento, S.A.
+AS209630     # LLC VASH KREDIT BANK
+AS2386       # INS-AS
