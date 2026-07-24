@@ -347,10 +347,10 @@ function DecisioniTab() {
             <TableHeader>
               <TableRow>
                 <TableHead>IP / Valore</TableHead>
+                <TableHead>ASN</TableHead>
                 <TableHead>Scenario</TableHead>
                 <TableHead>Origine</TableHead>
                 <TableHead>Tipo</TableHead>
-                <TableHead>ASN</TableHead>
                 <TableHead>Scadenza</TableHead>
                 <TableHead className="text-right">Azioni</TableHead>
               </TableRow>
@@ -359,12 +359,12 @@ function DecisioniTab() {
               {filtered.map(d => (
                 <TableRow key={d.id}>
                   <TableCell className="font-mono text-sm">{d.value}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate font-mono" title={d.scenario}>{d.scenario || "—"}</TableCell>
-                  <TableCell><Badge variant="outline" className="text-xs">{d.origin}</Badge></TableCell>
-                  <TableCell><Badge className="bg-destructive/80 text-white text-xs">{d.type}</Badge></TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-[220px] truncate" title={d.as_name ? `AS${d.as_number} ${d.as_name}` : ""}>
                     {d.country ? `${d.country} · ` : ""}{d.as_number ? `AS${d.as_number}` : ""}{d.as_name ? ` ${d.as_name}` : (!d.country && !d.as_number ? "—" : "")}
                   </TableCell>
+                  <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate font-mono" title={d.scenario}>{d.scenario || "—"}</TableCell>
+                  <TableCell><Badge variant="outline" className="text-xs">{d.origin}</Badge></TableCell>
+                  <TableCell><Badge className="bg-destructive/80 text-white text-xs">{d.type}</Badge></TableCell>
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{d.duration || d.until || "—"}</TableCell>
                   <TableCell className="text-right">
                     <Button
