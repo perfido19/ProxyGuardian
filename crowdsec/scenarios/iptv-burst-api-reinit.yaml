@@ -1,7 +1,34 @@
 type: leaky
 name: local/iptv-burst-api-reinit
-description: "Session reinit aggressiva: player_api+get.php in burst rapido (client che si riconnette in loop)"
-filter: "evt.Meta.log_type == 'http_access-log' and (evt.Parsed.request contains 'player_api.php' or evt.Parsed.request contains 'get.php')"
+description: "Session reinit aggressiva: player_api+get.php in burst rapido (client che si riconnette in loop), esclude normale browsing EPG/categorie/stream"
+filter: >
+  evt.Meta.log_type == 'http_access-log'
+  &&
+  (
+    evt.Parsed.request contains 'player_api.php'
+    ||
+    evt.Parsed.request contains 'get.php'
+  )
+  &&
+  !(
+    evt.Meta.http_path contains 'action=get_live_streams'
+    ||
+    evt.Meta.http_path contains 'action=get_vod_streams'
+    ||
+    evt.Meta.http_path contains 'action=get_series'
+    ||
+    evt.Meta.http_path contains 'action=get_short_epg'
+    ||
+    evt.Meta.http_path contains 'get_simple_data_table'
+    ||
+    evt.Parsed.status == '302'
+    ||
+    evt.Meta.http_path contains 'action=get_live_categories'
+    ||
+    evt.Meta.http_path contains 'action=get_vod_categories'
+    ||
+    evt.Meta.http_path contains 'action=get_series_categories'
+  )
 groupby: "evt.Parsed.remote_addr"
 capacity: 15
 leakspeed: "1s"
