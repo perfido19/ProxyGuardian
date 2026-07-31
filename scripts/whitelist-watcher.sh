@@ -42,6 +42,15 @@ while true; do
         else
             log "ERRORE durante l'aggiornamento — controlla /var/log/update-asn-block.log"
         fi
+
+        if [[ -x /usr/local/bin/update-tor-block.sh ]]; then
+            log "Avvio aggiornamento Tor block..."
+            if /usr/local/bin/update-tor-block.sh >> /var/log/update-tor-block.log 2>&1; then
+                log "Tor block aggiornato con successo"
+            else
+                log "ERRORE durante l'aggiornamento Tor block — controlla /var/log/update-tor-block.log"
+            fi
+        fi
     }
 
     rm -f "$LOCK_FILE"
