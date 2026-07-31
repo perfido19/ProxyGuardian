@@ -609,7 +609,25 @@ info "Tor exit-node block disabilitato per questo deploy"`;
 
 - [ ] **Step 5: Inserisci il blocco nello script finale e abilita il timer**
 
-Trova nel template dello script finale la riga che referenzia `${antiIptvSetup}` (cerca `antiIptvSetup` nell'interpolazione dello script, non nella definizione) e aggiungi subito dopo `${torBlockSetup}` sulla riga successiva — stessa area del template letterale dove compaiono in sequenza `${asnBlockSetup}`, `${crowdSecSetup}`, `${antiIptvSetup}`.
+Trova, dentro il template letterale dello script finale (circa riga 2464-2468 dell'originale, prima di qualunque modifica di questo task):
+```
+${asnBlockSetup}
+
+${antiIptvSetup}
+
+${crowdSecSetup}
+```
+
+Sostituiscilo con:
+```
+${asnBlockSetup}
+
+${antiIptvSetup}
+
+${crowdSecSetup}
+
+${torBlockSetup}
+```
 
 Poi trova (circa riga 2724-2728):
 ```ts
@@ -1034,7 +1052,7 @@ Sostituiscilo con:
         </TabsList>
 ```
 
-Trova (circa righe 999-1005, subito dopo l'apertura di `<TabsContent value="blocklist"`):
+Trova (righe esatte, la chiusura del tab "blocklist" seguita dalla chiusura di `<Tabs>`):
 ```tsx
         <TabsContent value="blocklist" className="pt-4">
           <TabBlocklist
@@ -1042,13 +1060,27 @@ Trova (circa righe 999-1005, subito dopo l'apertura di `<TabsContent value="bloc
             setSelectedVps={setSelectedVps}
             vpsList={vpsList || []}
             onlineVps={onlineVps}
+            canWrite={user?.role === "admin"}
+          />
+        </TabsContent>
+      </Tabs>
 ```
 
-Individua la chiusura di quel `<TabsContent value="blocklist">` (cerca il primo `</TabsContent>` dopo quel punto) e subito dopo aggiungi:
+Sostituiscilo con:
 ```tsx
+        <TabsContent value="blocklist" className="pt-4">
+          <TabBlocklist
+            selectedVps={selectedVps}
+            setSelectedVps={setSelectedVps}
+            vpsList={vpsList || []}
+            onlineVps={onlineVps}
+            canWrite={user?.role === "admin"}
+          />
+        </TabsContent>
         <TabsContent value="torblock" className="pt-4">
           <TabTorBlock onlineVps={allOnlineVps} canWrite={canWrite} />
         </TabsContent>
+      </Tabs>
 ```
 
 - [ ] **Step 4: Aggiorna il banner della whitelist**
