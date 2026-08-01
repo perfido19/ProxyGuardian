@@ -1266,30 +1266,50 @@ PYEOF
 done
 ```
 
-- [ ] **Step 2: Esegui il canary**
+- [ ] **Step 2: Deploya il bundle agent aggiornato su tutta la fleet PRIMA del canary**
+
+I nuovi endpoint `/api/tor-block/status` e `/api/tor-block/refresh` (Task 4) vivono nel bundle `agent/agent-bundle.js`, che gli agent già in esecuzione sulla fleet NON hanno finché non vengono aggiornati esplicitamente. Senza questo step, dopo il rollout il tab dashboard "Tor Exit" mostrerebbe "Errore" su tutti i 54 VPS e "Forza refresh ora" fallirebbe sempre con 404, anche se l'enforcement iptables/ipset funziona correttamente.
+
+Dal dashboard di produzione (via UI, o via API con sessione admin): `POST /api/vps/bulk/agent/update` (endpoint già esistente in `server/routes.ts:634`, aggiorna `agent-bundle.js` su tutti i VPS enabled).
+
+Verifica: `curl -s -X POST http://185.229.236.50:5000/api/vps/bulk/agent/update -H "Cookie: <sessione-admin>" | python3 -c "import json,sys; r=json.load(sys.stdin); print(sum(1 for x in r if x['success']), '/', len(r))"`
+Expected: conteggio vicino a 54/54 (host offline attesi falliscono, non bloccante)
+
+- [ ] **Step 3: Esegui il canary**
 
 Run (sul dashboard): `chmod +x /root/rollout-tor-block.sh && /root/rollout-tor-block.sh --canary`
 Expected: nel log, `COUNT=` con un numero > 1000 (la torbulkexitlist ha tipicamente 1500-2000 entry), nessun `ERRORE` nell'output
 
-- [ ] **Step 3: Verifica canary in dettaglio**
+- [ ] **Step 4: Verifica canary in dettaglio (stato, drop reale, reboot)**
 
 Run (sul dashboard): `ssh root@100.116.212.143 "systemctl is-active tor-block-update.timer; ipset list tor_exit | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; iptables -L INPUT -n | grep TOR-BLOCK"`
 Expected: `active`, un conteggio > 1000, e le due righe iptables (LOG e DROP) presenti
 
-Verifica anche che la whitelist non venga svuotata dal blocco (nessun IP NetBird/dashboard/backend nel set):
+Verifica che la whitelist non venga svuotata dal blocco (nessun IP NetBird/dashboard/backend nel set):
 Run: `ssh root@100.116.212.143 "ipset test tor_exit 100.116.132.180 2>&1 || true"`
 Expected: `100.116.132.180 is NOT in set tor_exit` (l'IP del LAPI/dashboard non deve mai finire bloccato)
 
-- [ ] **Step 4: Rollout su tutta la fleet**
+Verifica il drop reale (non solo che la regola esista) prendendo un IP a caso dalla lista appena scaricata e controllando che iptables lo intercetti in modalità dry-run tramite il contatore pacchetti della regola DROP, prima e dopo un probe:
+Run: `ssh root@100.116.212.143 "IP=\$(ipset list tor_exit | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\$' | head -1); iptables -L INPUT -n -v --line-numbers | grep 'TOR-BLOCK\|tor_exit'; echo \"IP di test: \$IP\"; ipset test tor_exit \$IP"`
+Expected: l'IP scelto risulta `IS in set tor_exit`, confermando che il matching ipset→iptables è coerente (il conteggio pacchetti sulla regola DROP salirà naturalmente nel tempo se quell'IP genera traffico reale verso il VPS — non forziamo un probe attivo da rete esterna in questa verifica)
+
+Verifica la persistenza al reboot (il gap più a rischio per una fleet con storia di problemi al boot — vedi memoria NetBird boot-loop):
+Run: `ssh root@100.116.212.143 "reboot"` — attendi ~60s, poi:
+Run: `ssh -o ConnectTimeout=10 root@100.116.212.143 "systemctl is-active tor-block-update.timer; ipset list tor_exit | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\$'; iptables -L INPUT -n | grep TOR-BLOCK"`
+Expected: timer `active`, stesso conteggio IP di prima del reboot (ripristinato da `ipset-restore.service`), entrambe le regole iptables presenti — se una di queste manca, FERMATI e non procedere al rollout fleet-wide finché non è risolto
+
+- [ ] **Step 5: Rollout su tutta la fleet**
 
 Run (sul dashboard, in background — 54 host, può richiedere diversi minuti): `nohup /root/rollout-tor-block.sh > /root/rollout-tor-block-full.out 2>&1 < /dev/null & disown`
 
 Poi monitora: `tail -f /root/rollout-tor-block-full.out` (o rileggi periodicamente `/root/rollout-tor-block.log`)
 
-- [ ] **Step 5: Verifica finale fleet-wide**
+- [ ] **Step 6: Verifica finale fleet-wide (enforcement + bundle agent)**
 
 Run (sul dashboard, dopo che il rollout è terminato): script che itera `data/vps.json` e per ognuno fa `ssh root@<host> "systemctl is-active tor-block-update.timer"`, conta quanti sono `active`.
 Expected: 54/54 (o riporta esplicitamente quali host sono falliti, per intervento manuale — nessun rollback distruttivo necessario dato che l'installazione non tocca configurazione esistente, solo aggiunge)
+
+Verifica anche lato dashboard che il tab "Tor Exit" (Task 8) mostri stato "Attivo" per i VPS appena aggiornati, non "Errore" — conferma che lo Step 2 (bundle agent) ha effettivamente propagato i nuovi endpoint prima che servissero.
 
 ---
 
