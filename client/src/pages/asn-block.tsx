@@ -1115,7 +1115,7 @@ export default function AsnBlock() {
           />
         </TabsContent>
         <TabsContent value="torblock" className="pt-4">
-          <TabTorBlock onlineVps={allOnlineVps} canWrite={canWrite} />
+          <TabTorBlock onlineVps={allOnlineVps} canWrite={user?.role === "admin"} />
         </TabsContent>
       </Tabs>
     </div>
