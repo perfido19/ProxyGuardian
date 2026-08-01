@@ -1463,6 +1463,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const UPDATE_ASN_BLOCK_PATH = join(process.cwd(), "scripts", "update-asn-block.sh");
   const UPDATE_LISTS_PATH = join(process.cwd(), "scripts", "update-lists.sh");
   const WHITELIST_WATCHER_PATH = join(process.cwd(), "scripts", "whitelist-watcher.sh");
+  const TOR_TO_IPSET_PATH = join(process.cwd(), "scripts", "tor-to-ipset.py");
+  const UPDATE_TOR_BLOCK_PATH = join(process.cwd(), "scripts", "update-tor-block.sh");
   const ANTI_IPTV_PY_PATH = join(process.cwd(), "scripts", "anti-iptv.py");
   const ANTI_IPTV_SH_PATH = join(process.cwd(), "scripts", "anti-iptv.sh");
   const FAIL2BAN_TEMPLATE_DIR = join(process.cwd(), "scripts", "fail2ban");
@@ -1989,6 +1991,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const pPort = parseDeployPort(req.body?.proxyPort, 8880);
       const installAsnBlock = parseDeployToggle(req.body?.installAsnBlock, true);
       const installAntiIptv = parseDeployToggle(req.body?.installAntiIptv, false);
+      const installTorBlock = parseDeployToggle(req.body?.installTorBlock, true);
       const installCrowdSec = parseDeployToggle(req.body?.installCrowdSec, false);
       const crowdsecCentral = installCrowdSec
         ? (() => {
@@ -2043,6 +2046,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updateAsnBlockScript = installAsnBlock ? readFileSync(UPDATE_ASN_BLOCK_PATH, "utf-8") : "";
       const updateListsScript = installAsnBlock ? readFileSync(UPDATE_LISTS_PATH, "utf-8") : "";
       const whitelistWatcherScript = installAsnBlock ? readFileSync(WHITELIST_WATCHER_PATH, "utf-8") : "";
+      const torToIpsetPy = installTorBlock ? readFileSync(TOR_TO_IPSET_PATH, "utf-8") : "";
+      const updateTorBlockScript = installTorBlock ? readFileSync(UPDATE_TOR_BLOCK_PATH, "utf-8") : "";
       const antiIptvPy = installAntiIptv ? readFileSync(ANTI_IPTV_PY_PATH, "utf-8") : "";
       const antiIptvSh = installAntiIptv ? readFileSync(ANTI_IPTV_SH_PATH, "utf-8") : "";
       const fail2banJailTemplate = readFileSync(FAIL2BAN_JAIL_TEMPLATE_PATH, "utf-8");
@@ -2055,6 +2060,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const optionalPackages = Array.from(new Set([
         ...(installAsnBlock ? ["ipset", "inotify-tools", "python3-maxminddb", "python3-pip"] : []),
         ...(installAntiIptv ? ["conntrack", "ipset"] : []),
+        ...(installTorBlock ? ["ipset", "python3"] : []),
       ]));
       const optionalPackageSetup = optionalPackages.length > 0
         ? `# ── OPTIONAL PACKAGES ──────────────────────────────────────
@@ -2256,6 +2262,51 @@ ${DEPLOY_ANTI_IPTV_SERVICE}
 ANTIIPTVSVCEOF`
         : `# ── ANTI-IPTV ──────────────────────────────────────────────
 info "Anti-IPTV disabilitato per questo deploy"`;
+
+      const torBlockSetup = installTorBlock
+        ? `# ── TOR EXIT BLOCK ────────────────────────────────────────
+info "Installing Tor exit-node block support..."
+touch /etc/ipset.conf /var/log/update-tor-block.log
+[ -f /etc/asn-whitelist-nets.txt ] || touch /etc/asn-whitelist-nets.txt
+
+cat > /usr/local/bin/tor-to-ipset.py << 'TORTOIPSETEOF'
+${torToIpsetPy}
+TORTOIPSETEOF
+
+cat > /usr/local/bin/update-tor-block.sh << 'UPDATETORBLOCKEOF'
+${updateTorBlockScript}
+UPDATETORBLOCKEOF
+
+chmod 755 /usr/local/bin/tor-to-ipset.py /usr/local/bin/update-tor-block.sh
+
+${!installAsnBlock ? `# ipset-restore.service normalmente installato solo da ASN Block — necessario
+# comunque qui perche' e' generico (ripristina qualunque /etc/ipset.conf al boot)
+# e Tor Block deve sopravvivere al reboot anche se ASN Block e' disattivato.
+cat > /etc/systemd/system/ipset-restore.service << 'IPSETRESTOREEOF'
+${DEPLOY_IPSET_RESTORE_SERVICE}
+IPSETRESTOREEOF
+systemctl enable ipset-restore >/dev/null 2>&1 || true
+systemctl start ipset-restore >/dev/null 2>&1 || true` : ""}
+
+cat > /etc/systemd/system/tor-block-update.service << 'TORBLOCKSVCEOF'
+${DEPLOY_TOR_BLOCK_SERVICE}
+TORBLOCKSVCEOF
+
+cat > /etc/systemd/system/tor-block-update.timer << 'TORBLOCKTIMEREOF'
+${DEPLOY_TOR_BLOCK_TIMER}
+TORBLOCKTIMEREOF
+
+ipset create tor_exit hash:ip family inet maxelem 65536 -exist
+iptables -C INPUT -m set --match-set tor_exit src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[TOR-BLOCK] " --log-level 4 2>/dev/null || \\
+  iptables -A INPUT -m set --match-set tor_exit src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[TOR-BLOCK] " --log-level 4
+iptables -C INPUT -m set --match-set tor_exit src -j DROP 2>/dev/null || \\
+  iptables -A INPUT -m set --match-set tor_exit src -j DROP
+ipset save > /etc/ipset.conf
+
+systemctl daemon-reload
+/usr/local/bin/update-tor-block.sh >> /var/log/update-tor-block.log 2>&1 || warn "Aggiornamento iniziale Tor block fallito (torproject.org raggiungibile?)"`
+        : `# ── TOR EXIT BLOCK ────────────────────────────────────────
+info "Tor exit-node block disabilitato per questo deploy"`;
 
       const script = `#!/usr/bin/env bash
 # ╔══════════════════════════════════════════════════════════╗
@@ -2490,6 +2541,8 @@ ${asnBlockSetup}
 ${antiIptvSetup}
 
 ${crowdSecSetup}
+
+${torBlockSetup}
 
 # ── SYSCTL ─────────────────────────────────────────────────
 info "Applying sysctl settings..."
@@ -2750,6 +2803,8 @@ systemctl start ipset-restore >/dev/null 2>&1 || true
 systemctl restart whitelist-watcher >/dev/null 2>&1 || true` : ""}
 ${installAntiIptv ? `systemctl enable anti-iptv >/dev/null 2>&1 || true
 systemctl restart anti-iptv >/dev/null 2>&1 || true` : ""}
+${installTorBlock ? `systemctl enable tor-block-update.timer >/dev/null 2>&1 || true
+systemctl start tor-block-update.timer >/dev/null 2>&1 || true` : ""}
 sleep 2
 
 # ── Firewall: lockdown porta agente (solo dashboard NetBird) ──────────────────
@@ -2802,6 +2857,7 @@ fi
           installAsnBlock,
           installAntiIptv,
           installCrowdSec,
+          installTorBlock,
         },
         embeddedConfigs: {
           countryWhitelist: !!countryWhitelist && countryWhitelist.trim().length > 0,
@@ -2812,6 +2868,7 @@ fi
           exclusionIp: !!exclusionIp && exclusionIp.trim().length > 0,
           antiIptv: installAntiIptv,
           crowdSec: installCrowdSec,
+          torBlock: installTorBlock,
           modsecRelaxed: true,
           nginxOptimized: true,
         },
