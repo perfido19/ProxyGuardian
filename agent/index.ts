@@ -1328,6 +1328,8 @@ const ASN_CACHE_TTL = 5 * 60 * 1000;
 
 const ASN_AGENT_USER = process.env.USER || "pgagent";
 
+const TOR_UPDATE_SCRIPT = "/usr/local/bin/update-tor-block.sh";
+
 function spawnAsnUpdate() {
   var child = spawn("sudo", ["env", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "bash", ASN_UPDATE_SCRIPT], { detached: true, stdio: "ignore" });
   child.unref();
@@ -1545,6 +1547,36 @@ app.post("/api/asn/test-ip", async (req, res) => {
 app.get("/api/asn/log", async (_req, res) => {
   const { stdout } = await runCmd("tail -100 /var/log/update-asn-block.log 2>/dev/null || echo ''");
   res.json({ lines: stdout.split("\n").filter(Boolean) });
+});
+
+// ─── Tor exit-node block ──────────────────────────────────────────────────────
+
+app.get("/api/tor-block/status", async (_req, res) => {
+  try {
+    const [timerActive, count, lastMtime] = await Promise.all([
+      runCmd("systemctl is-active tor-block-update.timer 2>/dev/null"),
+      runCmd("sudo ipset list tor_exit 2>/dev/null | grep -cE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' || echo 0"),
+      runCmd("stat -c %Y /var/log/update-tor-block.log 2>/dev/null || echo 0"),
+    ]);
+    const mtimeSec = parseInt(lastMtime.stdout.trim()) || 0;
+    const lastUpdate = mtimeSec > 0 ? new Date(mtimeSec * 1000).toISOString() : "";
+    res.json({
+      enabled: timerActive.stdout.trim() === "active",
+      installed: existsSync(TOR_UPDATE_SCRIPT),
+      count: parseInt(count.stdout.trim()) || 0,
+      lastUpdate: lastUpdate,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/tor-block/refresh", async (_req, res) => {
+  if (!existsSync(TOR_UPDATE_SCRIPT)) {
+    return res.status(404).json({ success: false, error: "Script update-tor-block.sh non trovato. Tor Block non è installato su questo VPS." });
+  }
+  const result = await runCmd("sudo " + TOR_UPDATE_SCRIPT + " 2>&1", 60000);
+  res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
 
 // ─── Sudoers management ───────────────────────────────────────────────────────
