@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 import {
   Plus, Trash2, Search, RefreshCw, CheckCircle, XCircle,
-  Shield, Activity, Settings, FileText, AlertTriangle, Play, Database, Copy, Save,
+  Shield, Activity, Settings, FileText, AlertTriangle, Play, Database, Copy, Save, Ban,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -29,6 +29,7 @@ interface AsnStat { asn: string; org: string; country: string; countryCode: stri
 interface AsnStats { updatedAt: string; totalPrefixes: number; top: AsnStat[]; }
 interface AsnStatus { ipsetRestore: string; whitelistWatcher: string; totalPrefixes: number; lastUpdate: string; installed?: boolean; }
 interface WhitelistEntry { value: string; comment: string; type: "cidr" | "domain"; }
+interface TorBlockStatus { enabled: boolean; installed?: boolean; count: number; lastUpdate: string; }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -552,7 +553,7 @@ function TabWhitelist({ vpsId, canWrite }: { vpsId: string; canWrite: boolean })
       <Card className="border-blue-500/20 bg-blue-500/5">
         <CardContent className="pt-4">
           <p className="text-sm text-muted-foreground">
-            Il set si aggiorna automaticamente entro pochi secondi grazie al watcher inotify. Aggiungi CIDR (es. <code className="font-mono text-xs bg-muted px-1 rounded">1.2.3.0/24</code>) o domini.
+            Il set si aggiorna automaticamente entro pochi secondi grazie al watcher inotify. Aggiungi CIDR (es. <code className="font-mono text-xs bg-muted px-1 rounded">1.2.3.0/24</code>) o domini. Questa whitelist protegge anche il Tor Exit-Node Block (tab "Tor Exit").
           </p>
         </CardContent>
       </Card>
@@ -680,6 +681,113 @@ function TabLog({ vpsId }: { vpsId: string }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: boolean }) {
+  const { toast } = useToast();
+
+  const { data: bulkResults, isLoading, refetch } = useQuery<BulkResult[]>({
+    queryKey: ["tor-block-status", onlineVps.map(v => v.id).join(",")],
+    queryFn: async () => {
+      const r = await apiRequest("POST", "/api/vps/bulk/get", {
+        vpsIds: onlineVps.map(v => v.id),
+        path: "/api/tor-block/status",
+      });
+      return r.json();
+    },
+    enabled: onlineVps.length > 0,
+    refetchInterval: 120000,
+  });
+
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", "/api/vps/bulk/post", {
+        vpsIds: onlineVps.map(v => v.id),
+        path: "/api/tor-block/refresh",
+        body: {},
+      });
+      return r.json();
+    },
+    onSuccess: (data: BulkResult[]) => {
+      refetch();
+      const ok = data.filter(r => r.success).length;
+      toast({ title: "Refresh Tor Block avviato", description: `${ok}/${data.length} VPS aggiornati` });
+    },
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const rows = onlineVps.map(vps => {
+    const result = (bulkResults || []).find(r => r.vpsId === vps.id);
+    const status: TorBlockStatus | undefined = result && result.success ? result.data : undefined;
+    return { vps, result, status };
+  });
+
+  const activeCount = rows.filter(r => r.status && r.status.enabled).length;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <CardTitle>Tor Exit-Node Block</CardTitle>
+              <CardDescription>
+                Blocco IP dei nodi Tor exit (sorgente: check.torproject.org, refresh orario automatico) — {activeCount}/{onlineVps.length} VPS con timer attivo
+              </CardDescription>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
+                <RefreshCw className="w-4 h-4 mr-1" />Aggiorna stato
+              </Button>
+              <Button size="sm" onClick={() => refreshMutation.mutate()} disabled={!canWrite || refreshMutation.isPending}>
+                <Play className="w-4 h-4 mr-1" />{refreshMutation.isPending ? "Avvio..." : "Forza refresh ora"}
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? <LoadingState message="Caricamento stato Tor Block..." /> : (
+            <div className="border rounded-md">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>VPS</TableHead>
+                    <TableHead>Timer</TableHead>
+                    <TableHead>IP in blocco</TableHead>
+                    <TableHead>Ultimo aggiornamento</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.length === 0 ? (
+                    <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">Nessun VPS online</TableCell></TableRow>
+                  ) : rows.map(({ vps, result, status }) => (
+                    <TableRow key={vps.id}>
+                      <TableCell className="font-medium">{vps.name}</TableCell>
+                      <TableCell>
+                        {!result || !result.success ? (
+                          <Badge variant="outline" className="text-xs border-red-500/40 text-red-500">Errore</Badge>
+                        ) : status && status.installed === false ? (
+                          <Badge variant="outline" className="text-xs border-muted-foreground/40 text-muted-foreground">Non installato</Badge>
+                        ) : status && status.enabled ? (
+                          <Badge variant="outline" className="text-xs border-green-600/40 text-green-600">Attivo</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs border-yellow-500/40 text-yellow-600">Inattivo</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">{status ? status.count : "—"}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {status && status.lastUpdate ? new Date(status.lastUpdate).toLocaleString("it-IT") : "mai"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -964,6 +1072,7 @@ export default function AsnBlock() {
           <TabsTrigger value="whitelist"><Shield className="w-3.5 h-3.5 mr-1.5" />Whitelist</TabsTrigger>
           <TabsTrigger value="log"><FileText className="w-3.5 h-3.5 mr-1.5" />Log</TabsTrigger>
           <TabsTrigger value="blocklist"><Database className="w-3.5 h-3.5 mr-1.5" />Blocklist ASN</TabsTrigger>
+          <TabsTrigger value="torblock"><Ban className="w-3.5 h-3.5 mr-1.5" />Tor Exit</TabsTrigger>
         </TabsList>
 
         {/* Per-VPS banner */}
@@ -1004,6 +1113,9 @@ export default function AsnBlock() {
             onlineVps={onlineVps}
             canWrite={user?.role === "admin"}
           />
+        </TabsContent>
+        <TabsContent value="torblock" className="pt-4">
+          <TabTorBlock onlineVps={allOnlineVps} canWrite={canWrite} />
         </TabsContent>
       </Tabs>
     </div>
