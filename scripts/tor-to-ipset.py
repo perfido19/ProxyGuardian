@@ -109,7 +109,8 @@ def main():
 
     tmpset = "tor_exit_new"
     proc = subprocess.Popen(['ipset', 'restore', '-exist'], stdin=subprocess.PIPE, bufsize=1048576)
-    buf = [f'create {tmpset} hash:ip family inet maxelem 65536 -exist\n']
+    buf = [f'create {tmpset} hash:ip family inet maxelem 65536 -exist\n',
+           f'flush {tmpset}\n']
     BATCH = 500
     count = 0
     for ip in filtered:
