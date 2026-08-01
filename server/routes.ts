@@ -148,6 +148,7 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-tor-block.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt install --only-upgrade netbird *",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get install --only-upgrade netbird *",
@@ -292,6 +293,29 @@ const DEPLOY_ANTI_IPTV_SERVICE = [
   "",
   "[Install]",
   "WantedBy=multi-user.target",
+  "",
+].join("\n");
+const DEPLOY_TOR_BLOCK_SERVICE = [
+  "[Unit]",
+  "Description=Aggiorna ipset tor_exit dalla lista Tor Project exit-node",
+  "After=network-online.target ipset-restore.service",
+  "Wants=network-online.target",
+  "",
+  "[Service]",
+  "Type=oneshot",
+  "ExecStart=/usr/local/bin/update-tor-block.sh",
+  "",
+].join("\n");
+const DEPLOY_TOR_BLOCK_TIMER = [
+  "[Unit]",
+  "Description=Timer orario refresh Tor exit-node block",
+  "",
+  "[Timer]",
+  "OnCalendar=hourly",
+  "Persistent=true",
+  "",
+  "[Install]",
+  "WantedBy=timers.target",
   "",
 ].join("\n");
 
