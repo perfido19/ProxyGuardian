@@ -33,6 +33,7 @@ export default function DeployVps() {
   const [installAsnBlock, setInstallAsnBlock] = useState(true);
   const [installAntiIptv, setInstallAntiIptv] = useState(false);
   const [installCrowdSec, setInstallCrowdSec] = useState(false);
+  const [installTorBlock, setInstallTorBlock] = useState(true);
 
   const handleGenerate = async () => {
     if (!vpsName.trim()) {
@@ -51,6 +52,7 @@ export default function DeployVps() {
         installAsnBlock,
         installAntiIptv,
         installCrowdSec,
+        installTorBlock,
       });
       const data = await res.json();
       setScript(data.script);
@@ -173,7 +175,7 @@ export default function DeployVps() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 rounded-lg border p-4 bg-muted/20">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 rounded-lg border p-4 bg-muted/20">
               <label className="flex items-start gap-3 cursor-pointer">
                 <Checkbox checked={installAsnBlock} onCheckedChange={checked => setInstallAsnBlock(checked === true)} />
                 <div className="space-y-1">
@@ -198,6 +200,15 @@ export default function DeployVps() {
                   <div className="text-sm font-medium leading-none">Installa CrowdSec</div>
                   <p className="text-xs text-muted-foreground">
                     IDS/IPS con blocklist community e coordinamento fleet.
+                  </p>
+                </div>
+              </label>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <Checkbox checked={installTorBlock} onCheckedChange={checked => setInstallTorBlock(checked === true)} />
+                <div className="space-y-1">
+                  <div className="text-sm font-medium leading-none">Installa Tor Block</div>
+                  <p className="text-xs text-muted-foreground">
+                    Blocca gli IP dei nodi Tor exit-node, refresh orario automatico.
                   </p>
                 </div>
               </label>
