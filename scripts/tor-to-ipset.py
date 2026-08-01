@@ -65,6 +65,21 @@ def is_valid_ipv4(s):
         return False
 
 
+def get_existing_count(set_name):
+    """Numero di membri dell'ipset esistente, o None se il set non esiste."""
+    try:
+        proc = subprocess.run(['ipset', 'list', set_name, '-t'],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if proc.returncode != 0:
+            return None
+        for line in proc.stdout.splitlines():
+            if line.startswith('Number of entries:'):
+                return int(line.split(':', 1)[1].strip())
+    except Exception:
+        pass
+    return None
+
+
 def fetch_exit_list():
     req = urllib.request.Request(TORLIST_URL, headers={"User-Agent": "ProxyGuardian-TorBlock/1.0"})
     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -86,6 +101,11 @@ def main():
 
     whitelist = load_whitelist()
     filtered = [ip for ip in ips if not is_whitelisted(ip, whitelist)]
+
+    existing_count = get_existing_count(SET_NAME)
+    if existing_count is not None and existing_count > 0 and len(filtered) < existing_count // 2:
+        print(f"ERRORE: nuova lista sospetta ({len(filtered)} IP contro {existing_count} attuali in {SET_NAME}), ipset non toccato", file=sys.stderr)
+        sys.exit(1)
 
     tmpset = "tor_exit_new"
     proc = subprocess.Popen(['ipset', 'restore', '-exist'], stdin=subprocess.PIPE, bufsize=1048576)
