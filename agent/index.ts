@@ -911,6 +911,8 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/apt/sources.list.d/crowdsec.list",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get update -qq",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get install -y crowdsec crowdsec-firewall-bouncer-iptables",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/dpkg -i /tmp/pg-crowdsec-pkgs/*.deb",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get install -f -y",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli decisions list -o json",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli alerts list -o json",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/cscli decisions delete --ip *",
@@ -2189,6 +2191,25 @@ app.delete("/api/crowdsec/scenario/:name", async (req, res) => {
   }
 });
 
+app.post("/api/agent/crowdsec-package", express.raw({ type: "*/*", limit: "80mb" }), async (req, res) => {
+  var name = req.headers["x-package-name"];
+  if (name !== "crowdsec" && name !== "bouncer") {
+    return res.status(400).json({ error: "x-package-name deve essere 'crowdsec' o 'bouncer'" });
+  }
+  var pkg = req.body;
+  if (!Buffer.isBuffer(pkg) || pkg.length < 1000) {
+    return res.status(400).json({ error: "Pacchetto non valido o troppo piccolo" });
+  }
+  var dir = "/tmp/pg-crowdsec-pkgs";
+  try {
+    await runCmd("mkdir -p " + dir, 5000);
+    await writeFile(path.join(dir, name + ".deb"), pkg);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/crowdsec/install", async (req, res) => {
   var steps: Array<{ step: string; ok: boolean; error?: string }> = [];
   function addStep(label: string, result: { ok: boolean; stderr: string; stdout: string }) {
@@ -2206,6 +2227,7 @@ app.post("/api/crowdsec/install", async (req, res) => {
     centralLapi = { url: raw.url, login: raw.login, password: raw.password, bouncerKey: raw.bouncerKey };
   }
   var fleetWhitelist = typeof (req.body && req.body.fleetWhitelist) === "string" ? req.body.fleetWhitelist : null;
+  var useCache = req.body && req.body.useCache === true;
   try {
     await writeFile("/tmp/pg-sudoers-crowdsec", SUDOERS_CONTENT, "utf-8");
     var sudoersUpdate = await runCmd(
@@ -2214,28 +2236,51 @@ app.post("/api/crowdsec/install", async (req, res) => {
     );
     addStep("update sudoers", sudoersUpdate);
 
-    var gpg = await runCmd(
-      "curl -fsSL https://packagecloud.io/crowdsec/crowdsec/gpgkey | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/crowdsec-archive-keyring.gpg",
-      30000
-    );
-    addStep("import GPG key", gpg);
+    var cacheDir = "/tmp/pg-crowdsec-pkgs";
+    var crowdsecDeb = path.join(cacheDir, "crowdsec.deb");
+    var bouncerDeb = path.join(cacheDir, "bouncer.deb");
+    var hasCache = useCache && existsSync(crowdsecDeb) && existsSync(bouncerDeb);
 
-    var distro = await runCmd("lsb_release -cs 2>/dev/null || echo jammy");
-    var dist = distro.stdout.trim() || "jammy";
-    var repo = await runCmd(
-      "echo 'deb [signed-by=/usr/share/keyrings/crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/ubuntu " + dist + " main' | sudo tee /etc/apt/sources.list.d/crowdsec.list > /dev/null",
-      5000
-    );
-    addStep("add apt repo", repo);
+    if (hasCache) {
+      // dpkg -i in due invocazioni separate (un file ciascuna): la regola sudoers
+      // "/usr/bin/dpkg -i /tmp/pg-crowdsec-pkgs/*.deb" fa match fnmatch per singolo
+      // argomento file, passare 2 path insieme sarebbe ambiguo da matchare.
+      var dpkgInst1 = await runCmd("sudo dpkg -i " + crowdsecDeb + " 2>&1", 60000);
+      var dpkgInst2 = await runCmd("sudo dpkg -i " + bouncerDeb + " 2>&1", 60000);
+      addStep("install da pacchetti cache", {
+        ok: dpkgInst1.ok && dpkgInst2.ok,
+        stdout: dpkgInst1.stdout + dpkgInst2.stdout,
+        stderr: dpkgInst1.stderr + dpkgInst2.stderr,
+      });
 
-    var aptUpd = await runCmd("sudo apt-get update -qq 2>&1", 60000);
-    addStep("apt-get update", aptUpd);
+      var fixDeps = await runCmd("sudo apt-get install -f -y 2>&1", 60000);
+      addStep("apt-get install -f (dipendenze)", fixDeps);
 
-    var aptInst = await runCmd(
-      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y crowdsec crowdsec-firewall-bouncer-iptables 2>&1",
-      120000
-    );
-    addStep("apt-get install crowdsec", aptInst);
+      await runCmd("rm -f " + crowdsecDeb + " " + bouncerDeb, 5000);
+    } else {
+      var gpg = await runCmd(
+        "curl -fsSL https://packagecloud.io/crowdsec/crowdsec/gpgkey | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/crowdsec-archive-keyring.gpg",
+        30000
+      );
+      addStep("import GPG key", gpg);
+
+      var distro = await runCmd("lsb_release -cs 2>/dev/null || echo jammy");
+      var dist = distro.stdout.trim() || "jammy";
+      var repo = await runCmd(
+        "echo 'deb [signed-by=/usr/share/keyrings/crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/ubuntu " + dist + " main' | sudo tee /etc/apt/sources.list.d/crowdsec.list > /dev/null",
+        5000
+      );
+      addStep("add apt repo", repo);
+
+      var aptUpd = await runCmd("sudo apt-get update -qq 2>&1", 60000);
+      addStep("apt-get update", aptUpd);
+
+      var aptInst = await runCmd(
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y crowdsec crowdsec-firewall-bouncer-iptables 2>&1",
+        120000
+      );
+      addStep("apt-get install crowdsec", aptInst);
+    }
 
     var hubUpd = await runCmd("sudo cscli hub update >/dev/null 2>&1 || true", 30000);
     addStep("cscli hub update", { ...hubUpd, ok: true });
