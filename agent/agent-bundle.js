@@ -24705,11 +24705,8 @@ app.post("/api/crowdsec/install", async (req, res) => {
     if (hasCache) {
       var dpkgInst1 = await runCmd("sudo dpkg -i " + crowdsecDeb + " 2>&1", 6e4);
       var dpkgInst2 = await runCmd("sudo dpkg -i " + bouncerDeb + " 2>&1", 6e4);
-      addStep("install da pacchetti cache", {
-        ok: true,
-        stdout: dpkgInst1.stdout + dpkgInst2.stdout,
-        stderr: dpkgInst1.stderr + dpkgInst2.stderr
-      });
+      var dpkgOutput = (dpkgInst1.stdout + dpkgInst1.stderr + dpkgInst2.stdout + dpkgInst2.stderr).slice(0, 300);
+      steps.push({ step: "install da pacchetti cache", ok: true, error: dpkgOutput || void 0 });
       var fixDeps = await runCmd("sudo apt-get install -f -y 2>&1", 6e4);
       addStep("apt-get install -f (dipendenze)", fixDeps);
       await runCmd("rm -f " + crowdsecDeb + " " + bouncerDeb, 5e3);

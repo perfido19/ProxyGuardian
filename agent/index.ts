@@ -2247,11 +2247,11 @@ app.post("/api/crowdsec/install", async (req, res) => {
       // argomento file, passare 2 path insieme sarebbe ambiguo da matchare.
       var dpkgInst1 = await runCmd("sudo dpkg -i " + crowdsecDeb + " 2>&1", 60000);
       var dpkgInst2 = await runCmd("sudo dpkg -i " + bouncerDeb + " 2>&1", 60000);
-      addStep("install da pacchetti cache", {
-        ok: true,
-        stdout: dpkgInst1.stdout + dpkgInst2.stdout,
-        stderr: dpkgInst1.stderr + dpkgInst2.stderr,
-      });
+      // ok:true sempre (dpkg -i esce spesso non-zero per dipendenze mancanti, risolte
+      // subito dopo da apt-get install -f) — ma l'output va comunque riportato per
+      // diagnosticare mismatch arch/distro tra dashboard e VPS target.
+      var dpkgOutput = (dpkgInst1.stdout + dpkgInst1.stderr + dpkgInst2.stdout + dpkgInst2.stderr).slice(0, 300);
+      steps.push({ step: "install da pacchetti cache", ok: true, error: dpkgOutput || undefined });
 
       var fixDeps = await runCmd("sudo apt-get install -f -y 2>&1", 60000);
       addStep("apt-get install -f (dipendenze)", fixDeps);

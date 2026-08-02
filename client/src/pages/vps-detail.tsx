@@ -318,7 +318,7 @@ export default function VpsDetail() {
 
   const installCrowdSecMutation = useMutation({
     mutationFn: async () => {
-      const r = await apiRequest("POST", proxy("/api/crowdsec/install"), {});
+      const r = await apiRequest("POST", `/api/crowdsec/install/${id}`, {});
       return r.json() as Promise<{ ok: boolean; steps: Array<{ step: string; ok: boolean; error?: string }> }>;
     },
     onSuccess: (data) => {
