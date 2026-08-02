@@ -1753,14 +1753,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const crowdsecFile = files.find(f => f.startsWith("crowdsec_"));
       const bouncerFile = files.find(f => f.startsWith("crowdsec-firewall-bouncer-iptables_"));
       if (!crowdsecFile || !bouncerFile) {
-        return res.status(500).json({ error: "Download incompleto: pacchetti mancanti dopo apt-get download" });
+        return res.json({ ok: false, error: "Download incompleto: pacchetti mancanti dopo apt-get download" });
       }
       const versionMatch = crowdsecFile.match(/^crowdsec_([^_]+)_/);
       const manifest = { version: versionMatch ? versionMatch[1] : "unknown", downloadedAt: new Date().toISOString() };
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
       res.json({ ok: true, ...manifest });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.json({ ok: false, error: e.message });
     }
   });
 
