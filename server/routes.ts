@@ -1672,10 +1672,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       fleetWhitelist = readFileSync(join(process.cwd(), "crowdsec", "parsers", "s02-enrich", "fleet-whitelist.yaml"), "utf-8");
     } catch { fleetWhitelist = undefined; }
+
+    let useCache = false;
+    const manifest = getCrowdsecPackageManifest();
+    if (manifest) {
+      try {
+        const files = readdirSync(CROWDSEC_PACKAGES_DIR).filter(f => f.endsWith(".deb"));
+        const crowdsecFile = files.find(f => f.startsWith("crowdsec_"));
+        const bouncerFile = files.find(f => f.startsWith("crowdsec-firewall-bouncer-iptables_"));
+        if (crowdsecFile && bouncerFile) {
+          const crowdsecBuf = readFileSync(join(CROWDSEC_PACKAGES_DIR, crowdsecFile));
+          const bouncerBuf = readFileSync(join(CROWDSEC_PACKAGES_DIR, bouncerFile));
+          await agentUploadPackage(vps, "crowdsec", crowdsecBuf);
+          await agentUploadPackage(vps, "bouncer", bouncerBuf);
+          useCache = true;
+        }
+      } catch {
+        useCache = false;
+      }
+    }
+
     try {
       const result = await agentPost(vps, "/api/crowdsec/install", {
         centralLapi: { url: central.url, login: central.login, password: central.password, bouncerKey: central.bouncerKey },
         fleetWhitelist,
+        useCache,
       }, SLOW_REQUEST_TIMEOUT);
       res.json(result);
     } catch (e: any) {
