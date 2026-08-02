@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, ShieldCheck, ShieldX, ShieldOff, RefreshCw, Plus, Trash2, Upload, Search, CheckCircle2, XCircle, AlertTriangle, BarChart2, Loader2 } from "lucide-react";
+import { Shield, ShieldCheck, ShieldX, ShieldOff, RefreshCw, Plus, Trash2, Upload, Search, CheckCircle2, XCircle, AlertTriangle, BarChart2, Loader2, Package, Download } from "lucide-react";
 
 interface VpsSummary {
   vpsId: string;
@@ -147,6 +147,29 @@ function OverviewTab() {
     },
   });
 
+  const { data: pkgStatus, refetch: refetchPkgStatus } = useQuery<{ cached: boolean; version: string | null; downloadedAt: string | null }>({
+    queryKey: ["crowdsec-packages-status"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/crowdsec/packages/status"); return r.json(); },
+  });
+
+  const refreshPackagesMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", "/api/crowdsec/packages/refresh");
+      return r.json();
+    },
+    onSuccess: (result: { ok?: boolean; version?: string; error?: string }) => {
+      if (result.ok) {
+        toast({ title: "Pacchetti CrowdSec aggiornati", description: `Versione ${result.version}` });
+        refetchPkgStatus();
+      } else {
+        toast({ title: "Aggiornamento pacchetti fallito", description: result.error, variant: "destructive" });
+      }
+    },
+    onError: (err: Error) => {
+      toast({ title: "Aggiornamento pacchetti fallito", description: err.message, variant: "destructive" });
+    },
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -168,6 +191,26 @@ function OverviewTab() {
         </div>
         <Button size="sm" variant="outline" onClick={() => refetch()}>
           <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
+        </Button>
+      </div>
+
+      <div className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Package className="w-4 h-4" />
+          {pkgStatus?.cached
+            ? <span>Pacchetti in cache: v{pkgStatus.version} ({new Date(pkgStatus.downloadedAt!).toLocaleString("it-IT")})</span>
+            : <span>Nessun pacchetto in cache — install userà packagecloud direttamente dal VPS</span>}
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={refreshPackagesMutation.isPending}
+          onClick={() => refreshPackagesMutation.mutate()}
+        >
+          {refreshPackagesMutation.isPending
+            ? <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+            : <Download className="w-4 h-4 mr-1" />}
+          Aggiorna pacchetti
         </Button>
       </div>
 
