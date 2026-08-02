@@ -9,7 +9,7 @@ import { open as openMaxMind, type Reader, validate as validateIp } from "maxmin
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, removeVpsFromAllUsers, type UserRole } from "./auth";
-import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS } from "./vps-manager";
+import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage } from "./vps-manager";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -1715,6 +1715,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) {
       res.status(502).json({ error: e.message });
     }
+  });
+
+  app.post("/api/crowdsec/packages/refresh", requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      mkdirSync(CROWDSEC_PACKAGES_DIR, { recursive: true });
+      for (const f of readdirSync(CROWDSEC_PACKAGES_DIR)) {
+        if (f.endsWith(".deb")) unlinkSync(join(CROWDSEC_PACKAGES_DIR, f));
+      }
+      await execFileAsync("apt-get", ["download", "crowdsec", "crowdsec-firewall-bouncer-iptables"], {
+        cwd: CROWDSEC_PACKAGES_DIR, timeout: 60000,
+      });
+      const files = readdirSync(CROWDSEC_PACKAGES_DIR).filter(f => f.endsWith(".deb"));
+      const crowdsecFile = files.find(f => f.startsWith("crowdsec_"));
+      const bouncerFile = files.find(f => f.startsWith("crowdsec-firewall-bouncer-iptables_"));
+      if (!crowdsecFile || !bouncerFile) {
+        return res.status(500).json({ error: "Download incompleto: pacchetti mancanti dopo apt-get download" });
+      }
+      const versionMatch = crowdsecFile.match(/^crowdsec_([^_]+)_/);
+      const manifest = { version: versionMatch ? versionMatch[1] : "unknown", downloadedAt: new Date().toISOString() };
+      writeFileSync(join(CROWDSEC_PACKAGES_DIR, "manifest.json"), JSON.stringify(manifest, null, 2));
+      res.json({ ok: true, ...manifest });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/crowdsec/packages/status", requireAuth, (_req, res) => {
+    const manifest = getCrowdsecPackageManifest();
+    res.json({ cached: !!manifest, version: manifest?.version ?? null, downloadedAt: manifest?.downloadedAt ?? null });
   });
 
   app.get("/api/fleet/crowdsec/summary", requireAuth, async (_req, res) => {

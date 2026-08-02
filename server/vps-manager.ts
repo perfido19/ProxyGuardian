@@ -21,6 +21,23 @@ export type SafeVpsConfig = Omit<VpsConfig, "apiKey"> & { apiKey: "***" };
 const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), "data");
 const VPS_FILE = join(DATA_DIR, "vps.json");
 
+export const CROWDSEC_PACKAGES_DIR = join(DATA_DIR, "crowdsec-packages");
+const CROWDSEC_PACKAGES_MANIFEST = join(CROWDSEC_PACKAGES_DIR, "manifest.json");
+
+export interface CrowdsecPackageManifest {
+  version: string;
+  downloadedAt: string;
+}
+
+export function getCrowdsecPackageManifest(): CrowdsecPackageManifest | null {
+  if (!existsSync(CROWDSEC_PACKAGES_MANIFEST)) return null;
+  try {
+    return JSON.parse(readFileSync(CROWDSEC_PACKAGES_MANIFEST, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
 function ensureDataDir() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -326,6 +343,26 @@ export async function agentUpdate(vps: VpsConfig, bundle: Buffer): Promise<{ ok:
   } catch (e: any) {
     clearTimeout(timer);
     return { ok: false, error: e.message };
+  }
+}
+
+export async function agentUploadPackage(vps: VpsConfig, name: "crowdsec" | "bouncer", buf: Buffer): Promise<void> {
+  const url = `http://${vps.host}:${vps.port}/api/agent/crowdsec-package`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/octet-stream", "x-api-key": vps.apiKey, "x-package-name": name },
+      body: buf,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${vps.name}: upload ${name} fallito - ${res.status} ${text}`);
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
