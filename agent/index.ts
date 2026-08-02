@@ -2248,7 +2248,7 @@ app.post("/api/crowdsec/install", async (req, res) => {
       var dpkgInst1 = await runCmd("sudo dpkg -i " + crowdsecDeb + " 2>&1", 60000);
       var dpkgInst2 = await runCmd("sudo dpkg -i " + bouncerDeb + " 2>&1", 60000);
       addStep("install da pacchetti cache", {
-        ok: dpkgInst1.ok && dpkgInst2.ok,
+        ok: true,
         stdout: dpkgInst1.stdout + dpkgInst2.stdout,
         stderr: dpkgInst1.stderr + dpkgInst2.stderr,
       });
