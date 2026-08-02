@@ -1720,6 +1720,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/crowdsec/packages/refresh", requireAuth, requireAdmin, async (_req, res) => {
     try {
       mkdirSync(CROWDSEC_PACKAGES_DIR, { recursive: true });
+      const manifestPath = join(CROWDSEC_PACKAGES_DIR, "manifest.json");
+      if (existsSync(manifestPath)) unlinkSync(manifestPath);
       for (const f of readdirSync(CROWDSEC_PACKAGES_DIR)) {
         if (f.endsWith(".deb")) unlinkSync(join(CROWDSEC_PACKAGES_DIR, f));
       }
@@ -1734,7 +1736,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const versionMatch = crowdsecFile.match(/^crowdsec_([^_]+)_/);
       const manifest = { version: versionMatch ? versionMatch[1] : "unknown", downloadedAt: new Date().toISOString() };
-      writeFileSync(join(CROWDSEC_PACKAGES_DIR, "manifest.json"), JSON.stringify(manifest, null, 2));
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
       res.json({ ok: true, ...manifest });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
