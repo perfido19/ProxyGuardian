@@ -262,15 +262,34 @@ else
   warn "iptables non disponibile — porta $AGENT_PORT non protetta"
 fi
 
+# ── NetBird TCP keepalive (evita connessioni gRPC stale dopo blip di rete) ──
+cat > /etc/sysctl.d/99-netbird-keepalive.conf << 'SYSEOF'
+net.ipv4.tcp_keepalive_time = 300
+net.ipv4.tcp_keepalive_intvl = 10
+net.ipv4.tcp_keepalive_probes = 5
+SYSEOF
+sysctl -p /etc/sysctl.d/99-netbird-keepalive.conf >/dev/null 2>&1
+ok "NetBird TCP keepalive tuning applicato (300s)"
+
 # ── NetBird watchdog (timer ogni 5min) ──────────────────────────────────────
 cat > /usr/local/sbin/netbird-watchdog.sh << 'WDEOF'
 #!/bin/bash
+# Evita restart doppi se già riavviato negli ultimi 8 minuti
+LOCKFILE="/tmp/netbird-watchdog.lock"
+if [ -f "$LOCKFILE" ]; then
+    AGE=$(( $(date +%s) - $(stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0) ))
+    [ "$AGE" -lt 480 ] && exit 0
+fi
+
 STATUS=$(netbird status 2>/dev/null)
 MGMT=$(echo "$STATUS" | grep "^Management:" | awk '{print $2}')
 SIGNAL=$(echo "$STATUS" | grep "^Signal:" | awk '{print $2}')
+
 if [ "$MGMT" = "Connected" ] && [ "$SIGNAL" = "Connected" ]; then
     exit 0
 fi
+
+touch "$LOCKFILE"
 logger -t netbird-watchdog "NetBird not connected (Management=$MGMT Signal=$SIGNAL) - restarting"
 systemctl restart netbird
 WDEOF
