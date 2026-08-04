@@ -29,7 +29,13 @@ interface AsnStat { asn: string; org: string; country: string; countryCode: stri
 interface AsnStats { updatedAt: string; totalPrefixes: number; top: AsnStat[]; }
 interface AsnStatus { ipsetRestore: string; whitelistWatcher: string; totalPrefixes: number; lastUpdate: string; installed?: boolean; }
 interface WhitelistEntry { value: string; comment: string; type: "cidr" | "domain"; }
-interface TorBlockStatus { enabled: boolean; installed?: boolean; count: number; lastUpdate: string; }
+interface TorFleetStatus {
+  count: number;
+  fetchedAt: string | null;
+  lastError: string | null;
+  removedCount: number;
+  push: Array<{ vpsId: string; vpsName: string; success: boolean; data?: any; error?: string }>;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -687,43 +693,29 @@ function TabLog({ vpsId }: { vpsId: string }) {
 function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: boolean }) {
   const { toast } = useToast();
 
-  const { data: bulkResults, isLoading, refetch } = useQuery<BulkResult[]>({
-    queryKey: ["tor-block-status", onlineVps.map(v => v.id).join(",")],
-    queryFn: async () => {
-      const r = await apiRequest("POST", "/api/vps/bulk/get", {
-        vpsIds: onlineVps.map(v => v.id),
-        path: "/api/tor-block/status",
-      });
-      return r.json();
-    },
-    enabled: onlineVps.length > 0,
+  const { data: status, isLoading, refetch } = useQuery<TorFleetStatus>({
+    queryKey: ["tor-block-fleet-status"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/fleet/tor-block/status"); return r.json(); },
     refetchInterval: 120000,
   });
 
   const refreshMutation = useMutation({
-    mutationFn: async () => {
-      const r = await apiRequest("POST", "/api/vps/bulk/post", {
-        vpsIds: onlineVps.map(v => v.id),
-        path: "/api/tor-block/refresh",
-        body: {},
-      });
-      return r.json();
-    },
-    onSuccess: (data: BulkResult[]) => {
+    mutationFn: async () => { const r = await apiRequest("POST", "/api/fleet/tor-block/refresh", {}); return r.json(); },
+    onSuccess: (data: any) => {
       refetch();
-      const ok = data.filter(r => r.success).length;
-      toast({ title: "Refresh Tor Block avviato", description: `${ok}/${data.length} VPS aggiornati` });
+      if (!data.ok) {
+        toast({ title: "Refresh fallito", description: data.error, variant: "destructive" });
+        return;
+      }
+      const ok = (data.push || []).filter((r: any) => r.success).length;
+      toast({ title: "Lista Tor aggiornata", description: `${data.count} IP, push ok su ${ok}/${(data.push || []).length} VPS` });
     },
     onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
   });
 
-  const rows = onlineVps.map(vps => {
-    const result = (bulkResults || []).find(r => r.vpsId === vps.id);
-    const status: TorBlockStatus | undefined = result && result.success ? result.data : undefined;
-    return { vps, result, status };
-  });
-
-  const activeCount = rows.filter(r => r.status && r.status.enabled).length;
+  const pushRows = (status?.push || []).slice().sort((a, b) => Number(a.success) - Number(b.success));
+  const okCount = pushRows.filter(r => r.success).length;
+  const ageMin = status?.fetchedAt ? Math.round((Date.now() - new Date(status.fetchedAt).getTime()) / 60000) : null;
 
   return (
     <div className="space-y-4">
@@ -733,7 +725,7 @@ function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: bool
             <div>
               <CardTitle>Tor Exit-Node Block</CardTitle>
               <CardDescription>
-                Blocco IP dei nodi Tor exit (sorgente: check.torproject.org, refresh orario automatico) — {activeCount}/{onlineVps.length} VPS con timer attivo
+                Lista scaricata e filtrata dalla dashboard (sorgente: check.torproject.org), poi distribuita alla fleet — {okCount}/{pushRows.length} VPS sincronizzati
               </CardDescription>
             </div>
             <div className="flex gap-2">
@@ -741,43 +733,68 @@ function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: bool
                 <RefreshCw className="w-4 h-4 mr-1" />Aggiorna stato
               </Button>
               <Button size="sm" onClick={() => refreshMutation.mutate()} disabled={!canWrite || refreshMutation.isPending}>
-                <Play className="w-4 h-4 mr-1" />{refreshMutation.isPending ? "Avvio..." : "Forza refresh ora"}
+                <Play className="w-4 h-4 mr-1" />{refreshMutation.isPending ? "In corso..." : "Forza refresh ora"}
               </Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="border rounded-md p-3">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">IP in lista</p>
+              <p className="text-xl font-mono">{status ? status.count : "—"}</p>
+            </div>
+            <div className="border rounded-md p-3">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Età lista</p>
+              <p className="text-xl font-mono">{ageMin === null ? "mai" : `${ageMin} min`}</p>
+            </div>
+            <div className="border rounded-md p-3">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">VPS sincronizzati</p>
+              <p className="text-xl font-mono">{okCount}/{pushRows.length}</p>
+            </div>
+            <div className="border rounded-md p-3">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Rimossi dal guard</p>
+              <p className="text-xl font-mono">{status ? status.removedCount : "—"}</p>
+            </div>
+          </div>
+
+          {status?.lastError && (
+            <div className="border border-yellow-500/40 rounded-md p-3 text-sm text-yellow-600">
+              Ultimo refresh non applicato: {status.lastError} — resta in uso l'ultima lista valida.
+            </div>
+          )}
+
           {isLoading ? <LoadingState message="Caricamento stato Tor Block..." /> : (
             <div className="border rounded-md">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>VPS</TableHead>
-                    <TableHead>Timer</TableHead>
-                    <TableHead>IP in blocco</TableHead>
-                    <TableHead>Ultimo aggiornamento</TableHead>
+                    <TableHead>Stato</TableHead>
+                    <TableHead>Regole</TableHead>
+                    <TableHead>Dettaglio</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.length === 0 ? (
-                    <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">Nessun VPS online</TableCell></TableRow>
-                  ) : rows.map(({ vps, result, status }) => (
-                    <TableRow key={vps.id}>
-                      <TableCell className="font-medium">{vps.name}</TableCell>
+                  {pushRows.length === 0 ? (
+                    <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">Nessun push ancora eseguito</TableCell></TableRow>
+                  ) : pushRows.map(r => (
+                    <TableRow key={r.vpsId}>
+                      <TableCell className="font-medium">{r.vpsName}</TableCell>
                       <TableCell>
-                        {!result || !result.success ? (
-                          <Badge variant="outline" className="text-xs border-red-500/40 text-red-500">Errore</Badge>
-                        ) : status && status.installed === false ? (
-                          <Badge variant="outline" className="text-xs border-muted-foreground/40 text-muted-foreground">Non installato</Badge>
-                        ) : status && status.enabled ? (
-                          <Badge variant="outline" className="text-xs border-green-600/40 text-green-600">Attivo</Badge>
+                        {r.success && r.data && r.data.ok ? (
+                          <Badge variant="outline" className="text-xs border-green-600/40 text-green-600">Sincronizzato</Badge>
+                        ) : r.data && r.data.refused ? (
+                          <Badge variant="outline" className="text-xs border-yellow-500/40 text-yellow-600">Rifiutato</Badge>
                         ) : (
-                          <Badge variant="outline" className="text-xs border-yellow-500/40 text-yellow-600">Inattivo</Badge>
+                          <Badge variant="outline" className="text-xs border-red-500/40 text-red-500">Errore</Badge>
                         )}
                       </TableCell>
-                      <TableCell className="font-mono text-sm">{status ? status.count : "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {status && status.lastUpdate ? new Date(status.lastUpdate).toLocaleString("it-IT") : "mai"}
+                      <TableCell className="font-mono text-xs">
+                        {r.data && r.data.rulesChanged ? "aggiornate" : r.success && r.data && r.data.ok ? "ok" : "—"}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground max-w-md truncate">
+                        {r.error || (r.data && r.data.reason) || ""}
                       </TableCell>
                     </TableRow>
                   ))}
