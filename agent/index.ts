@@ -4,6 +4,7 @@ import { promisify } from "util";
 import { readFile, writeFile, appendFile, access, readdir, unlink } from "fs/promises";
 import { constants, existsSync, statSync } from "fs";
 import path from "path";
+import { parseInputChain, findGenericEstablished, findTorRules, planTorRules } from "./iptables-input";
 
 const execAsync = promisify(exec);
 const CMD_MAX_BUFFER = 16 * 1024 * 1024;
@@ -613,6 +614,44 @@ app.delete("/api/iptables/:chain/:linenum", async (req, res) => {
   if (!/^\d+$/.test(linenum)) return res.status(400).json({ error: "Numero riga non valido" });
   const result = await runCmd(`sudo iptables -D ${chain} ${linenum}`);
   res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+// Ri-asserisce la regola ACCEPT RELATED,ESTABLISHED generica in cima alla chain INPUT.
+// Rilevazione 2026-08-04: persa a runtime su 39 VPS su 52 (causa non identificata), pur
+// essendo salvata correttamente in /etc/iptables/rules.v4 su 52/52. Senza di lei il
+// SYN-ACK di ritorno delle connessioni in uscita viene droppato da blocked_asn
+// (138K-203K entry) — curl/apt/cscli verso host su cloud provider bloccati vanno in timeout.
+async function ensureEstablishedRule(): Promise<{ changed: boolean; position: number | null; error?: string }> {
+  var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
+  if (!listed.ok) return { changed: false, position: null, error: listed.stderr };
+
+  var existing = findGenericEstablished(parseInputChain(listed.stdout));
+  if (existing !== null) return { changed: false, position: existing };
+
+  var ins = await runCmd("sudo iptables -I INPUT 1 -m state --state RELATED,ESTABLISHED -j ACCEPT");
+  if (!ins.ok) return { changed: false, position: null, error: ins.stderr };
+
+  var check = await runCmd("sudo iptables -C INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT");
+  if (!check.ok) return { changed: false, position: null, error: "regola inserita ma -C non la trova" };
+
+  var relisted = await runCmd("sudo iptables -nvL INPUT --line-numbers");
+  var pos = relisted.ok ? findGenericEstablished(parseInputChain(relisted.stdout)) : null;
+  return { changed: true, position: pos };
+}
+
+app.post("/api/firewall/ensure-established", async (_req, res) => {
+  try {
+    var result = await ensureEstablishedRule();
+    if (result.error) return res.status(500).json({ ok: false, error: result.error });
+    if (result.changed) {
+      // Persiste solo se abbiamo davvero modificato la chain.
+      var saved = await runCmd("sudo iptables-save");
+      if (saved.ok) await sudoWriteFile("/etc/iptables/rules.v4", saved.stdout + "\n");
+    }
+    res.json({ ok: true, changed: result.changed, position: result.position });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.post("/api/iptables/:chain/rule", async (req, res) => {

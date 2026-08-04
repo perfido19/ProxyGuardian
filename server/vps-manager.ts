@@ -304,6 +304,47 @@ export function startBanSyncPoller(intervalMs = 300000): void {
   }, 30000);
 }
 
+export interface EstablishedSyncResult {
+  checked: number;
+  fixed: number;
+  errors: number;
+  details: Array<{ vpsId: string; vpsName: string; changed: boolean; position: number | null; error?: string }>;
+}
+
+// Ri-asserisce su tutta la fleet la regola ACCEPT RELATED,ESTABLISHED generica.
+// Non e' un fix una tantum: la regola viene rimossa a runtime da causa non identificata
+// (39 VPS su 52 la avevano persa il 2026-08-04 pur avendola salvata in rules.v4).
+export async function ensureEstablishedFleet(): Promise<EstablishedSyncResult> {
+  const enabled = Array.from(vpsStore.values()).filter(v => v.enabled && v.lastStatus !== "offline");
+  const details: EstablishedSyncResult["details"] = [];
+  let fixed = 0;
+  let errors = 0;
+
+  await Promise.allSettled(enabled.map(async vps => {
+    try {
+      const r = await agentPost(vps, "/api/firewall/ensure-established", {}, 20000);
+      if (r && r.changed) fixed++;
+      details.push({ vpsId: vps.id, vpsName: vps.name, changed: !!(r && r.changed), position: r ? r.position : null });
+    } catch (e: any) {
+      errors++;
+      details.push({ vpsId: vps.id, vpsName: vps.name, changed: false, position: null, error: e.message });
+    }
+  }));
+
+  return { checked: enabled.length, fixed, errors, details };
+}
+
+export function startEstablishedPoller(intervalMs = 3600000): void {
+  const run = () => ensureEstablishedFleet()
+    .then(r => {
+      if (r.fixed > 0 || r.errors > 0) {
+        console.log(`[Established] controllati ${r.checked}, ripristinati ${r.fixed}, errori ${r.errors}`);
+      }
+    })
+    .catch(e => console.error("[Established] error:", e));
+  setTimeout(() => { run(); setInterval(run, intervalMs); }, 45000);
+}
+
 export interface BulkResult {
   vpsId: string; vpsName: string; success: boolean; data?: any; error?: string;
 }
