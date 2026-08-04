@@ -75,13 +75,33 @@ async function runCmd(cmd: string, timeout = 10000): Promise<{ stdout: string; s
   }
 }
 
+// `-n` (non-interactive) e' obbligatorio: senza, se manca la voce NOPASSWD nei
+// sudoers `sudo tee` si mette in attesa di una password che nessuno digitera' mai
+// e il processo resta appeso per sempre, lasciando l'handler HTTP senza risposta.
+// Con `-n` fallisce subito e l'errore diventa visibile. Timeout come rete di sicurezza.
 function sudoWriteFile(filePath: string, content: string): Promise<void> {
   return new Promise<void>(function(resolve, reject) {
-    var child = require("child_process").spawn("sudo", ["tee", filePath], { stdio: ["pipe", "ignore", "ignore"] });
-    child.on("error", reject);
-    child.on("close", function(code: number) {
-      if (code === 0) resolve(); else reject(new Error("tee exit " + code + " for " + filePath));
+    var child = require("child_process").spawn("sudo", ["-n", "tee", filePath], { stdio: ["pipe", "ignore", "pipe"] });
+    var err = "";
+    var done = false;
+    var timer = setTimeout(function() {
+      if (done) return;
+      done = true;
+      try { child.kill("SIGKILL"); } catch (e) { /* gia' terminato */ }
+      reject(new Error("timeout scrittura " + filePath + " (sudoers mancante?)"));
+    }, 60000);
+    child.stderr.on("data", function(d: Buffer) { err += d.toString(); });
+    child.on("error", function(e: Error) {
+      if (done) return;
+      done = true; clearTimeout(timer); reject(e);
     });
+    child.on("close", function(code: number) {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error("tee exit " + code + " for " + filePath + (err ? ": " + err.trim() : "")));
+    });
+    child.stdin.on("error", function() { /* pipe chiusa da sudo che rifiuta: gestito da close */ });
     child.stdin.write(content, "utf-8");
     child.stdin.end();
   });
@@ -904,6 +924,9 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  // Mancava in SUDOERS_CONTENT: presente solo su alcuni VPS per un fix manuale
+  // vecchio. Senza, la persistenza degli ipset fallisce (Tor block, anti-iptv).
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/ipset.conf",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",

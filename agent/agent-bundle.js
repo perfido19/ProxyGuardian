@@ -24703,11 +24703,35 @@ async function runCmd(cmd, timeout = 1e4) {
 }
 function sudoWriteFile(filePath, content) {
   return new Promise(function(resolve, reject) {
-    var child = require("child_process").spawn("sudo", ["tee", filePath], { stdio: ["pipe", "ignore", "ignore"] });
-    child.on("error", reject);
+    var child = require("child_process").spawn("sudo", ["-n", "tee", filePath], { stdio: ["pipe", "ignore", "pipe"] });
+    var err = "";
+    var done = false;
+    var timer = setTimeout(function() {
+      if (done) return;
+      done = true;
+      try {
+        child.kill("SIGKILL");
+      } catch (e) {
+      }
+      reject(new Error("timeout scrittura " + filePath + " (sudoers mancante?)"));
+    }, 6e4);
+    child.stderr.on("data", function(d) {
+      err += d.toString();
+    });
+    child.on("error", function(e) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      reject(e);
+    });
     child.on("close", function(code) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
       if (code === 0) resolve();
-      else reject(new Error("tee exit " + code + " for " + filePath));
+      else reject(new Error("tee exit " + code + " for " + filePath + (err ? ": " + err.trim() : "")));
+    });
+    child.stdin.on("error", function() {
     });
     child.stdin.write(content, "utf-8");
     child.stdin.end();
@@ -25410,6 +25434,9 @@ var SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  // Mancava in SUDOERS_CONTENT: presente solo su alcuni VPS per un fix manuale
+  // vecchio. Senza, la persistenza degli ipset fallisce (Tor block, anti-iptv).
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/ipset.conf",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
