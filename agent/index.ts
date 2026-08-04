@@ -1044,6 +1044,13 @@ const LOGROTATE_CONF = [
   "    postrotate",
   "        [ -f /var/run/nginx.pid ] && kill -USR1 $(cat /var/run/nginx.pid) 2>/dev/null || true",
   "    endscript",
+  // xtreamcodes crea una directory /opt/log/YYYYMMDD al giorno e non la ruota mai:
+  // su un disco da 9.6GB erano arrivate a 1.1GB (88 directory da gennaio a marzo).
+  // logrotate non gestisce directory, quindi la potatura va fatta qui.
+  // Il filtro `-type d -name 20*` non tocca modsec_audit.log, che nginx tiene aperto.
+  "    lastaction",
+  "        find /opt/log -maxdepth 1 -type d -name '20*' -mtime +30 -exec rm -rf {} + 2>/dev/null || true",
+  "    endscript",
   "}",
   "",
   "/var/log/fail2ban.log {",
