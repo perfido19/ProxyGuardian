@@ -138,6 +138,10 @@ ProxyGuardian/
 - **nginx rate limiting fleet**: zona `auth_slow` (`25r/m`, chiave `$auth_key`) nell'`http {}` block + `limit_req zone=auth_slow burst=10 nodelay` nel location `player_api.php|get.php|xmltv.php` su tutti i 53 VPS. Chiave `$auth_key` è vuota per richieste EPG (`get_short_epg`, `get_simple_data_table`) → escluse dal rate limit. Zona esistente `login_api` (1r/s) rimane. Verificato e deployato 2026-07-01.
 - **NetBird P2P fleet (2026-06-28)**: tutti i 53 VPS aggiornati con `iptables -I INPUT 1 -p udp --dport 51820 -j ACCEPT` + `iptables-save > /etc/iptables/rules.v4`. Senza questa regola il WireGuard handshake in ingresso veniva droppato dal DROP finale e NetBird cadeva su relay (latenza 390ms+). Con il fix: 56/56 peer P2P diretti (0 relay). **Critico: la regola deve essere a posizione 1 (prima del DROP); se inserita con `-A` finisce dopo il DROP ed è inutile. Il dashboard VPS stesso (185.229.236.50) deve avere la regola — fix applicato 2026-06-28. Ogni nuovo VPS deployato deve riceverla.**
 - **CrowdSec bouncer reboot fix (2026-06-28)**: dropin `/etc/systemd/system/crowdsec-firewall-bouncer.service.d/wait-lapi.conf` su Secucam, PROJECT.GA, DynamoXc. Aspetta max 150s che la LAPI (100.116.132.180:8080) sia raggiungibile via NetBird prima di avviare il bouncer. Senza questo, al reboot il bouncer parte senza bans perché NetBird non ha ancora stabilito il tunnel.
+- **Tor Exit Block (centralizzato dal 2026-08-04)**: la lista viene scaricata, validata e filtrata dalla **dashboard** (poller orario in `server/tor-block.ts`, stato in `data/tor-exit-list.json`), poi distribuita con `POST /api/tor-block/apply`. Sui VPS niente script/timer/fetch: solo ipset `tor_exit` + 2 regole. Le regole vanno **subito sotto la ACCEPT RELATED,ESTABLISHED generica** e **sopra `ACCEPT dpt:8880`** — mai `-A` (finirebbe sotto l'accept della porta proxy e non bloccherebbe nulla). Guard centrale rimuove sempre mesh NetBird/dashboard/main backend dalla lista.
+- **Parsing chain iptables**: usare sempre `iptables -nvL`, mai `-nL`. `-nL` non stampa la colonna interfaccia, quindi una regola `-i wt0` (autogestita da NetBird) e' indistinguibile da una generica e porta a conclusioni sbagliate.
+- **Regola ESTABLISHED generica**: era persa a runtime su 39/52 VPS il 2026-08-04 pur essendo in `rules.v4` (causa non identificata). `startEstablishedPoller` la ri-asserisce ogni ora. Senza, il SYN-ACK di ritorno viene droppato da `blocked_asn` → curl/apt/cscli in timeout verso host su ASN bloccati.
+- **`sudo sh -c` non funziona per pgagent** (nessun `/bin/sh` nei sudoers): per scrivere file da root usare `runCmd("sudo <cmd>")` + `sudoWriteFile()` che usa `sudo tee`.
 - **VPS 9.6GB disk (gruppo "rob" e alcuni "merc")**: disco si riempie per journal (`/var/log/journal`) e log xtreamcodes (`/opt/log/YYYYMMDD`). Pulizia periodica: `journalctl --vacuum-size=80M` e `find /opt/log -maxdepth 1 -type d -name "2026*" -mtime +30 -exec rm -rf {} +`.
 
 ## Endpoint Agent — Riferimento Rapido
@@ -164,6 +168,9 @@ ProxyGuardian/
 | POST | `/api/netbird/update` | Aggiorna NetBird all'ultima versione |
 | GET | `/api/ipset/:name` | Membri ipset (default limit, per blocked_asn grandi) |
 | POST | `/api/ipset/:name/add` | Aggiunge IP a ipset (usato da BanSync per iptv_ban) |
+| POST | `/api/tor-block/apply` | Applica la lista Tor ricevuta dalla dashboard (ipset swap + regole iptables) |
+| GET | `/api/tor-block/status` | Conteggio ipset, posizione regole, pacchetti droppati |
+| POST | `/api/firewall/ensure-established` | Ri-asserisce la regola ACCEPT RELATED,ESTABLISHED generica |
 
 ## Do NOT
 - Non committare `.env` o `data/vps.json`
