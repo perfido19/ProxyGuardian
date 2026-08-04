@@ -127,6 +127,11 @@ export const SLOW_PATHS = [
   "/api/system/antibrute-stats",
   "/api/crowdsec/install",
   "/api/crowdsec/metrics",
+  // L'apply Tor fa restore di ~1400 IP, swap, operazioni iptables e un `ipset save`
+  // che dumpa TUTTI i set (blocked_asn ha 138K-203K entry, output di svariati MB).
+  // Con i 5s di default l'agent completa il lavoro ma il fetch viene abortito prima
+  // della risposta, e il push risulta "fetch failed" pur essendo andato a buon fine.
+  "/api/tor-block/apply",
 ];
 
 async function agentFetch(vps: VpsConfig, path: string, options: RequestInit = {}, timeout = REQUEST_TIMEOUT): Promise<Response> {
