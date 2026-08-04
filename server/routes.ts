@@ -739,6 +739,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const results = await bulkGet("all", "/api/tor-block/status");
     const reachable = results.filter(r => r.success && r.data);
     const perVps = reachable.map(r => ({
+      vpsId: r.vpsId,
       vpsName: r.vpsName,
       ipsetCount: r.data.count || 0,
       rulesInstalled: !!r.data.rulesInstalled,

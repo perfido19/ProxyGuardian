@@ -37,6 +37,32 @@ interface TorFleetStatus {
   push: Array<{ vpsId: string; vpsName: string; success: boolean; data?: any; error?: string }>;
 }
 
+interface TorEnforcementVps {
+  vpsId: string;
+  vpsName: string;
+  ipsetCount: number;
+  rulesInstalled: boolean;
+  dropPackets: number;
+  logPosition: number | null;
+  dropPosition: number | null;
+}
+
+interface TorEnforcement {
+  vpsTotal: number;
+  vpsReachable: number;
+  vpsWithRules: number;
+  vpsWithDrops: number;
+  totalDropPackets: number;
+  unreachable: string[];
+  perVps: TorEnforcementVps[];
+}
+
+function fmtCount(n: number): string {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return String(n);
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function parseAsnConfig(content: string): AsnEntry[] {
@@ -699,10 +725,20 @@ function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: bool
     refetchInterval: 120000,
   });
 
+  // Interroga tutti i 54 agent: piu' pesante dello status, quindi intervallo piu'
+  // lungo. E' la metrica che dice se il blocco sta davvero agendo o se le regole
+  // sono installate ma mai raggiunte dal traffico.
+  const { data: enforcement, isFetching: enfFetching, refetch: refetchEnf } = useQuery<TorEnforcement>({
+    queryKey: ["tor-block-enforcement"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/fleet/tor-block/enforcement"); return r.json(); },
+    refetchInterval: 300000,
+  });
+
   const refreshMutation = useMutation({
     mutationFn: async () => { const r = await apiRequest("POST", "/api/fleet/tor-block/refresh", {}); return r.json(); },
     onSuccess: (data: any) => {
       refetch();
+      refetchEnf();
       if (!data.ok) {
         toast({ title: "Refresh fallito", description: data.error, variant: "destructive" });
         return;
@@ -717,6 +753,19 @@ function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: bool
   const okCount = pushRows.filter(r => r.success).length;
   const ageMin = status?.fetchedAt ? Math.round((Date.now() - new Date(status.fetchedAt).getTime()) / 60000) : null;
 
+  const enfById = new Map((enforcement?.perVps || []).map(v => [v.vpsId, v]));
+  // Le righe vengono dall'enforcement quando disponibile (stato reale letto dagli
+  // agent); il push serve solo a spiegare i casi rifiutati o in errore.
+  const pushById = new Map(pushRows.map(r => [r.vpsId, r]));
+  const rows = (enforcement?.perVps || []).map(e => ({ enf: e, push: pushById.get(e.vpsId) }))
+    .concat(pushRows.filter(r => !enfById.has(r.vpsId)).map(r => ({ enf: undefined as any, push: r })))
+    .sort((a, b) => {
+      const aBad = a.enf && a.enf.rulesInstalled ? 1 : 0;
+      const bBad = b.enf && b.enf.rulesInstalled ? 1 : 0;
+      if (aBad !== bBad) return aBad - bBad;
+      return (b.enf?.dropPackets || 0) - (a.enf?.dropPackets || 0);
+    });
+
   return (
     <div className="space-y-4">
       <Card>
@@ -729,8 +778,8 @@ function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: bool
               </CardDescription>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
-                <RefreshCw className="w-4 h-4 mr-1" />Aggiorna stato
+              <Button variant="outline" size="sm" onClick={() => { refetch(); refetchEnf(); }} disabled={isLoading || enfFetching}>
+                <RefreshCw className={`w-4 h-4 mr-1 ${enfFetching ? "animate-spin" : ""}`} />Aggiorna stato
               </Button>
               <Button size="sm" onClick={() => refreshMutation.mutate()} disabled={!canWrite || refreshMutation.isPending}>
                 <Play className="w-4 h-4 mr-1" />{refreshMutation.isPending ? "In corso..." : "Forza refresh ora"}
@@ -739,7 +788,7 @@ function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: bool
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <div className="border rounded-md p-3">
               <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">IP in lista</p>
               <p className="text-xl font-mono">{status ? status.count : "—"}</p>
@@ -753,10 +802,32 @@ function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: bool
               <p className="text-xl font-mono">{okCount}/{pushRows.length}</p>
             </div>
             <div className="border rounded-md p-3">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Pacchetti droppati</p>
+              <p className={`text-xl font-mono ${enforcement && enforcement.totalDropPackets > 0 ? "text-green-600" : ""}`}>
+                {enforcement ? fmtCount(enforcement.totalDropPackets) : "—"}
+              </p>
+            </div>
+            <div className="border rounded-md p-3">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">VPS che bloccano</p>
+              <p className="text-xl font-mono">{enforcement ? `${enforcement.vpsWithDrops}/${enforcement.vpsWithRules}` : "—"}</p>
+            </div>
+            <div className="border rounded-md p-3">
               <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Rimossi dal guard</p>
               <p className="text-xl font-mono">{status ? status.removedCount : "—"}</p>
             </div>
           </div>
+
+          {enforcement && enforcement.vpsWithRules > 0 && enforcement.totalDropPackets === 0 && (
+            <div className="border border-yellow-500/40 rounded-md p-3 text-sm text-yellow-600">
+              Regole installate su {enforcement.vpsWithRules} VPS ma nessun pacchetto ancora droppato. Subito dopo un deploy è normale; se resta a zero per giorni, il traffico Tor potrebbe non raggiungere la regola.
+            </div>
+          )}
+
+          {enforcement && enforcement.unreachable.length > 0 && (
+            <div className="border border-red-500/40 rounded-md p-3 text-sm text-red-500">
+              Non raggiungibili: {enforcement.unreachable.join(", ")}
+            </div>
+          )}
 
           {status?.lastError && (
             <div className="border border-yellow-500/40 rounded-md p-3 text-sm text-yellow-600">
@@ -771,33 +842,46 @@ function TabTorBlock({ onlineVps, canWrite }: { onlineVps: any[]; canWrite: bool
                   <TableRow>
                     <TableHead>VPS</TableHead>
                     <TableHead>Stato</TableHead>
-                    <TableHead>Regole</TableHead>
+                    <TableHead className="text-right">IP in ipset</TableHead>
+                    <TableHead className="text-right">Pacchetti droppati</TableHead>
+                    <TableHead>Posizione regole</TableHead>
                     <TableHead>Dettaglio</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pushRows.length === 0 ? (
-                    <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">Nessun push ancora eseguito</TableCell></TableRow>
-                  ) : pushRows.map(r => (
-                    <TableRow key={r.vpsId}>
-                      <TableCell className="font-medium">{r.vpsName}</TableCell>
-                      <TableCell>
-                        {r.success && r.data && r.data.ok ? (
-                          <Badge variant="outline" className="text-xs border-green-600/40 text-green-600">Sincronizzato</Badge>
-                        ) : r.data && r.data.refused ? (
-                          <Badge variant="outline" className="text-xs border-yellow-500/40 text-yellow-600">Rifiutato</Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-xs border-red-500/40 text-red-500">Errore</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {r.data && r.data.rulesChanged ? "aggiornate" : r.success && r.data && r.data.ok ? "ok" : "—"}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground max-w-md truncate">
-                        {r.error || (r.data && r.data.reason) || ""}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {rows.length === 0 ? (
+                    <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Nessun dato ancora disponibile</TableCell></TableRow>
+                  ) : rows.map(({ enf, push }) => {
+                    const key = enf ? enf.vpsId : push!.vpsId;
+                    const name = enf ? enf.vpsName : push!.vpsName;
+                    const refused = push && push.data && push.data.refused;
+                    return (
+                      <TableRow key={key}>
+                        <TableCell className="font-medium">{name}</TableCell>
+                        <TableCell>
+                          {enf && enf.rulesInstalled ? (
+                            <Badge variant="outline" className="text-xs border-green-600/40 text-green-600">Attivo</Badge>
+                          ) : refused ? (
+                            <Badge variant="outline" className="text-xs border-yellow-500/40 text-yellow-600">Rifiutato</Badge>
+                          ) : enf ? (
+                            <Badge variant="outline" className="text-xs border-yellow-500/40 text-yellow-600">Senza regole</Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-xs border-red-500/40 text-red-500">Irraggiungibile</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-sm">{enf ? enf.ipsetCount : "—"}</TableCell>
+                        <TableCell className={`text-right font-mono text-sm ${enf && enf.dropPackets > 0 ? "text-green-600" : "text-muted-foreground"}`}>
+                          {enf ? fmtCount(enf.dropPackets) : "—"}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">
+                          {enf && enf.logPosition !== null && enf.dropPosition !== null ? `LOG ${enf.logPosition} · DROP ${enf.dropPosition}` : "—"}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground max-w-xs truncate">
+                          {(push && (push.error || (push.data && push.data.reason))) || ""}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
