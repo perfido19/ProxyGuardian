@@ -10,6 +10,7 @@ import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, removeVpsFromAllUsers, type UserRole } from "./auth";
 import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller } from "./vps-manager";
+import { refreshTorList, getTorListState, pushTorListToFleet, getLastPush, startTorBlockPoller } from "./tor-block";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -739,6 +740,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/fleet/firewall/ensure-established", requireAuth, requireOperator, async (_req, res) => {
     const result = await ensureEstablishedFleet();
     res.json(result);
+  });
+
+  // Tor exit block: la lista vive sulla dashboard (eta', conteggio, esito ultimo
+  // push), quindi non e' interrogabile via /api/vps/bulk/get come fa il tab ASN.
+  app.get("/api/fleet/tor-block/status", requireAuth, (_req, res) => {
+    const s = getTorListState();
+    res.json({
+      count: s.count,
+      fetchedAt: s.fetchedAt,
+      lastError: s.lastError,
+      removedCount: s.removedCount,
+      push: getLastPush(),
+    });
+  });
+
+  // `vpsIds` opzionale: se presente limita il push a quei VPS (rollout canary).
+  app.post("/api/fleet/tor-block/refresh", requireAuth, requireOperator, async (req, res) => {
+    const s = await refreshTorList();
+    if (s.lastError && s.count === 0) {
+      return res.json({ ok: false, error: s.lastError, count: 0, push: [] });
+    }
+    const ids = Array.isArray(req.body && req.body.vpsIds) && req.body.vpsIds.length > 0 ? req.body.vpsIds : "all";
+    const push = await pushTorListToFleet(ids);
+    res.json({ ok: true, count: s.count, fetchedAt: s.fetchedAt, lastError: s.lastError, push });
   });
 
   app.get("/api/fleet/asn/blocklist", requireAuth, (_req, res) => {
@@ -2946,6 +2971,7 @@ fi
   startHealthPoller(30000);
   startBanSyncPoller(60000);
   startEstablishedPoller(3600000);
+  startTorBlockPoller(3600000);
 
   const server = createServer(app);
   attachSshWebSocket(server);
