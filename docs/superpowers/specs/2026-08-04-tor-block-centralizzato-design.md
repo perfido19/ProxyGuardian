@@ -76,6 +76,13 @@ Validazione (logica trasferita da `scripts/tor-to-ipset.py`, che viene eliminato
 
 Persistenza in `data/tor-exit-list.json` (stesso pattern di `data/vps.json`, non committato): un riavvio della dashboard non perde l'ultima lista buona né forza un re-fetch immediato.
 
+**Route HTTP** (`server/routes.ts`):
+
+- `GET /api/fleet/tor-block/status` — età lista, conteggio IP, esito ultimo push per-VPS
+- `POST /api/fleet/tor-block/refresh` — forza fetch + push (admin/operator)
+
+Il piano del 2026-07-31 osservava che la UI ASN Block usa gli endpoint generici `POST /api/vps/bulk/get` e `/bulk/post` invece di route fleet dedicate. Quella convenzione qui **non è applicabile**: nel modello centralizzato lo stato principale (età della lista, conteggio, esito dell'ultimo ciclo di push) vive sulla dashboard, non sugli agent, quindi non è interrogabile via bulk. Le due route sopra sono il minimo necessario, non route di comodo.
+
 ### 2. Guard anti-autoblocco
 
 Applicato **centralmente prima di ogni push**. Rimuove dalla lista, sempre, a prescindere da cosa dice l'upstream:
