@@ -1369,7 +1369,6 @@ const ASN_CACHE_TTL = 5 * 60 * 1000;
 
 const ASN_AGENT_USER = process.env.USER || "pgagent";
 
-const TOR_UPDATE_SCRIPT = "/usr/local/bin/update-tor-block.sh";
 
 function spawnAsnUpdate() {
   var child = spawn("sudo", ["env", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "bash", ASN_UPDATE_SCRIPT], { detached: true, stdio: "ignore" });
@@ -1591,33 +1590,187 @@ app.get("/api/asn/log", async (_req, res) => {
 });
 
 // ─── Tor exit-node block ──────────────────────────────────────────────────────
+//
+// La lista e' costruita e validata dalla dashboard e arriva gia' filtrata: qui si
+// fa solo enforcement. Nessuno script, nessun timer, nessun fetch verso l'esterno.
+
+const TOR_SET = "tor_exit";
+const TOR_SET_TMP = "tor_exit_new";
+const TOR_LOG_SPEC = '-m set --match-set ' + TOR_SET + ' src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[TOR-BLOCK] " --log-level 4';
+const TOR_DROP_SPEC = "-m set --match-set " + TOR_SET + " src -j DROP";
+
+var torLastApply: string = "";
+
+function ipsetRestore(input: string): Promise<void> {
+  return new Promise<void>(function(resolve, reject) {
+    var child = require("child_process").spawn("sudo", ["ipset", "restore", "-exist"], { stdio: ["pipe", "ignore", "pipe"] });
+    var err = "";
+    child.stderr.on("data", function(d: Buffer) { err += d.toString(); });
+    child.on("error", reject);
+    child.on("close", function(code: number) {
+      if (code === 0) resolve(); else reject(new Error("ipset restore exit " + code + ": " + err));
+    });
+    child.stdin.write(input, "utf-8");
+    child.stdin.end();
+  });
+}
+
+// Elimina tutte le occorrenze di una regola (la fleet mostra regole duplicate:
+// qualcosa reinserisce senza verificare, quindi non basta cancellarne una).
+async function deleteAllMatching(spec: string): Promise<void> {
+  for (var i = 0; i < 10; i++) {
+    var check = await runCmd("sudo iptables -C INPUT " + spec + " 2>/dev/null");
+    if (!check.ok) return;
+    var del = await runCmd("sudo iptables -D INPUT " + spec);
+    if (!del.ok) return;
+  }
+}
+
+app.post("/api/tor-block/apply", async (req, res) => {
+  var ips = req.body && req.body.ips;
+  if (!Array.isArray(ips)) return res.status(400).json({ ok: false, error: "campo 'ips' mancante o non array" });
+  if (ips.length === 0) return res.status(400).json({ ok: false, error: "lista vuota: rifiutata per non svuotare l'ipset" });
+
+  var steps: Array<{ step: string; ok: boolean; detail?: string }> = [];
+  function addStep(label: string, ok: boolean, detail?: string) {
+    steps.push({ step: label, ok: ok, detail: detail });
+  }
+
+  try {
+    // 1. L'ipset deve esistere PRIMA delle regole: una regola --match-set verso un
+    //    set inesistente non e' inseribile.
+    var created = await runCmd("sudo ipset create " + TOR_SET + " hash:ip family inet maxelem 65536 -exist");
+    addStep("ipset create " + TOR_SET, created.ok, created.ok ? undefined : created.stderr);
+    if (!created.ok) return res.status(500).json({ ok: false, steps: steps });
+
+    // 2. Popola un set temporaneo e fai swap: se qualcosa fallisce a meta',
+    //    resta attivo il set precedente e non si resta mai scoperti.
+    var restoreInput = "create " + TOR_SET_TMP + " hash:ip family inet maxelem 65536 -exist\nflush " + TOR_SET_TMP + "\n";
+    for (var i = 0; i < ips.length; i++) {
+      if (/^\d+\.\d+\.\d+\.\d+$/.test(ips[i])) restoreInput += "add " + TOR_SET_TMP + " " + ips[i] + "\n";
+    }
+    await ipsetRestore(restoreInput);
+    addStep("ipset restore (" + ips.length + " IP)", true);
+
+    var swapped = await runCmd("sudo ipset swap " + TOR_SET_TMP + " " + TOR_SET);
+    addStep("ipset swap", swapped.ok, swapped.ok ? undefined : swapped.stderr);
+    if (!swapped.ok) {
+      await runCmd("sudo ipset destroy " + TOR_SET_TMP);
+      return res.status(500).json({ ok: false, steps: steps });
+    }
+    await runCmd("sudo ipset destroy " + TOR_SET_TMP);
+
+    // 3. Garantisce l'ancora ESTABLISHED prima di pianificare le regole Tor.
+    var est = await ensureEstablishedRule();
+    addStep("ensure ESTABLISHED", !est.error, est.error || ("posizione " + est.position + (est.changed ? " (ripristinata)" : "")));
+
+    // 4. Pianifica sulla catena reale.
+    var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
+    if (!listed.ok) {
+      addStep("lettura chain INPUT", false, listed.stderr);
+      return res.status(500).json({ ok: false, steps: steps });
+    }
+    var plan = planTorRules(parseInputChain(listed.stdout));
+
+    // Rifiuto = HTTP 200 con ok:false, non 4xx. `agentPost` lato dashboard lancia
+    // un'eccezione su qualsiasi non-2xx e perde il body, quindi la UI non potrebbe
+    // distinguere "rifiutato per chain malformata" da "agent irraggiungibile".
+    if (plan.action === "refuse") {
+      addStep("preflight iptables", false, plan.reason);
+      return res.json({ ok: false, refused: true, reason: plan.reason, error: plan.reason, steps: steps, count: ips.length });
+    }
+
+    var rulesChanged = false;
+    if (plan.action === "reposition") {
+      await deleteAllMatching(TOR_LOG_SPEC);
+      await deleteAllMatching(TOR_DROP_SPEC);
+      addStep("rimozione regole Tor mal posizionate", true);
+      rulesChanged = true;
+    }
+
+    if (plan.action === "insert" || plan.action === "reposition") {
+      // Dopo le cancellazioni le posizioni sono cambiate: si rilegge e si ricalcola.
+      var relisted = await runCmd("sudo iptables -nvL INPUT --line-numbers");
+      var freshPlan = planTorRules(parseInputChain(relisted.stdout));
+      if (freshPlan.action === "refuse" || !freshPlan.insertAt) {
+        var why = freshPlan.reason || "ancora non ricalcolabile dopo la rimozione";
+        addStep("preflight iptables (dopo rimozione)", false, why);
+        return res.json({ ok: false, refused: true, reason: why, error: why, steps: steps });
+      }
+      var at = freshPlan.insertAt;
+
+      // Una regola alla volta, con verifica fra un passo e l'altro.
+      // DROP prima, poi LOG nella stessa posizione: il LOG spinge il DROP sotto,
+      // stato finale LOG=at, DROP=at+1.
+      var insDrop = await runCmd("sudo iptables -I INPUT " + at + " " + TOR_DROP_SPEC);
+      addStep("insert DROP in posizione " + at, insDrop.ok, insDrop.ok ? undefined : insDrop.stderr);
+      if (!insDrop.ok) return res.status(500).json({ ok: false, steps: steps });
+      var ckDrop = await runCmd("sudo iptables -C INPUT " + TOR_DROP_SPEC);
+      addStep("verifica DROP", ckDrop.ok);
+      if (!ckDrop.ok) return res.status(500).json({ ok: false, steps: steps });
+
+      var insLog = await runCmd("sudo iptables -I INPUT " + at + " " + TOR_LOG_SPEC);
+      addStep("insert LOG in posizione " + at, insLog.ok, insLog.ok ? undefined : insLog.stderr);
+      if (!insLog.ok) return res.status(500).json({ ok: false, steps: steps });
+      var ckLog = await runCmd("sudo iptables -C INPUT " + TOR_LOG_SPEC);
+      addStep("verifica LOG", ckLog.ok);
+
+      rulesChanged = true;
+    } else {
+      addStep("regole iptables gia' corrette", true, "posizione ancora " + plan.anchor);
+    }
+
+    // 5. Persistenza. MAI `sudo sh -c`: pgagent non ha /bin/sh nei sudoers.
+    var ipsetSaved = await runCmd("sudo ipset save");
+    if (ipsetSaved.ok) {
+      await sudoWriteFile("/etc/ipset.conf", ipsetSaved.stdout + "\n");
+      addStep("persist /etc/ipset.conf", true);
+    } else {
+      addStep("persist /etc/ipset.conf", false, ipsetSaved.stderr);
+    }
+
+    // rules.v4 solo se abbiamo davvero toccato le regole: evita churn orario su 54 VPS.
+    if (rulesChanged) {
+      var iptSaved = await runCmd("sudo iptables-save");
+      if (iptSaved.ok) {
+        await sudoWriteFile("/etc/iptables/rules.v4", iptSaved.stdout + "\n");
+        addStep("persist /etc/iptables/rules.v4", true);
+      } else {
+        addStep("persist /etc/iptables/rules.v4", false, iptSaved.stderr);
+      }
+    }
+
+    torLastApply = new Date().toISOString();
+    res.json({ ok: steps.every(function(s) { return s.ok; }), count: ips.length, rulesChanged: rulesChanged, steps: steps });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message, steps: steps });
+  }
+});
 
 app.get("/api/tor-block/status", async (_req, res) => {
   try {
-    const [timerActive, count, lastMtime] = await Promise.all([
-      runCmd("systemctl is-active tor-block-update.timer 2>/dev/null"),
-      runCmd("sudo ipset list tor_exit 2>/dev/null | grep -cE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' || echo 0"),
-      runCmd("stat -c %Y /var/log/update-tor-block.log 2>/dev/null || echo 0"),
-    ]);
-    const mtimeSec = parseInt(lastMtime.stdout.trim()) || 0;
-    const lastUpdate = mtimeSec > 0 ? new Date(mtimeSec * 1000).toISOString() : "";
+    var countRes = await runCmd("sudo ipset list " + TOR_SET + " 2>/dev/null | grep -cE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' || echo 0");
+    var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
+    var rules = listed.ok ? findTorRules(parseInputChain(listed.stdout)) : { log: null, drop: null };
+    // Il contatore pacchetti del DROP e' l'unica prova che il blocco agisce davvero.
+    var dropPkts = 0;
+    if (listed.ok && rules.drop !== null) {
+      var line = listed.stdout.split("\n").filter(function(l) {
+        return l.indexOf("match-set " + TOR_SET + " src") !== -1 && l.indexOf("DROP") !== -1;
+      })[0];
+      if (line) dropPkts = parseInt(line.trim().split(/\s+/)[1], 10) || 0;
+    }
     res.json({
-      enabled: timerActive.stdout.trim() === "active",
-      installed: existsSync(TOR_UPDATE_SCRIPT),
-      count: parseInt(count.stdout.trim()) || 0,
-      lastUpdate: lastUpdate,
+      count: parseInt(countRes.stdout.trim(), 10) || 0,
+      rulesInstalled: rules.log !== null && rules.drop !== null,
+      logPosition: rules.log,
+      dropPosition: rules.drop,
+      dropPackets: dropPkts,
+      lastApply: torLastApply,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
-
-app.post("/api/tor-block/refresh", async (_req, res) => {
-  if (!existsSync(TOR_UPDATE_SCRIPT)) {
-    return res.status(404).json({ success: false, error: "Script update-tor-block.sh non trovato. Tor Block non è installato su questo VPS." });
-  }
-  const result = await runCmd("sudo " + TOR_UPDATE_SCRIPT + " 2>&1", 60000);
-  res.json({ success: result.ok, output: result.stdout || result.stderr });
 });
 
 // ─── Sudoers management ───────────────────────────────────────────────────────
@@ -1839,7 +1992,10 @@ app.post("/api/anti-iptv/whitelist", async (req, res) => {
       child.stdin.write(restoreInput, "utf-8");
       child.stdin.end();
     });
-    await runCmd("sudo sh -c 'ipset save > /etc/ipset.conf'");
+    // MAI `sudo sh -c`: pgagent non ha /bin/sh nei sudoers, quindi questa
+    // persistenza falliva in silenzio (stesso gap del 2026-07-19).
+    var wlSaved = await runCmd("sudo ipset save");
+    if (wlSaved.ok) await sudoWriteFile("/etc/ipset.conf", wlSaved.stdout + "\n");
     res.json({ ok: true, count: clean.length });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
