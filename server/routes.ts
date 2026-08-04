@@ -731,6 +731,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
+  // Stato di enforcement reale, letto dagli agent: il contatore pacchetti della
+  // regola DROP e' l'unica prova che il blocco stia effettivamente agendo.
+  // Non filtra per VPS assegnati (a differenza di /api/vps/bulk/get), cosi' e'
+  // interrogabile anche da un account di sola lettura per il monitoraggio.
+  app.get("/api/fleet/tor-block/enforcement", requireAuth, async (_req, res) => {
+    const results = await bulkGet("all", "/api/tor-block/status");
+    const reachable = results.filter(r => r.success && r.data);
+    const perVps = reachable.map(r => ({
+      vpsName: r.vpsName,
+      ipsetCount: r.data.count || 0,
+      rulesInstalled: !!r.data.rulesInstalled,
+      dropPackets: r.data.dropPackets || 0,
+      logPosition: r.data.logPosition,
+      dropPosition: r.data.dropPosition,
+    }));
+    res.json({
+      vpsTotal: results.length,
+      vpsReachable: reachable.length,
+      vpsWithRules: perVps.filter(v => v.rulesInstalled).length,
+      vpsWithDrops: perVps.filter(v => v.dropPackets > 0).length,
+      totalDropPackets: perVps.reduce((a, v) => a + v.dropPackets, 0),
+      unreachable: results.filter(r => !r.success).map(r => r.vpsName),
+      perVps,
+    });
+  });
+
   // `vpsIds` opzionale: se presente limita il push a quei VPS (rollout canary).
   app.post("/api/fleet/tor-block/refresh", requireAuth, requireOperator, async (req, res) => {
     const s = await refreshTorList();
