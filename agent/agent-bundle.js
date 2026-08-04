@@ -24612,6 +24612,21 @@ function findTorRules(rules) {
   }
   return { log, drop };
 }
+function planEstablishedRule(rules) {
+  var est = findGenericEstablished(rules);
+  if (est === null) return { action: "insert", position: null, blockedBy: null };
+  var firstIpsetDrop = null;
+  for (var i = 0; i < rules.length; i++) {
+    var r = rules[i];
+    if (r.target === "DROP" && r.raw.indexOf("match-set") !== -1) {
+      if (firstIpsetDrop === null || r.num < firstIpsetDrop) firstIpsetDrop = r.num;
+    }
+  }
+  if (firstIpsetDrop !== null && firstIpsetDrop < est) {
+    return { action: "reposition", position: est, blockedBy: firstIpsetDrop };
+  }
+  return { action: "noop", position: est, blockedBy: null };
+}
 function planTorRules(rules) {
   var anchor = findGenericEstablished(rules);
   if (anchor === null) {
@@ -25191,8 +25206,16 @@ app.delete("/api/iptables/:chain/:linenum", async (req, res) => {
 async function ensureEstablishedRule() {
   var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
   if (!listed.ok) return { changed: false, position: null, error: listed.stderr };
-  var existing = findGenericEstablished(parseInputChain(listed.stdout));
-  if (existing !== null) return { changed: false, position: existing };
+  var plan = planEstablishedRule(parseInputChain(listed.stdout));
+  if (plan.action === "noop") return { changed: false, position: plan.position };
+  if (plan.action === "reposition") {
+    for (var i = 0; i < 5; i++) {
+      var chk = await runCmd("sudo iptables -C INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null");
+      if (!chk.ok) break;
+      var del = await runCmd("sudo iptables -D INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT");
+      if (!del.ok) break;
+    }
+  }
   var ins = await runCmd("sudo iptables -I INPUT 1 -m state --state RELATED,ESTABLISHED -j ACCEPT");
   if (!ins.ok) return { changed: false, position: null, error: ins.stderr };
   var check = await runCmd("sudo iptables -C INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT");

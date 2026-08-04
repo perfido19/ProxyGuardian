@@ -67,6 +67,35 @@ export function findTorRules(rules: InputRule[]): { log: number | null; drop: nu
   return { log: log, drop: drop };
 }
 
+// La regola ESTABLISHED non basta che esista: deve stare SOPRA ogni DROP basato su
+// ipset, altrimenti il traffico di ritorno delle connessioni in uscita viene droppato
+// prima di raggiungerla. Succede davvero: fail2ban inserisce le proprie chain in cima
+// e spinge giu' la ESTABLISHED, poi update-asn-block.sh piazza blocked_asn a posizione
+// fissa 2/3 verificando solo che la ESTABLISHED *esista* (`iptables -C`), non dove sia.
+export interface EstablishedPlan {
+  action: "noop" | "insert" | "reposition";
+  position: number | null;
+  blockedBy: number | null;
+}
+
+export function planEstablishedRule(rules: InputRule[]): EstablishedPlan {
+  var est = findGenericEstablished(rules);
+  if (est === null) return { action: "insert", position: null, blockedBy: null };
+
+  var firstIpsetDrop: number | null = null;
+  for (var i = 0; i < rules.length; i++) {
+    var r = rules[i];
+    if (r.target === "DROP" && r.raw.indexOf("match-set") !== -1) {
+      if (firstIpsetDrop === null || r.num < firstIpsetDrop) firstIpsetDrop = r.num;
+    }
+  }
+
+  if (firstIpsetDrop !== null && firstIpsetDrop < est) {
+    return { action: "reposition", position: est, blockedBy: firstIpsetDrop };
+  }
+  return { action: "noop", position: est, blockedBy: null };
+}
+
 export function planTorRules(rules: InputRule[]): TorRulePlan {
   var anchor = findGenericEstablished(rules);
   if (anchor === null) {

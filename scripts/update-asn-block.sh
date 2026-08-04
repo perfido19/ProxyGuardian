@@ -40,8 +40,14 @@ if [[ -n "$CURRENT_MAXELEM" ]] && [[ "$CURRENT_MAXELEM" -lt 1048576 ]]; then
     iptables -D INPUT -m set --match-set "$SET" src -j LOG  2>/dev/null || true
     ipset destroy "$SET"
     ipset create "$SET" hash:net family inet maxelem 1048576
-    iptables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
-        iptables -I INPUT 1 -m state --state ESTABLISHED,RELATED -j ACCEPT
+    # Non basta che la regola ESISTA: deve stare in cima. fail2ban inserisce le
+    # proprie chain in posizione 1 e col tempo la spinge sotto; se poi le regole
+    # blocked_asn finiscono a 2/3 (sotto), il traffico di ritorno viene droppato.
+    # Quindi la si rimuove ovunque sia e la si rimette in posizione 1.
+    while iptables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do
+        iptables -D INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT || break
+    done
+    iptables -I INPUT 1 -m state --state ESTABLISHED,RELATED -j ACCEPT
     iptables -I INPUT 2 -m set --match-set "$SET" src \
         -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[ASN-BLOCK] " --log-level 4
     iptables -I INPUT 3 -m set --match-set "$SET" src -j DROP

@@ -4,7 +4,7 @@ import { promisify } from "util";
 import { readFile, writeFile, appendFile, access, readdir, unlink } from "fs/promises";
 import { constants, existsSync, statSync } from "fs";
 import path from "path";
-import { parseInputChain, findGenericEstablished, findTorRules, planTorRules } from "./iptables-input";
+import { parseInputChain, findGenericEstablished, findTorRules, planTorRules, planEstablishedRule } from "./iptables-input";
 
 const execAsync = promisify(exec);
 const CMD_MAX_BUFFER = 16 * 1024 * 1024;
@@ -645,8 +645,19 @@ async function ensureEstablishedRule(): Promise<{ changed: boolean; position: nu
   var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
   if (!listed.ok) return { changed: false, position: null, error: listed.stderr };
 
-  var existing = findGenericEstablished(parseInputChain(listed.stdout));
-  if (existing !== null) return { changed: false, position: existing };
+  var plan = planEstablishedRule(parseInputChain(listed.stdout));
+  if (plan.action === "noop") return { changed: false, position: plan.position };
+
+  // Esiste ma e' finita sotto un DROP su ipset: va rimossa e rimessa in cima,
+  // altrimenti il traffico di ritorno viene droppato prima di raggiungerla.
+  if (plan.action === "reposition") {
+    for (var i = 0; i < 5; i++) {
+      var chk = await runCmd("sudo iptables -C INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null");
+      if (!chk.ok) break;
+      var del = await runCmd("sudo iptables -D INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT");
+      if (!del.ok) break;
+    }
+  }
 
   var ins = await runCmd("sudo iptables -I INPUT 1 -m state --state RELATED,ESTABLISHED -j ACCEPT");
   if (!ins.ok) return { changed: false, position: null, error: ins.stderr };
