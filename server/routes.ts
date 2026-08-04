@@ -149,7 +149,6 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
-  "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-tor-block.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt install --only-upgrade netbird *",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/apt-get install --only-upgrade netbird *",
@@ -294,29 +293,6 @@ const DEPLOY_ANTI_IPTV_SERVICE = [
   "",
   "[Install]",
   "WantedBy=multi-user.target",
-  "",
-].join("\n");
-const DEPLOY_TOR_BLOCK_SERVICE = [
-  "[Unit]",
-  "Description=Aggiorna ipset tor_exit dalla lista Tor Project exit-node",
-  "After=network-online.target ipset-restore.service",
-  "Wants=network-online.target",
-  "",
-  "[Service]",
-  "Type=oneshot",
-  "ExecStart=/usr/local/bin/update-tor-block.sh",
-  "",
-].join("\n");
-const DEPLOY_TOR_BLOCK_TIMER = [
-  "[Unit]",
-  "Description=Timer orario refresh Tor exit-node block",
-  "",
-  "[Timer]",
-  "OnCalendar=hourly",
-  "Persistent=true",
-  "",
-  "[Install]",
-  "WantedBy=timers.target",
   "",
 ].join("\n");
 
@@ -1501,8 +1477,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const UPDATE_ASN_BLOCK_PATH = join(process.cwd(), "scripts", "update-asn-block.sh");
   const UPDATE_LISTS_PATH = join(process.cwd(), "scripts", "update-lists.sh");
   const WHITELIST_WATCHER_PATH = join(process.cwd(), "scripts", "whitelist-watcher.sh");
-  const TOR_TO_IPSET_PATH = join(process.cwd(), "scripts", "tor-to-ipset.py");
-  const UPDATE_TOR_BLOCK_PATH = join(process.cwd(), "scripts", "update-tor-block.sh");
   const ANTI_IPTV_PY_PATH = join(process.cwd(), "scripts", "anti-iptv.py");
   const ANTI_IPTV_SH_PATH = join(process.cwd(), "scripts", "anti-iptv.sh");
   const FAIL2BAN_TEMPLATE_DIR = join(process.cwd(), "scripts", "fail2ban");
@@ -2136,8 +2110,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updateAsnBlockScript = installAsnBlock ? readFileSync(UPDATE_ASN_BLOCK_PATH, "utf-8") : "";
       const updateListsScript = installAsnBlock ? readFileSync(UPDATE_LISTS_PATH, "utf-8") : "";
       const whitelistWatcherScript = installAsnBlock ? readFileSync(WHITELIST_WATCHER_PATH, "utf-8") : "";
-      const torToIpsetPy = installTorBlock ? readFileSync(TOR_TO_IPSET_PATH, "utf-8") : "";
-      const updateTorBlockScript = installTorBlock ? readFileSync(UPDATE_TOR_BLOCK_PATH, "utf-8") : "";
       const antiIptvPy = installAntiIptv ? readFileSync(ANTI_IPTV_PY_PATH, "utf-8") : "";
       const antiIptvSh = installAntiIptv ? readFileSync(ANTI_IPTV_SH_PATH, "utf-8") : "";
       const fail2banJailTemplate = readFileSync(FAIL2BAN_JAIL_TEMPLATE_PATH, "utf-8");
@@ -2355,19 +2327,14 @@ info "Anti-IPTV disabilitato per questo deploy"`;
 
       const torBlockSetup = installTorBlock
         ? `# ── TOR EXIT BLOCK ────────────────────────────────────────
-info "Installing Tor exit-node block support..."
-touch /etc/ipset.conf /var/log/update-tor-block.log
-[ -f /etc/asn-whitelist-nets.txt ] || touch /etc/asn-whitelist-nets.txt
-
-cat > /usr/local/bin/tor-to-ipset.py << 'TORTOIPSETEOF'
-${torToIpsetPy}
-TORTOIPSETEOF
-
-cat > /usr/local/bin/update-tor-block.sh << 'UPDATETORBLOCKEOF'
-${updateTorBlockScript}
-UPDATETORBLOCKEOF
-
-chmod 755 /usr/local/bin/tor-to-ipset.py /usr/local/bin/update-tor-block.sh
+# Lista e regole sono gestite dalla dashboard via POST /api/tor-block/apply.
+# Qui si crea solo l'ipset vuoto: le regole iptables le posiziona l'agent,
+# che calcola l'ancora sulla chain reale (un append con -A finirebbe sotto
+# l'ACCEPT dpt:8880 e non bloccherebbe nulla).
+info "Preparing Tor exit-node block (ipset vuoto, popolato dalla dashboard)..."
+touch /etc/ipset.conf
+ipset create tor_exit hash:ip family inet maxelem 65536 -exist
+ipset save > /etc/ipset.conf
 
 ${!installAsnBlock ? `# ipset-restore.service normalmente installato solo da ASN Block — necessario
 # comunque qui perche' e' generico (ripristina qualunque /etc/ipset.conf al boot)
@@ -2377,24 +2344,7 @@ ${DEPLOY_IPSET_RESTORE_SERVICE}
 IPSETRESTOREEOF
 systemctl enable ipset-restore >/dev/null 2>&1 || true
 systemctl start ipset-restore >/dev/null 2>&1 || true` : ""}
-
-cat > /etc/systemd/system/tor-block-update.service << 'TORBLOCKSVCEOF'
-${DEPLOY_TOR_BLOCK_SERVICE}
-TORBLOCKSVCEOF
-
-cat > /etc/systemd/system/tor-block-update.timer << 'TORBLOCKTIMEREOF'
-${DEPLOY_TOR_BLOCK_TIMER}
-TORBLOCKTIMEREOF
-
-ipset create tor_exit hash:ip family inet maxelem 65536 -exist
-iptables -C INPUT -m set --match-set tor_exit src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[TOR-BLOCK] " --log-level 4 2>/dev/null || \\
-  iptables -A INPUT -m set --match-set tor_exit src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[TOR-BLOCK] " --log-level 4
-iptables -C INPUT -m set --match-set tor_exit src -j DROP 2>/dev/null || \\
-  iptables -A INPUT -m set --match-set tor_exit src -j DROP
-ipset save > /etc/ipset.conf
-
-systemctl daemon-reload
-/usr/local/bin/update-tor-block.sh >> /var/log/update-tor-block.log 2>&1 || warn "Aggiornamento iniziale Tor block fallito (torproject.org raggiungibile?)"`
+ok "ipset tor_exit creato (popolamento al primo ciclo dashboard, entro 1h)"`
         : `# ── TOR EXIT BLOCK ────────────────────────────────────────
 info "Tor exit-node block disabilitato per questo deploy"`;
 
