@@ -9,7 +9,7 @@ import { open as openMaxMind, type Reader, validate as validateIp } from "maxmin
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, removeVpsFromAllUsers, type UserRole } from "./auth";
-import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage } from "./vps-manager";
+import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller } from "./vps-manager";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -728,6 +728,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // Block list (asn-blocklist.txt — AsnBlock format: "AS12345 # Description")
+  // Stato e ripristino della regola ACCEPT RELATED,ESTABLISHED generica in INPUT.
+  // Persa a runtime su 39 VPS su 52 il 2026-08-04: senza, il traffico di ritorno
+  // delle connessioni in uscita viene droppato da blocked_asn.
+  app.get("/api/fleet/firewall/established-status", requireAuth, async (_req, res) => {
+    const results = await bulkGet("all", "/api/iptables");
+    res.json(results);
+  });
+
+  app.post("/api/fleet/firewall/ensure-established", requireAuth, requireOperator, async (_req, res) => {
+    const result = await ensureEstablishedFleet();
+    res.json(result);
+  });
+
   app.get("/api/fleet/asn/blocklist", requireAuth, (_req, res) => {
     res.json({ content: readFleetFile("asn-blocklist.txt") });
   });
@@ -2932,6 +2945,7 @@ fi
 
   startHealthPoller(30000);
   startBanSyncPoller(60000);
+  startEstablishedPoller(3600000);
 
   const server = createServer(app);
   attachSshWebSocket(server);
