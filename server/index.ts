@@ -3,6 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { getUserById } from "./auth";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -26,8 +27,14 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (logLine.length > 80) logLine = logLine.slice(0, 79) + "…";
+      // req.session e' popolata dal middleware session() (registrato dopo questo,
+      // dentro registerRoutes) — per lo stesso req l'ordine di esecuzione lo
+      // garantisce gia' pronto quando "finish" scatta a fine richiesta.
+      const userId = (req as any).session?.userId as string | undefined;
+      const user = userId ? getUserById(userId) : null;
+      const who = user ? user.username : "anon";
+      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms [${who}]`;
+      if (logLine.length > 100) logLine = logLine.slice(0, 99) + "…";
       log(logLine);
     }
   });
