@@ -685,6 +685,76 @@ app.post("/api/firewall/ensure-established", async (_req, res) => {
   }
 });
 
+// Ri-asserisce idempotentemente 3 fix "fleet-wide" che si sono rivelati capaci di
+// regredire nel tempo senza che nessun poller se ne accorgesse (scoperto 2026-08-10
+// controllando 54 VPS: UDP51820 mancante su 50/54, journald cap su 26/54, bouncer
+// CrowdSec spento su 42/54 pur avendo il pacchetto installato). Ogni check e' un
+// no-op se gia' a posto.
+async function ensureCompliance(): Promise<{
+  udp51820: { changed: boolean; error?: string };
+  journald: { changed: boolean; error?: string };
+  crowdsecBouncer: { installed: boolean; changed: boolean; error?: string };
+}> {
+  var out = {
+    udp51820: { changed: false } as { changed: boolean; error?: string },
+    journald: { changed: false } as { changed: boolean; error?: string },
+    crowdsecBouncer: { installed: false, changed: false } as { installed: boolean; changed: boolean; error?: string },
+  };
+
+  var udpCheck = await runCmd("sudo iptables -C INPUT -p udp --dport 51820 -j ACCEPT 2>/dev/null");
+  if (!udpCheck.ok) {
+    var udpIns = await runCmd("sudo iptables -I INPUT 1 -p udp --dport 51820 -j ACCEPT");
+    if (udpIns.ok) {
+      var udpSave = await runCmd("sudo iptables-save");
+      if (udpSave.ok) await sudoWriteFile("/etc/iptables/rules.v4", udpSave.stdout + "\n");
+      out.udp51820.changed = true;
+    } else {
+      out.udp51820.error = udpIns.stderr;
+    }
+  }
+
+  var jrnCheck = await runCmd("grep -q '^SystemMaxUse=' /etc/systemd/journald.conf 2>/dev/null && echo yes || echo no");
+  if (jrnCheck.stdout.trim() !== "yes") {
+    var jrnAppend = await runCmd('echo "SystemMaxUse=80M" | sudo tee -a /etc/systemd/journald.conf > /dev/null');
+    if (jrnAppend.ok) {
+      var jrnRestart = await runCmd("sudo systemctl restart systemd-journald");
+      if (jrnRestart.ok) {
+        out.journald.changed = true;
+      } else {
+        out.journald.error = jrnRestart.stderr;
+      }
+    } else {
+      out.journald.error = jrnAppend.stderr;
+    }
+  }
+
+  var bncInstalled = await runCmd("systemctl cat crowdsec-firewall-bouncer >/dev/null 2>&1 && echo yes || echo no");
+  if (bncInstalled.stdout.trim() === "yes") {
+    out.crowdsecBouncer.installed = true;
+    var bncActive = await runCmd("systemctl is-active crowdsec-firewall-bouncer 2>/dev/null || echo inactive");
+    if (bncActive.stdout.trim() !== "active") {
+      await runCmd("sudo systemctl enable crowdsec-firewall-bouncer");
+      var bncRestart = await runCmd("sudo systemctl restart crowdsec-firewall-bouncer");
+      if (bncRestart.ok) {
+        out.crowdsecBouncer.changed = true;
+      } else {
+        out.crowdsecBouncer.error = bncRestart.stderr;
+      }
+    }
+  }
+
+  return out;
+}
+
+app.post("/api/compliance/ensure", async (_req, res) => {
+  try {
+    var result = await ensureCompliance();
+    res.json({ ok: true, udp51820: result.udp51820, journald: result.journald, crowdsecBouncer: result.crowdsecBouncer });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.post("/api/iptables/:chain/rule", async (req, res) => {
   const { chain } = req.params;
   if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(chain)) return res.status(400).json({ error: "Chain non valida" });
@@ -935,6 +1005,8 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart systemd-journald",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee -a /etc/systemd/journald.conf",
   // Mancava in SUDOERS_CONTENT: presente solo su alcuni VPS per un fix manuale
   // vecchio. Senza, la persistenza degli ipset fallisce (Tor block, anti-iptv).
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/ipset.conf",

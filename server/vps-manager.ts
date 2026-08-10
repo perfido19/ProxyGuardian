@@ -350,6 +350,55 @@ export function startEstablishedPoller(intervalMs = 3600000): void {
   setTimeout(() => { run(); setInterval(run, intervalMs); }, 45000);
 }
 
+export interface ComplianceSyncResult {
+  checked: number;
+  fixed: number;
+  errors: number;
+  details: Array<{
+    vpsId: string; vpsName: string;
+    udp51820: boolean; journald: boolean; crowdsecBouncer: boolean;
+    error?: string;
+  }>;
+}
+
+// Ri-verifica fleet-wide 3 fix che si sono rivelati capaci di regredire nel tempo
+// senza che nessun poller se ne accorgesse (scoperto 2026-08-10: UDP51820 mancante
+// su 50/54, journald cap su 26/54, bouncer CrowdSec spento su 42/54). Non installa
+// CrowdSec dove manca — solo riabilita il bouncer se il pacchetto e' gia' presente.
+export async function ensureComplianceFleet(): Promise<ComplianceSyncResult> {
+  const enabled = Array.from(vpsStore.values()).filter(v => v.enabled && v.lastStatus !== "offline");
+  const details: ComplianceSyncResult["details"] = [];
+  let fixed = 0;
+  let errors = 0;
+
+  await Promise.allSettled(enabled.map(async vps => {
+    try {
+      const r = await agentPost(vps, "/api/compliance/ensure", {}, 25000);
+      const udp = !!(r && r.udp51820 && r.udp51820.changed);
+      const jrn = !!(r && r.journald && r.journald.changed);
+      const bnc = !!(r && r.crowdsecBouncer && r.crowdsecBouncer.changed);
+      if (udp || jrn || bnc) fixed++;
+      details.push({ vpsId: vps.id, vpsName: vps.name, udp51820: udp, journald: jrn, crowdsecBouncer: bnc });
+    } catch (e: any) {
+      errors++;
+      details.push({ vpsId: vps.id, vpsName: vps.name, udp51820: false, journald: false, crowdsecBouncer: false, error: e.message });
+    }
+  }));
+
+  return { checked: enabled.length, fixed, errors, details };
+}
+
+export function startCompliancePoller(intervalMs = 3600000): void {
+  const run = () => ensureComplianceFleet()
+    .then(r => {
+      if (r.fixed > 0 || r.errors > 0) {
+        console.log(`[Compliance] controllati ${r.checked}, ripristinati ${r.fixed}, errori ${r.errors}`);
+      }
+    })
+    .catch(e => console.error("[Compliance] error:", e));
+  setTimeout(() => { run(); setInterval(run, intervalMs); }, 60000);
+}
+
 export interface BulkResult {
   vpsId: string; vpsName: string; success: boolean; data?: any; error?: string;
 }

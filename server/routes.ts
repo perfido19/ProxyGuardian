@@ -9,7 +9,7 @@ import { open as openMaxMind, type Reader, validate as validateIp } from "maxmin
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, removeVpsFromAllUsers, type UserRole } from "./auth";
-import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller } from "./vps-manager";
+import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller, ensureComplianceFleet, startCompliancePoller } from "./vps-manager";
 import { refreshTorList, getTorListState, pushTorListToFleet, getLastPush, startTorBlockPoller } from "./tor-block";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { join } from "path";
@@ -147,6 +147,8 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/iptables-save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/netfilter-persistent save",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/iptables/rules.v4",
+  "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart systemd-journald",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee -a /etc/systemd/journald.conf",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-lists.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/local/bin/update-asn-block.sh",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/netbird update",
@@ -715,6 +717,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/fleet/firewall/ensure-established", requireAuth, requireOperator, async (_req, res) => {
     const result = await ensureEstablishedFleet();
+    res.json(result);
+  });
+
+  // Ri-verifica fleet-wide UDP51820/journald cap/bouncer CrowdSec — vedi ensureComplianceFleet.
+  app.post("/api/fleet/compliance/ensure", requireAuth, requireOperator, async (_req, res) => {
+    const result = await ensureComplianceFleet();
     res.json(result);
   });
 
@@ -2948,6 +2956,7 @@ fi
   startHealthPoller(30000);
   startBanSyncPoller(60000);
   startEstablishedPoller(3600000);
+  startCompliancePoller(3600000);
   startTorBlockPoller(3600000);
 
   const server = createServer(app);

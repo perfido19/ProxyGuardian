@@ -267,6 +267,66 @@ function MainBansSection() {
   );
 }
 
+function QuickUnbanCard() {
+  const { toast } = useToast();
+  const [ip, setIp] = useState("");
+  const [state, setState] = useState<"idle" | "running" | "ok" | "error">("idle");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const target = ip.trim();
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(target)) {
+      toast({ title: "IP non valido", variant: "destructive" });
+      return;
+    }
+    setState("running");
+    try {
+      const res = await apiRequest("POST", "/api/fleet/ip-unban", { ip: target });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setState("ok");
+      toast({ title: `Unbannato su ${data.ok} VPS`, description: data.fail > 0 ? `${data.fail} VPS falliti` : "IP rimosso da tutta la fleet" });
+    } catch (e: any) {
+      setState("error");
+      toast({ title: "Errore unban", description: e.message, variant: "destructive" });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Unlock className="w-4 h-4 text-orange-400" />
+          Sblocco rapido fleet
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Sbanna un IP su tutti i VPS (iptv_ban, jail fail2ban, CrowdSec) senza dover prima analizzare
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="flex gap-3">
+          <Input
+            value={ip}
+            onChange={e => { setIp(e.target.value); setState("idle"); }}
+            placeholder="Es. 64.94.85.248"
+            className="font-mono text-sm max-w-xs"
+          />
+          <Button type="submit" variant="outline" disabled={state === "running"} className="gap-1.5 border-orange-500/40 text-orange-400 hover:bg-orange-500/10">
+            {state === "running" ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : state === "ok" ? (
+              <CheckCircle2 className="w-4 h-4" />
+            ) : (
+              <Unlock className="w-4 h-4" />
+            )}
+            Sbanna su tutta la fleet
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function IpInvestigator() {
   const { toast } = useToast();
   const search = useSearch();
@@ -369,6 +429,8 @@ export default function IpInvestigator() {
           </form>
         </CardContent>
       </Card>
+
+      <QuickUnbanCard />
 
       {investigate.isPending && (
         <div className="flex items-center gap-3 text-muted-foreground text-sm">
