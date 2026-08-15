@@ -11,6 +11,7 @@ import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, upd
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, removeVpsFromAllUsers, type UserRole } from "./auth";
 import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller, ensureComplianceFleet, startCompliancePoller } from "./vps-manager";
 import { refreshTorList, getTorListState, pushTorListToFleet, getLastPush, startTorBlockPoller } from "./tor-block";
+import { getScannerBlockState, pushScannerBlockToFleet } from "./scanner-block";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -775,6 +776,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const ids = Array.isArray(req.body && req.body.vpsIds) && req.body.vpsIds.length > 0 ? req.body.vpsIds : "all";
     const push = await pushTorListToFleet(ids);
     res.json({ ok: true, count: s.count, fetchedAt: s.fetchedAt, lastError: s.lastError, push });
+  });
+
+  // Scanner IP block (Shodan/ZoomEye/FOFA/Quake non coperti da ASN block): lista
+  // statica curata in asn-block/scanner-ips-blocklist.txt, nessun poller — si
+  // aggiorna e si pusha a mano, stesso schema di /api/fleet/asn/blocklist.
+  app.get("/api/fleet/scanner-block/status", requireAuth, (_req, res) => {
+    res.json(getScannerBlockState());
+  });
+
+  app.get("/api/fleet/scanner-block/enforcement", requireAuth, async (_req, res) => {
+    const results = await bulkGet("all", "/api/scanner-block/status");
+    const reachable = results.filter(r => r.success && r.data);
+    const perVps = reachable.map(r => ({
+      vpsId: r.vpsId,
+      vpsName: r.vpsName,
+      ipsetCount: r.data.count || 0,
+      rulesInstalled: !!r.data.rulesInstalled,
+      dropPackets: r.data.dropPackets || 0,
+      logPosition: r.data.logPosition,
+      dropPosition: r.data.dropPosition,
+    }));
+    res.json({
+      vpsTotal: results.length,
+      vpsReachable: reachable.length,
+      vpsWithRules: perVps.filter(v => v.rulesInstalled).length,
+      vpsWithDrops: perVps.filter(v => v.dropPackets > 0).length,
+      totalDropPackets: perVps.reduce((a, v) => a + v.dropPackets, 0),
+      unreachable: results.filter(r => !r.success).map(r => r.vpsName),
+      perVps,
+    });
+  });
+
+  // `vpsIds` opzionale: limita il push a quei VPS (rollout canary prima del fleet-wide).
+  app.post("/api/fleet/scanner-block/push", requireAuth, requireOperator, async (req, res) => {
+    const ids = Array.isArray(req.body && req.body.vpsIds) && req.body.vpsIds.length > 0 ? req.body.vpsIds : "all";
+    const push = await pushScannerBlockToFleet(ids);
+    res.json({ ok: true, count: getScannerBlockState().count, push });
   });
 
   app.get("/api/fleet/asn/blocklist", requireAuth, (_req, res) => {

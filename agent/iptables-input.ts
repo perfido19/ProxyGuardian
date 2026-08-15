@@ -55,12 +55,13 @@ export function findFirstAccept8880(rules: InputRule[]): number | null {
   return null;
 }
 
-export function findTorRules(rules: InputRule[]): { log: number | null; drop: number | null } {
+export function findTorRules(rules: InputRule[], setName?: string): { log: number | null; drop: number | null } {
+  var needle = "match-set " + (setName || "tor_exit") + " src";
   var log: number | null = null;
   var drop: number | null = null;
   for (var i = 0; i < rules.length; i++) {
     var r = rules[i];
-    if (r.raw.indexOf("match-set tor_exit src") === -1) continue;
+    if (r.raw.indexOf(needle) === -1) continue;
     if (r.target === "LOG" && log === null) log = r.num;
     if (r.target === "DROP" && drop === null) drop = r.num;
   }
@@ -96,7 +97,7 @@ export function planEstablishedRule(rules: InputRule[]): EstablishedPlan {
   return { action: "noop", position: est, blockedBy: null };
 }
 
-export function planTorRules(rules: InputRule[]): TorRulePlan {
+export function planTorRules(rules: InputRule[], setName?: string): TorRulePlan {
   var anchor = findGenericEstablished(rules);
   if (anchor === null) {
     return {
@@ -112,11 +113,11 @@ export function planTorRules(rules: InputRule[]): TorRulePlan {
     return {
       action: "refuse",
       reason: "ACCEPT tcp dpt:8880 in posizione " + accept8880 + ", sopra l'ancora ESTABLISHED (" + anchor +
-              "): le regole Tor finirebbero sotto e il traffico verso la porta proxy sarebbe gia' accettato",
+              "): le regole finirebbero sotto e il traffico verso la porta proxy sarebbe gia' accettato",
     };
   }
 
-  var tor = findTorRules(rules);
+  var tor = findTorRules(rules, setName);
   var insertAt = anchor + 1;
 
   if (tor.log !== null && tor.drop !== null) {

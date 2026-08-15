@@ -24601,12 +24601,13 @@ function findFirstAccept8880(rules) {
   }
   return null;
 }
-function findTorRules(rules) {
+function findTorRules(rules, setName) {
+  var needle = "match-set " + (setName || "tor_exit") + " src";
   var log = null;
   var drop = null;
   for (var i = 0; i < rules.length; i++) {
     var r = rules[i];
-    if (r.raw.indexOf("match-set tor_exit src") === -1) continue;
+    if (r.raw.indexOf(needle) === -1) continue;
     if (r.target === "LOG" && log === null) log = r.num;
     if (r.target === "DROP" && drop === null) drop = r.num;
   }
@@ -24627,7 +24628,7 @@ function planEstablishedRule(rules) {
   }
   return { action: "noop", position: est, blockedBy: null };
 }
-function planTorRules(rules) {
+function planTorRules(rules, setName) {
   var anchor = findGenericEstablished(rules);
   if (anchor === null) {
     return {
@@ -24639,10 +24640,10 @@ function planTorRules(rules) {
   if (accept8880 !== null && accept8880 < anchor) {
     return {
       action: "refuse",
-      reason: "ACCEPT tcp dpt:8880 in posizione " + accept8880 + ", sopra l'ancora ESTABLISHED (" + anchor + "): le regole Tor finirebbero sotto e il traffico verso la porta proxy sarebbe gia' accettato"
+      reason: "ACCEPT tcp dpt:8880 in posizione " + accept8880 + ", sopra l'ancora ESTABLISHED (" + anchor + "): le regole finirebbero sotto e il traffico verso la porta proxy sarebbe gia' accettato"
     };
   }
-  var tor = findTorRules(rules);
+  var tor = findTorRules(rules, setName);
   var insertAt = anchor + 1;
   if (tor.log !== null && tor.drop !== null) {
     var ordered = tor.log > anchor && tor.drop > tor.log;
@@ -26174,11 +26175,6 @@ app.get("/api/asn/log", async (_req, res) => {
   const { stdout } = await runCmd("tail -100 /var/log/update-asn-block.log 2>/dev/null || echo ''");
   res.json({ lines: stdout.split("\n").filter(Boolean) });
 });
-var TOR_SET = "tor_exit";
-var TOR_SET_TMP = "tor_exit_new";
-var TOR_LOG_SPEC = "-m set --match-set " + TOR_SET + ' src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[TOR-BLOCK] " --log-level 4';
-var TOR_DROP_SPEC = "-m set --match-set " + TOR_SET + " src -j DROP";
-var torLastApply = "";
 function ipsetRestore(input) {
   return new Promise(function(resolve, reject) {
     var child = require("child_process").spawn("sudo", ["ipset", "restore", "-exist"], { stdio: ["pipe", "ignore", "pipe"] });
@@ -26203,118 +26199,154 @@ async function deleteAllMatching(spec) {
     if (!del.ok) return;
   }
 }
-app.post("/api/tor-block/apply", async (req, res) => {
-  var ips = req.body && req.body.ips;
-  if (!Array.isArray(ips)) return res.status(400).json({ ok: false, error: "campo 'ips' mancante o non array" });
-  if (ips.length === 0) return res.status(400).json({ ok: false, error: "lista vuota: rifiutata per non svuotare l'ipset" });
+async function applyIpsetDropBlock(setName, setNameTmp, logSpec, dropSpec, ips) {
   var steps = [];
   function addStep(label, ok, detail) {
     steps.push({ step: label, ok, detail });
   }
+  var created = await runCmd("sudo ipset create " + setName + " hash:ip family inet maxelem 65536 -exist");
+  addStep("ipset create " + setName, created.ok, created.ok ? void 0 : created.stderr);
+  if (!created.ok) return { ok: false, count: ips.length, rulesChanged: false, steps };
+  var restoreInput = "create " + setNameTmp + " hash:ip family inet maxelem 65536 -exist\nflush " + setNameTmp + "\n";
+  for (var i = 0; i < ips.length; i++) {
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(ips[i])) restoreInput += "add " + setNameTmp + " " + ips[i] + "\n";
+  }
+  await ipsetRestore(restoreInput);
+  addStep("ipset restore (" + ips.length + " IP)", true);
+  var swapped = await runCmd("sudo ipset swap " + setNameTmp + " " + setName);
+  addStep("ipset swap", swapped.ok, swapped.ok ? void 0 : swapped.stderr);
+  if (!swapped.ok) {
+    await runCmd("sudo ipset destroy " + setNameTmp);
+    return { ok: false, count: ips.length, rulesChanged: false, steps };
+  }
+  await runCmd("sudo ipset destroy " + setNameTmp);
+  var est = await ensureEstablishedRule();
+  addStep("ensure ESTABLISHED", !est.error, est.error || "posizione " + est.position + (est.changed ? " (ripristinata)" : ""));
+  var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
+  if (!listed.ok) {
+    addStep("lettura chain INPUT", false, listed.stderr);
+    return { ok: false, count: ips.length, rulesChanged: false, steps };
+  }
+  var plan = planTorRules(parseInputChain(listed.stdout), setName);
+  if (plan.action === "refuse") {
+    addStep("preflight iptables", false, plan.reason);
+    return { ok: false, refused: true, reason: plan.reason, error: plan.reason, count: ips.length, rulesChanged: false, steps };
+  }
+  var rulesChanged = false;
+  if (plan.action === "reposition") {
+    await deleteAllMatching(logSpec);
+    await deleteAllMatching(dropSpec);
+    addStep("rimozione regole mal posizionate", true);
+    rulesChanged = true;
+  }
+  if (plan.action === "insert" || plan.action === "reposition") {
+    var relisted = await runCmd("sudo iptables -nvL INPUT --line-numbers");
+    var freshPlan = planTorRules(parseInputChain(relisted.stdout), setName);
+    if (freshPlan.action === "refuse" || !freshPlan.insertAt) {
+      var why = freshPlan.reason || "ancora non ricalcolabile dopo la rimozione";
+      addStep("preflight iptables (dopo rimozione)", false, why);
+      return { ok: false, refused: true, reason: why, error: why, count: ips.length, rulesChanged: false, steps };
+    }
+    var at = freshPlan.insertAt;
+    var insDrop = await runCmd("sudo iptables -I INPUT " + at + " " + dropSpec);
+    addStep("insert DROP in posizione " + at, insDrop.ok, insDrop.ok ? void 0 : insDrop.stderr);
+    if (!insDrop.ok) return { ok: false, count: ips.length, rulesChanged: false, steps };
+    var ckDrop = await runCmd("sudo iptables -C INPUT " + dropSpec);
+    addStep("verifica DROP", ckDrop.ok);
+    if (!ckDrop.ok) return { ok: false, count: ips.length, rulesChanged: false, steps };
+    var insLog = await runCmd("sudo iptables -I INPUT " + at + " " + logSpec);
+    addStep("insert LOG in posizione " + at, insLog.ok, insLog.ok ? void 0 : insLog.stderr);
+    if (!insLog.ok) return { ok: false, count: ips.length, rulesChanged: false, steps };
+    var ckLog = await runCmd("sudo iptables -C INPUT " + logSpec);
+    addStep("verifica LOG", ckLog.ok);
+    rulesChanged = true;
+  } else {
+    addStep("regole iptables gia' corrette", true, "posizione ancora " + plan.anchor);
+  }
+  var ipsetSaved = await runCmd("sudo ipset save");
+  if (ipsetSaved.ok) {
+    await sudoWriteFile("/etc/ipset.conf", ipsetSaved.stdout + "\n");
+    addStep("persist /etc/ipset.conf", true);
+  } else {
+    addStep("persist /etc/ipset.conf", false, ipsetSaved.stderr);
+  }
+  if (rulesChanged) {
+    var iptSaved = await runCmd("sudo iptables-save");
+    if (iptSaved.ok) {
+      await sudoWriteFile("/etc/iptables/rules.v4", iptSaved.stdout + "\n");
+      addStep("persist /etc/iptables/rules.v4", true);
+    } else {
+      addStep("persist /etc/iptables/rules.v4", false, iptSaved.stderr);
+    }
+  }
+  return { ok: steps.every(function(s) {
+    return s.ok;
+  }), count: ips.length, rulesChanged, steps };
+}
+async function ipsetStatus(setName, lastApply) {
+  var countRes = await runCmd("sudo ipset list " + setName + " 2>/dev/null | grep -cE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' || echo 0");
+  var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
+  var rules = listed.ok ? findTorRules(parseInputChain(listed.stdout), setName) : { log: null, drop: null };
+  var dropPkts = 0;
+  if (listed.ok && rules.drop !== null) {
+    var line = listed.stdout.split("\n").filter(function(l) {
+      return l.indexOf("match-set " + setName + " src") !== -1 && l.indexOf("DROP") !== -1;
+    })[0];
+    if (line) dropPkts = parseInt(line.trim().split(/\s+/)[1], 10) || 0;
+  }
+  return {
+    count: parseInt(countRes.stdout.trim(), 10) || 0,
+    rulesInstalled: rules.log !== null && rules.drop !== null,
+    logPosition: rules.log,
+    dropPosition: rules.drop,
+    dropPackets: dropPkts,
+    lastApply
+  };
+}
+var TOR_SET = "tor_exit";
+var TOR_SET_TMP = "tor_exit_new";
+var TOR_LOG_SPEC = "-m set --match-set " + TOR_SET + ' src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[TOR-BLOCK] " --log-level 4';
+var TOR_DROP_SPEC = "-m set --match-set " + TOR_SET + " src -j DROP";
+var torLastApply = "";
+app.post("/api/tor-block/apply", async (req, res) => {
+  var ips = req.body && req.body.ips;
+  if (!Array.isArray(ips)) return res.status(400).json({ ok: false, error: "campo 'ips' mancante o non array" });
+  if (ips.length === 0) return res.status(400).json({ ok: false, error: "lista vuota: rifiutata per non svuotare l'ipset" });
   try {
-    var created = await runCmd("sudo ipset create " + TOR_SET + " hash:ip family inet maxelem 65536 -exist");
-    addStep("ipset create " + TOR_SET, created.ok, created.ok ? void 0 : created.stderr);
-    if (!created.ok) return res.status(500).json({ ok: false, steps });
-    var restoreInput = "create " + TOR_SET_TMP + " hash:ip family inet maxelem 65536 -exist\nflush " + TOR_SET_TMP + "\n";
-    for (var i = 0; i < ips.length; i++) {
-      if (/^\d+\.\d+\.\d+\.\d+$/.test(ips[i])) restoreInput += "add " + TOR_SET_TMP + " " + ips[i] + "\n";
-    }
-    await ipsetRestore(restoreInput);
-    addStep("ipset restore (" + ips.length + " IP)", true);
-    var swapped = await runCmd("sudo ipset swap " + TOR_SET_TMP + " " + TOR_SET);
-    addStep("ipset swap", swapped.ok, swapped.ok ? void 0 : swapped.stderr);
-    if (!swapped.ok) {
-      await runCmd("sudo ipset destroy " + TOR_SET_TMP);
-      return res.status(500).json({ ok: false, steps });
-    }
-    await runCmd("sudo ipset destroy " + TOR_SET_TMP);
-    var est = await ensureEstablishedRule();
-    addStep("ensure ESTABLISHED", !est.error, est.error || "posizione " + est.position + (est.changed ? " (ripristinata)" : ""));
-    var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
-    if (!listed.ok) {
-      addStep("lettura chain INPUT", false, listed.stderr);
-      return res.status(500).json({ ok: false, steps });
-    }
-    var plan = planTorRules(parseInputChain(listed.stdout));
-    if (plan.action === "refuse") {
-      addStep("preflight iptables", false, plan.reason);
-      return res.json({ ok: false, refused: true, reason: plan.reason, error: plan.reason, steps, count: ips.length });
-    }
-    var rulesChanged = false;
-    if (plan.action === "reposition") {
-      await deleteAllMatching(TOR_LOG_SPEC);
-      await deleteAllMatching(TOR_DROP_SPEC);
-      addStep("rimozione regole Tor mal posizionate", true);
-      rulesChanged = true;
-    }
-    if (plan.action === "insert" || plan.action === "reposition") {
-      var relisted = await runCmd("sudo iptables -nvL INPUT --line-numbers");
-      var freshPlan = planTorRules(parseInputChain(relisted.stdout));
-      if (freshPlan.action === "refuse" || !freshPlan.insertAt) {
-        var why = freshPlan.reason || "ancora non ricalcolabile dopo la rimozione";
-        addStep("preflight iptables (dopo rimozione)", false, why);
-        return res.json({ ok: false, refused: true, reason: why, error: why, steps });
-      }
-      var at = freshPlan.insertAt;
-      var insDrop = await runCmd("sudo iptables -I INPUT " + at + " " + TOR_DROP_SPEC);
-      addStep("insert DROP in posizione " + at, insDrop.ok, insDrop.ok ? void 0 : insDrop.stderr);
-      if (!insDrop.ok) return res.status(500).json({ ok: false, steps });
-      var ckDrop = await runCmd("sudo iptables -C INPUT " + TOR_DROP_SPEC);
-      addStep("verifica DROP", ckDrop.ok);
-      if (!ckDrop.ok) return res.status(500).json({ ok: false, steps });
-      var insLog = await runCmd("sudo iptables -I INPUT " + at + " " + TOR_LOG_SPEC);
-      addStep("insert LOG in posizione " + at, insLog.ok, insLog.ok ? void 0 : insLog.stderr);
-      if (!insLog.ok) return res.status(500).json({ ok: false, steps });
-      var ckLog = await runCmd("sudo iptables -C INPUT " + TOR_LOG_SPEC);
-      addStep("verifica LOG", ckLog.ok);
-      rulesChanged = true;
-    } else {
-      addStep("regole iptables gia' corrette", true, "posizione ancora " + plan.anchor);
-    }
-    var ipsetSaved = await runCmd("sudo ipset save");
-    if (ipsetSaved.ok) {
-      await sudoWriteFile("/etc/ipset.conf", ipsetSaved.stdout + "\n");
-      addStep("persist /etc/ipset.conf", true);
-    } else {
-      addStep("persist /etc/ipset.conf", false, ipsetSaved.stderr);
-    }
-    if (rulesChanged) {
-      var iptSaved = await runCmd("sudo iptables-save");
-      if (iptSaved.ok) {
-        await sudoWriteFile("/etc/iptables/rules.v4", iptSaved.stdout + "\n");
-        addStep("persist /etc/iptables/rules.v4", true);
-      } else {
-        addStep("persist /etc/iptables/rules.v4", false, iptSaved.stderr);
-      }
-    }
-    torLastApply = (/* @__PURE__ */ new Date()).toISOString();
-    res.json({ ok: steps.every(function(s) {
-      return s.ok;
-    }), count: ips.length, rulesChanged, steps });
+    var result = await applyIpsetDropBlock(TOR_SET, TOR_SET_TMP, TOR_LOG_SPEC, TOR_DROP_SPEC, ips);
+    if (result.ok || result.refused) torLastApply = (/* @__PURE__ */ new Date()).toISOString();
+    res.json(result);
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message, steps });
+    res.status(500).json({ ok: false, error: err.message, steps: [] });
   }
 });
 app.get("/api/tor-block/status", async (_req, res) => {
   try {
-    var countRes = await runCmd("sudo ipset list " + TOR_SET + " 2>/dev/null | grep -cE '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' || echo 0");
-    var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
-    var rules = listed.ok ? findTorRules(parseInputChain(listed.stdout)) : { log: null, drop: null };
-    var dropPkts = 0;
-    if (listed.ok && rules.drop !== null) {
-      var line = listed.stdout.split("\n").filter(function(l) {
-        return l.indexOf("match-set " + TOR_SET + " src") !== -1 && l.indexOf("DROP") !== -1;
-      })[0];
-      if (line) dropPkts = parseInt(line.trim().split(/\s+/)[1], 10) || 0;
-    }
-    res.json({
-      count: parseInt(countRes.stdout.trim(), 10) || 0,
-      rulesInstalled: rules.log !== null && rules.drop !== null,
-      logPosition: rules.log,
-      dropPosition: rules.drop,
-      dropPackets: dropPkts,
-      lastApply: torLastApply
-    });
+    res.json(await ipsetStatus(TOR_SET, torLastApply));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var SCANNER_SET = "scanner_block";
+var SCANNER_SET_TMP = "scanner_block_new";
+var SCANNER_LOG_SPEC = "-m set --match-set " + SCANNER_SET + ' src -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "[SCANNER-BLOCK] " --log-level 4';
+var SCANNER_DROP_SPEC = "-m set --match-set " + SCANNER_SET + " src -j DROP";
+var scannerLastApply = "";
+app.post("/api/scanner-block/apply", async (req, res) => {
+  var ips = req.body && req.body.ips;
+  if (!Array.isArray(ips)) return res.status(400).json({ ok: false, error: "campo 'ips' mancante o non array" });
+  if (ips.length === 0) return res.status(400).json({ ok: false, error: "lista vuota: rifiutata per non svuotare l'ipset" });
+  try {
+    var result = await applyIpsetDropBlock(SCANNER_SET, SCANNER_SET_TMP, SCANNER_LOG_SPEC, SCANNER_DROP_SPEC, ips);
+    if (result.ok || result.refused) scannerLastApply = (/* @__PURE__ */ new Date()).toISOString();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, steps: [] });
+  }
+});
+app.get("/api/scanner-block/status", async (_req, res) => {
+  try {
+    res.json(await ipsetStatus(SCANNER_SET, scannerLastApply));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

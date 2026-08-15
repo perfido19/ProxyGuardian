@@ -1,0 +1,106 @@
+# Scanner block: IP di internet-wide scanner (Shodan/ZoomEye/FOFA/Quake) NON gia coperti
+# dalla blocklist ASN esistente (blocco su ASN troppo grande/legittimo: Verizon, Cogent,
+# NASA, Elon University, Baidu, ecc. o IP senza ASN tracciabile).
+# Fonte: github.com/OpenFilters/internet-scanners, incrociato con asn-blocklist.txt il 2026-08-15.
+# Formato: un IP per riga, commento = scanner + org (se nota).
+
+# --- fofa ---
+128.102.102.1  # AS270 - National Aeronautics and Space Administration, US
+152.197.214.0  # UUNET - Verizon Business, US
+152.198.180.15  # UUNET - Verizon Business, US
+152.198.180.41  # UUNET - Verizon Business, US
+152.198.181.127  # UUNET - Verizon Business, US
+152.198.242.233  # UUNET - Verizon Business, US
+152.33.61.233  # ELONU-AS - Elon University, US
+154.39.47.206  # COGENT-174 - Cogent Communications, LLC, US
+154.39.47.248  # COGENT-174 - Cogent Communications, LLC, US
+154.81.239.52  # Mobilink-AS-PK - PMCL /LDI IP TRANSIT, PK
+154.85.60.72  # Baidu - Beijing Baidu Netcom Science and Technology Co., Ltd., CN
+156.232.52.144  # NEO-FIBER-01 - NeoFiber Communications inc., US
+165.111.88.17  # org sconosciuta/no ASN
+45.142.154.100  # org sconosciuta/no ASN
+45.142.154.101  # org sconosciuta/no ASN
+45.142.154.102  # org sconosciuta/no ASN
+45.142.154.103  # org sconosciuta/no ASN
+45.142.154.104  # org sconosciuta/no ASN
+45.142.154.105  # org sconosciuta/no ASN
+45.142.154.106  # org sconosciuta/no ASN
+45.142.154.107  # org sconosciuta/no ASN
+45.142.154.108  # org sconosciuta/no ASN
+45.142.154.109  # org sconosciuta/no ASN
+45.142.154.110  # org sconosciuta/no ASN
+45.142.154.111  # org sconosciuta/no ASN
+45.142.154.112  # org sconosciuta/no ASN
+45.142.154.113  # org sconosciuta/no ASN
+45.142.154.114  # org sconosciuta/no ASN
+45.142.154.115  # org sconosciuta/no ASN
+45.142.154.116  # org sconosciuta/no ASN
+45.142.154.12  # org sconosciuta/no ASN
+45.142.154.13  # org sconosciuta/no ASN
+45.142.154.14  # org sconosciuta/no ASN
+45.142.154.15  # org sconosciuta/no ASN
+45.142.154.16  # org sconosciuta/no ASN
+45.142.154.17  # org sconosciuta/no ASN
+45.142.154.18  # org sconosciuta/no ASN
+45.142.154.19  # org sconosciuta/no ASN
+45.142.154.20  # org sconosciuta/no ASN
+45.142.154.21  # org sconosciuta/no ASN
+45.142.154.22  # org sconosciuta/no ASN
+45.142.154.23  # org sconosciuta/no ASN
+45.142.154.24  # org sconosciuta/no ASN
+45.142.154.29  # org sconosciuta/no ASN
+45.142.154.30  # org sconosciuta/no ASN
+45.142.154.31  # org sconosciuta/no ASN
+45.142.154.32  # org sconosciuta/no ASN
+45.142.154.33  # org sconosciuta/no ASN
+45.142.154.34  # org sconosciuta/no ASN
+45.142.154.35  # org sconosciuta/no ASN
+45.142.154.36  # org sconosciuta/no ASN
+45.142.154.37  # org sconosciuta/no ASN
+45.142.154.38  # org sconosciuta/no ASN
+45.142.154.39  # org sconosciuta/no ASN
+45.142.154.40  # org sconosciuta/no ASN
+45.142.154.41  # org sconosciuta/no ASN
+45.142.154.42  # org sconosciuta/no ASN
+45.142.154.43  # org sconosciuta/no ASN
+45.142.154.44  # org sconosciuta/no ASN
+45.142.154.45  # org sconosciuta/no ASN
+45.142.154.46  # org sconosciuta/no ASN
+45.142.154.47  # org sconosciuta/no ASN
+45.142.154.49  # org sconosciuta/no ASN
+45.142.154.51  # org sconosciuta/no ASN
+45.142.154.52  # org sconosciuta/no ASN
+45.142.154.53  # org sconosciuta/no ASN
+45.142.154.54  # org sconosciuta/no ASN
+45.142.154.57  # org sconosciuta/no ASN
+45.142.154.58  # org sconosciuta/no ASN
+45.142.154.59  # org sconosciuta/no ASN
+45.142.154.88  # org sconosciuta/no ASN
+45.142.154.89  # org sconosciuta/no ASN
+45.142.154.90  # org sconosciuta/no ASN
+45.142.154.91  # org sconosciuta/no ASN
+45.142.154.92  # org sconosciuta/no ASN
+45.142.154.93  # org sconosciuta/no ASN
+45.142.154.94  # org sconosciuta/no ASN
+45.142.154.95  # org sconosciuta/no ASN
+45.142.154.96  # org sconosciuta/no ASN
+45.142.154.97  # org sconosciuta/no ASN
+# --- quake ---
+106.63.26.139  # CHINATELECOM-IDC-BTHBD-AP - China Telecom Beijing Tianjin Hebei Big Data Industry Park Branch, CN
+106.63.26.157  # CHINATELECOM-IDC-BTHBD-AP - China Telecom Beijing Tianjin Hebei Big Data Industry Park Branch, CN
+# --- shodan ---
+185.142.236.34  # org sconosciuta/no ASN
+185.142.236.35  # org sconosciuta/no ASN
+185.142.236.36  # org sconosciuta/no ASN
+185.142.236.38  # org sconosciuta/no ASN
+185.142.236.40  # org sconosciuta/no ASN
+185.142.236.41  # org sconosciuta/no ASN
+185.142.236.43  # org sconosciuta/no ASN
+185.142.239.16  # org sconosciuta/no ASN
+185.165.190.17  # org sconosciuta/no ASN
+185.165.190.34  # org sconosciuta/no ASN
+185.165.191.26  # org sconosciuta/no ASN
+185.165.191.27  # org sconosciuta/no ASN
+195.144.21.56  # org sconosciuta/no ASN
+207.90.244.0  # COGENT-174 - Cogent Communications, LLC, US
+216.117.2.176  # CONE - CyrusOne LLC, US
