@@ -819,9 +819,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ content: readFleetFile("asn-blocklist.txt") });
   });
 
+  // Un formato rotto o un duplicato silenzioso qui non e' cosmetico: il file va
+  // dritto in `/etc/asn-blocklist.txt` su 53 VPS e rigenera un ipset da centinaia
+  // di migliaia di prefissi — un ASN scritto male puo' passare inosservato al
+  // parser bash lato agent (skip silenzioso della riga) invece di bloccare quello
+  // che doveva. Meglio rifiutare qui, prima di toccare la fleet, con l'errore
+  // preciso (riga + motivo) invece di scoprirlo dopo da un ASN "mancante".
+  function validateAsnBlocklist(content: string): string[] {
+    const errors: string[] = [];
+    const seen = new Map<string, number>();
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const raw = lines[i];
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const match = line.match(/^(AS\d+)(?:\s|$)/);
+      if (!match) {
+        errors.push(`riga ${i + 1}: formato non valido ("${raw.trim().slice(0, 60)}") — atteso "AS<numero>  # descrizione"`);
+        continue;
+      }
+      const asn = match[1];
+      if (seen.has(asn)) {
+        errors.push(`riga ${i + 1}: ${asn} duplicato (gia' presente alla riga ${seen.get(asn)})`);
+        continue;
+      }
+      seen.set(asn, i + 1);
+    }
+    return errors;
+  }
+
   app.post("/api/fleet/asn/blocklist", requireAuth, requireAdmin, async (req, res) => {
     const { content } = req.body;
     if (typeof content !== "string") return res.status(400).json({ error: "content required" });
+    const validationErrors = validateAsnBlocklist(content);
+    if (validationErrors.length > 0) {
+      return res.status(400).json({ error: "Blocklist non valida, nessuna modifica applicata", validationErrors });
+    }
     writeFleetFile("asn-blocklist.txt", content);
     // Push file to all eligible VPS, then trigger update-asn-block.sh.
     // dynamoxc keeps a dedicated ASN blocklist and must not receive fleet updates.
