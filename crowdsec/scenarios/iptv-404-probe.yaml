@@ -1,8 +1,9 @@
 type: leaky
 name: local/iptv-404-probe
-description: "Path enumeration: IP riceve molti 404 — scanner che enumera path"
+description: "Path enumeration: IP riceve molti 404 su path DISTINTI — scanner che enumera path, non un client che ritenta lo stesso endpoint rotto"
 filter: "evt.Meta.log_type == 'http_access-log' and evt.Parsed.status == '404'"
 groupby: "evt.Parsed.remote_addr"
+distinct: "evt.Meta.http_path"
 capacity: 10
 leakspeed: "30s"
 blackhole: "6h"
