@@ -10,9 +10,9 @@ from typing import Dict, Tuple
 
 LOGFILE = os.environ.get("LOGFILE", "/var/log/nginx/access.log")
 
-MAX_USERNAME = int(os.environ.get("MAX_USERNAME", "3"))
-WINDOW_SECONDS = int(os.environ.get("WINDOW_SECONDS", "21600"))
-BAN_SECONDS = int(os.environ.get("BAN_SECONDS", "604800"))
+MAX_USERNAME = int(os.environ.get("MAX_USERNAME", "4"))
+WINDOW_SECONDS = int(os.environ.get("WINDOW_SECONDS", "3600"))
+BAN_SECONDS = int(os.environ.get("BAN_SECONDS", "432000"))
 
 BAN_SET = os.environ.get("BAN_SET", "iptv_ban")
 WL_SET = os.environ.get("WL_SET", "iptv_whitelist")
@@ -194,7 +194,7 @@ def log_ban_to_file(ip: str) -> None:
         handle.write(f"DATA: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         handle.write(f"IP BANNATO: {ip}\n")
         handle.write(
-            f"FINESTRA: 6h | BAN: 7d | SOGLIA: >{MAX_USERNAME} username diverse\n"
+            f"FINESTRA: {WINDOW_SECONDS // 3600}h | BAN: {BAN_SECONDS // 86400}d | SOGLIA: >{MAX_USERNAME} username diverse\n"
         )
         handle.write(
             "Righe COMPLETE che hanno scatenato il ban (una per username distinta):\n"
