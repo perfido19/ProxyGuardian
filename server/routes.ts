@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { totalmem, freemem, cpus } from "os";
-import { execSync, execFile, execFileSync } from "child_process";
+import { execSync, execFile, execFileSync, spawnSync } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { randomBytes } from "crypto";
@@ -79,6 +79,22 @@ function deprovisionCrowdsecCentral(vpsId: string): void {
   const bouncerName = crowdsecBouncerName(vpsId);
   try { execFileSync("cscli", ["machines", "delete", login], { timeout: 10000, stdio: "ignore" }); } catch {}
   try { execFileSync("cscli", ["bouncers", "delete", bouncerName], { timeout: 10000, stdio: "ignore" }); } catch {}
+}
+
+// Cancella la decisione direttamente sul LAPI centrale (gira sul dashboard, che e'
+// il LAPI). Copre qualsiasi machine registrata li' — inclusa quelle senza agent
+// ProxyGuardian (es. main backend) che il giro per-VPS di /api/crowdsec/unban
+// non raggiungerebbe mai perche' non sono in vps.json.
+function unbanFromCentralLapi(ip: string): { ok: boolean; deleted: number; error?: string } {
+  // cscli logga "N decision(s) deleted" su stderr (logrus), non stdout: serve
+  // spawnSync per catturarli entrambi, execFileSync ritorna solo stdout.
+  const r = spawnSync("cscli", ["decisions", "delete", "--ip", ip], { timeout: 10000, encoding: "utf-8" });
+  const combined = (r.stdout || "") + (r.stderr || "");
+  const m = combined.match(/(\d+)\s+decision\(s\)\s+deleted/i);
+  if (r.status !== 0 && !m) {
+    return { ok: false, deleted: 0, error: combined.slice(0, 200) || r.error?.message };
+  }
+  return { ok: true, deleted: m ? parseInt(m[1], 10) : 0 };
 }
 const DEPLOY_AGENT_GIT_REF = process.env.DEPLOY_AGENT_GIT_REF?.trim() || "main";
 const DEPLOY_VPS_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 .()_-]{0,79}$/;
@@ -1388,7 +1404,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }));
 
     const data = results.map(r => r.status === "fulfilled" ? r.value : { ok: false, actions: [] as string[] });
-    res.json({ ok: data.filter(d => d.ok).length, fail: data.filter(d => !d.ok).length, results: data });
+    const centralLapi = unbanFromCentralLapi(ip);
+    res.json({ ok: data.filter(d => d.ok).length, fail: data.filter(d => !d.ok).length, results: data, centralLapi });
   });
 
   app.get("/api/fleet/banned-ips/stream", requireAuth, async (req, res) => {
@@ -2025,7 +2042,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return { vpsId: vps.id, vpsName: vps.name, ok: false, reason: e.message };
       }
     }));
-    res.json(results.map(r => r.status === "fulfilled" ? r.value : { ok: false }));
+    const perVps = results.map(r => r.status === "fulfilled" ? r.value : { ok: false });
+    const centralLapi = unbanFromCentralLapi(ip);
+    res.json({ perVps, centralLapi });
   });
 
   app.get("/api/fleet/crowdsec/metrics", requireAuth, async (_req, res) => {
