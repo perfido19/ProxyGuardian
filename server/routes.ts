@@ -2197,6 +2197,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
             catch { return null; }
           })()
         : null;
+      // Scenari custom (local/* + fork tainted di community come http-bad-user-agent):
+      // vivono solo su crowdsec/scenarios/, il deploy installava finora solo le
+      // collection hub — un VPS nuovo nasceva scoperto finche' qualcuno non si
+      // ricordava di ripusharli a mano (successo con newgruppo3 il 2026-08-17).
+      const crowdsecCustomScenarios: Array<{ name: string; content: string }> = installCrowdSec
+        ? (() => {
+            const dir = join(process.cwd(), "crowdsec", "scenarios");
+            try {
+              return readdirSync(dir)
+                .filter(f => f.endsWith(".yaml"))
+                .map(f => ({ name: f.replace(/\.yaml$/, ""), content: readFileSync(join(dir, f), "utf-8") }));
+            } catch { return []; }
+          })()
+        : [];
 
       if (!rawName || !DEPLOY_VPS_NAME_RE.test(rawName)) {
         return res.status(400).json({ error: "Nome VPS non valido: usa solo lettere, numeri, spazi e .()_-" });
@@ -2390,6 +2404,14 @@ cscli collections install crowdsecurity/nginx >/dev/null 2>&1 || warn "Collectio
 cscli scenarios install crowdsecurity/nginx-req-limit-exceeded >/dev/null 2>&1 || true
 cscli scenarios install crowdsecurity/http-probing >/dev/null 2>&1 || true
 
+# Scenari custom fleet (local/* + fork tainted di scenari community) — scritti
+# DOPO l'install hub cosi' un fork come http-bad-user-agent sovrascrive la
+# versione community e resta taintato (cscli hub upgrade non lo tocca piu').
+info "Installing custom fleet scenarios..."
+${crowdsecCustomScenarios.map((s, i) => `cat > /etc/crowdsec/scenarios/${s.name}.yaml << 'CSSCENEOF${i}'
+${s.content}
+CSSCENEOF${i}`).join("\n")}
+
 # Permessi pgagent per cscli/scenari gia' nel sudoers baseline (DEPLOY_AGENT_SUDOERS)
 
 ${crowdsecFleetWhitelist ? `cat > /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml << 'CSWLEOF'
@@ -2472,6 +2494,23 @@ systemctl start ipset-restore >/dev/null 2>&1 || true` : ""}
 ok "ipset tor_exit creato (popolamento al primo ciclo dashboard, entro 1h)"`
         : `# ── TOR EXIT BLOCK ────────────────────────────────────────
 info "Tor exit-node block disabilitato per questo deploy"`;
+
+      // Scanner block (Shodan/ZoomEye/FOFA/Quake): stessa logica del Tor exit block,
+      // stesso motivo per limitarsi all'ipset vuoto qui (l'agent calcola l'ancora
+      // vera sulla chain, un -A in bash finirebbe nel posto sbagliato). Sempre
+      // creato, non dietro un toggle — costa nulla vuoto, va popolato dalla
+      // dashboard con POST /api/fleet/scanner-block/push dopo aver aggiunto il VPS.
+      const scannerBlockSetup = `# ── SCANNER BLOCK ──────────────────────────────────────────
+info "Preparing scanner IP block (ipset vuoto, popolato dalla dashboard)..."
+touch /etc/ipset.conf
+ipset create scanner_block hash:ip family inet maxelem 65536 -exist
+ipset save > /etc/ipset.conf
+${(!installAsnBlock && !installTorBlock) ? `cat > /etc/systemd/system/ipset-restore.service << 'IPSETRESTOREEOF'
+${DEPLOY_IPSET_RESTORE_SERVICE}
+IPSETRESTOREEOF
+systemctl enable ipset-restore >/dev/null 2>&1 || true
+systemctl start ipset-restore >/dev/null 2>&1 || true` : ""}
+ok "ipset scanner_block creato — dopo aver aggiunto il VPS in dashboard, lancia il push da Fleet Config"`;
 
       const script = `#!/usr/bin/env bash
 # ╔══════════════════════════════════════════════════════════╗
@@ -2708,6 +2747,8 @@ ${antiIptvSetup}
 ${crowdSecSetup}
 
 ${torBlockSetup}
+
+${scannerBlockSetup}
 
 # ── SYSCTL ─────────────────────────────────────────────────
 info "Applying sysctl settings..."
