@@ -219,11 +219,25 @@ function CountriesTab({ refVps, saveTarget, totalCount }: TabProps) {
 
 // ── ASN ────────────────────────────────────────────────────────────────────────
 
+function parseAsnConf(content: string): Array<{ number: string; description?: string }> {
+  return content.split("\n").map(line => {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) return null;
+    // Format: "12345 1; # Description" or "12345\t1; # Description"
+    const m = t.match(/^(\d+)\s+1;\s*(?:#\s*(.*))?$/);
+    if (!m) return null;
+    return { number: m[1], description: m[2] ? m[2].trim() : undefined };
+  }).filter(Boolean) as Array<{ number: string; description?: string }>;
+}
+
 function AsnTab({ refVps, saveTarget, totalCount }: TabProps) {
   const [asns, setAsns] = useState<Array<{ number: string; description?: string }>>([]);
   const [newAsn, setNewAsn] = useState(""); const [newDesc, setNewDesc] = useState("");
   const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
   const saveMutation = useSaveConfig("block_asn.conf", saveTarget);
 
   const { data: configData, isLoading } = useQuery<{ content: string }>({
@@ -234,15 +248,7 @@ function AsnTab({ refVps, saveTarget, totalCount }: TabProps) {
 
   useEffect(() => {
     if (configData) {
-      const parsed = configData.content.split("\n").map(line => {
-        const t = line.trim();
-        if (!t || t.startsWith("#")) return null;
-        // Format: "12345 1; # Description" or "12345\t1; # Description"
-        const m = t.match(/^(\d+)\s+1;\s*(?:#\s*(.*))?$/);
-        if (!m) return null;
-        return { number: m[1], description: m[2] ? m[2].trim() : undefined };
-      }).filter(Boolean) as Array<{ number: string; description?: string }>;
-      setAsns(parsed);
+      setAsns(parseAsnConf(configData.content));
       setHasChanges(false);
     }
   }, [configData]);
@@ -253,6 +259,29 @@ function AsnTab({ refVps, saveTarget, totalCount }: TabProps) {
       setAsns([...asns, { number: normalized, description: newDesc || undefined }]);
       setNewAsn(""); setNewDesc(""); setHasChanges(true);
     }
+  };
+
+  const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const parsed = parseAsnConf(String(reader.result || ""));
+      if (parsed.length === 0) {
+        toast({ title: "Nessun ASN trovato nel file", variant: "destructive" });
+        return;
+      }
+      const existing = new Set(asns.map(a => a.number));
+      const added = parsed.filter(a => !existing.has(a.number));
+      if (added.length > 0) {
+        setAsns([...asns, ...added]);
+        setHasChanges(true);
+      }
+      setImportResult(`${file.name}: ${added.length} nuovi ASN aggiunti (${parsed.length - added.length} già presenti)`);
+    };
+    reader.onerror = () => toast({ title: "Errore lettura file", variant: "destructive" });
+    reader.readAsText(file);
   };
 
   const handleSave = () => {
@@ -281,6 +310,11 @@ function AsnTab({ refVps, saveTarget, totalCount }: TabProps) {
           <Input placeholder="Numero ASN (es. 15169)" value={newAsn} onChange={e => setNewAsn(e.target.value.replace(/\D/g, ""))} className="md:col-span-2 font-mono" onKeyDown={e => e.key === "Enter" && addAsn()} />
           <Input placeholder="Descrizione (opzionale)" value={newDesc} onChange={e => setNewDesc(e.target.value)} />
           <Button onClick={addAsn}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <input ref={fileInputRef} type="file" accept=".conf,text/plain" className="hidden" onChange={handleFileImport} />
+          <Button variant="outline" onClick={() => fileInputRef.current?.click()}><FileText className="w-4 h-4 mr-1" />Sfoglia file .conf</Button>
+          {importResult && <span className="text-xs text-muted-foreground">{importResult}</span>}
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
