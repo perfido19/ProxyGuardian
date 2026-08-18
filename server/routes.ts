@@ -59,18 +59,41 @@ const CROWDSEC_LAPI_URL = process.env.CROWDSEC_LAPI_URL?.trim() || "http://100.1
 function crowdsecMachineName(vpsId: string): string { return `pg-${vpsId}-agent`; }
 function crowdsecBouncerName(vpsId: string): string { return `pg-${vpsId}-bouncer`; }
 
+// `cscli machines add --force` scrive SEMPRE /etc/crowdsec/local_api_credentials.yaml
+// sulla macchina su cui gira, anche quando lo scopo e' solo generare credenziali per
+// un'altra VPS remota — sovrascrive silenziosamente l'identita' del watcher locale
+// della dashboard. Non ha mai fatto crashare nulla finche' la machine scritta per
+// ultima esisteva ancora nel LAPI; il 2026-08-17 e' bastato cancellare una machine
+// di test per mandare crowdsec sulla dashboard in crash-loop (porta 8080 giu',
+// intera fleet senza LAPI per ore). Fix: salva/ripristina il file attorno alla chiamata.
+const DASHBOARD_LAPI_CREDS_PATH = "/etc/crowdsec/local_api_credentials.yaml";
+
+function withDashboardLapiCredsPreserved<T>(fn: () => T): T {
+  let backup: string | null = null;
+  try { backup = readFileSync(DASHBOARD_LAPI_CREDS_PATH, "utf-8"); } catch {}
+  try {
+    return fn();
+  } finally {
+    if (backup !== null) {
+      try { writeFileSync(DASHBOARD_LAPI_CREDS_PATH, backup, "utf-8"); } catch {}
+    }
+  }
+}
+
 // Esegue localmente (sul dashboard, dove gira il LAPI centrale) il provisioning
 // di machine + bouncer per un VPS, cosi' il suo CrowdSec/bouncer si registra
 // come client del LAPI centrale invece di girare come istanza isolata.
 function provisionCrowdsecCentral(vpsId: string): { url: string; login: string; password: string; bouncerKey: string } {
-  const login = crowdsecMachineName(vpsId);
-  const bouncerName = crowdsecBouncerName(vpsId);
-  const password = randomBytes(18).toString("base64").replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
-  try { execFileSync("cscli", ["machines", "delete", login], { timeout: 10000, stdio: "ignore" }); } catch {}
-  try { execFileSync("cscli", ["bouncers", "delete", bouncerName], { timeout: 10000, stdio: "ignore" }); } catch {}
-  execFileSync("cscli", ["machines", "add", login, "--password", password, "--url", CROWDSEC_LAPI_URL, "--force"], { timeout: 15000 });
-  const bouncerKey = execFileSync("cscli", ["bouncers", "add", bouncerName, "-o", "raw"], { timeout: 15000 }).toString().trim();
-  return { url: CROWDSEC_LAPI_URL, login, password, bouncerKey };
+  return withDashboardLapiCredsPreserved(() => {
+    const login = crowdsecMachineName(vpsId);
+    const bouncerName = crowdsecBouncerName(vpsId);
+    const password = randomBytes(18).toString("base64").replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
+    try { execFileSync("cscli", ["machines", "delete", login], { timeout: 10000, stdio: "ignore" }); } catch {}
+    try { execFileSync("cscli", ["bouncers", "delete", bouncerName], { timeout: 10000, stdio: "ignore" }); } catch {}
+    execFileSync("cscli", ["machines", "add", login, "--password", password, "--url", CROWDSEC_LAPI_URL, "--force"], { timeout: 15000 });
+    const bouncerKey = execFileSync("cscli", ["bouncers", "add", bouncerName, "-o", "raw"], { timeout: 15000 }).toString().trim();
+    return { url: CROWDSEC_LAPI_URL, login, password, bouncerKey };
+  });
 }
 
 // Rimuove machine + bouncer di un VPS dal LAPI centrale (chiamato su uninstall)
