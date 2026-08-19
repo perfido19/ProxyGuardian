@@ -1,6 +1,6 @@
 type: trigger
 name: local/anti-iptv-credential-sharing
-description: "Anti-IPTV detected credential sharing (same IP used 2+ different usernames in 6h)"
+description: "Anti-IPTV detected credential sharing (same IP used more distinct usernames than the configured MAX_USERNAME threshold in the 6h window)"
 filter: "evt.Meta.log_type == 'anti_iptv_ban'"
 groupby: "evt.Meta.source_ip"
 labels:

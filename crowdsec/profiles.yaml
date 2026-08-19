@@ -6,6 +6,14 @@ decisions:
    duration: 24h
 on_success: break
 ---
+name: anti_iptv_credential_sharing_remediation
+filters:
+ - Alert.Remediation == true && Alert.GetScope() == "Ip" && Alert.GetScenario() == "local/anti-iptv-credential-sharing"
+decisions:
+ - type: ban
+   duration: 168h
+on_success: break
+---
 name: default_ip_remediation
 #debug: true
 filters:

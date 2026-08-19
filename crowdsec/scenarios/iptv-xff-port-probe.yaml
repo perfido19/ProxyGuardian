@@ -1,0 +1,16 @@
+type: leaky
+name: local/iptv-xff-port-probe
+description: "X-Forwarded-For contiene una porta (formato ip:porta): nessun client/proxy legittimo lo scrive cosi', firma tipica di tool che incolla una lista proxy ip:porta nell'header"
+filter: |
+  evt.Meta.log_type == 'http_access-log' &&
+  (evt.Parsed.request contains 'player_api.php' or evt.Parsed.request contains 'get.php') &&
+  evt.Meta.xff_header != '' && evt.Meta.xff_header != '-' &&
+  evt.Meta.xff_header matches '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}:\\d{1,5}'
+groupby: "evt.Parsed.remote_addr"
+capacity: 2
+leakspeed: "10m"
+blackhole: "6h"
+labels:
+  service: http
+  type: bruteforce
+  remediation: true

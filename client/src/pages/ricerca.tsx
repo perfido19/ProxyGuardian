@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { LoadingState } from "@/components/loading-state";
 import { Search, Shield, FileText, AlertTriangle, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -17,6 +18,7 @@ import { useIpBatch } from "@/hooks/use-ip-batch";
 
 interface BulkResult { vpsId: string; vpsName: string; success: boolean; data?: any; error?: string; }
 interface BannedIp { ip: string; jail: string; banTime?: string; }
+interface GrepEntry { id: number; message: string; level: string }
 
 const LOG_TYPES = [
   { value: "nginx_access", label: "Nginx Access" },
@@ -35,6 +37,7 @@ function BannedIpsTab() {
   const [selectedVps, setSelectedVps] = useState("all");
   const [unbanning, setUnbanning] = useState<string | null>(null);
   const [page, setPage] = useState(0);
+  const [logTarget, setLogTarget] = useState<{ vpsId: string; vpsName: string; ip: string } | null>(null);
   const { data: vpsList } = useVpsList();
   const { data: healthMap } = useVpsHealth();
   const onlineVps = (vpsList || []).filter(v => healthMap?.[v.id]);
@@ -183,6 +186,16 @@ function BannedIpsTab() {
   const onlineCount = useMemo(() => activeResults.filter(r => r.success).length, [activeResults]);
   const streamProgress = total > 0 ? Math.round((loaded / total) * 100) : 0;
 
+  const { data: banLogEntries, isLoading: banLogLoading, error: banLogError } = useQuery<GrepEntry[]>({
+    queryKey: ["ban-log", logTarget?.vpsId, logTarget?.ip],
+    queryFn: async () => {
+      const r = await apiRequest("GET", `/api/vps/${logTarget!.vpsId}/proxy/api/grep?q=${encodeURIComponent(logTarget!.ip)}&type=fail2ban`);
+      const data = await r.json();
+      return data.entries ?? [];
+    },
+    enabled: !!logTarget,
+  });
+
   return (
     <div className="space-y-4 pt-4">
       <div className="flex items-center gap-3 flex-wrap">
@@ -268,7 +281,13 @@ function BannedIpsTab() {
                         <TableCell><IpCell ip={b.ip} className="text-red-400 font-semibold" /></TableCell>
                         <TableCell><Badge variant="outline" className="font-mono text-xs">{b.jail}</Badge></TableCell>
                         <TableCell className="text-sm text-muted-foreground">{b.vpsName}</TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-right space-x-2">
+                          <Button
+                            size="sm" variant="outline"
+                            onClick={() => setLogTarget({ vpsId: b.vpsId, vpsName: b.vpsName, ip: b.ip })}
+                          >
+                            <FileText className="w-3.5 h-3.5 mr-1" /> Log
+                          </Button>
                           <Button
                             size="sm" variant="outline"
                             disabled={unbanning === `${b.vpsId}-${b.ip}`}
@@ -296,6 +315,30 @@ function BannedIpsTab() {
           )}
         </>
       )}
+
+      <Dialog open={!!logTarget} onOpenChange={open => !open && setLogTarget(null)}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-mono">{logTarget?.ip}</DialogTitle>
+            <DialogDescription>
+              fail2ban.log — {logTarget?.vpsName}
+            </DialogDescription>
+          </DialogHeader>
+          {banLogLoading ? (
+            <LoadingState message="Ricerca nel log..." />
+          ) : banLogError ? (
+            <p className="text-sm text-red-400">Errore nel recupero del log</p>
+          ) : !banLogEntries || banLogEntries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nessuna riga trovata (log ruotato o troppo vecchio)</p>
+          ) : (
+            <div className="space-y-1 font-mono text-xs">
+              {banLogEntries.map(e => (
+                <div key={e.id} className="p-2 rounded bg-muted/50 break-all">{e.message}</div>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
