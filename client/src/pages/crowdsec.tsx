@@ -72,6 +72,58 @@ labels:
 
 // ─── Overview tab ─────────────────────────────────────────────────────────────
 
+interface MainCrowdsecSummary {
+  installed: boolean;
+  crowdsecActive: boolean;
+  bouncerActive: boolean;
+  activeDecisions: number;
+  scenarios: string[];
+}
+
+function MainBackendCard() {
+  const { data, isLoading, refetch, isFetching } = useQuery<MainCrowdsecSummary>({
+    queryKey: ["main-crowdsec-summary"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/main/crowdsec-summary"); return r.json(); },
+    refetchInterval: 60000,
+  });
+
+  return (
+    <Card className={`border ${data?.crowdsecActive && data?.bouncerActive ? "border-green-500/30 bg-green-500/5" : "border-orange-500/30 bg-orange-500/5"}`}>
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm font-mono">Main Backend</span>
+            <span className="text-xs text-muted-foreground">(gestito via SSH, non nella fleet agent)</span>
+          </div>
+          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => refetch()}>
+            <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />Caricamento...
+          </div>
+        ) : (
+          <div className="flex gap-1.5 flex-wrap items-center">
+            <Badge variant="outline" className={`text-xs ${data?.crowdsecActive ? "text-green-400 border-green-500/30" : "text-orange-400 border-orange-500/30"}`}>
+              daemon {data?.crowdsecActive ? "up" : "down"}
+            </Badge>
+            <Badge variant="outline" className={`text-xs ${data?.bouncerActive ? "text-green-400 border-green-500/30" : "text-orange-400 border-orange-500/30"}`}>
+              bouncer {data?.bouncerActive ? "up" : "down"}
+            </Badge>
+            {(data?.activeDecisions ?? 0) > 0 && (
+              <Badge className="text-xs bg-destructive text-white">{data?.activeDecisions} ban</Badge>
+            )}
+            {data?.scenarios?.map(s => (
+              <Badge key={s} variant="secondary" className="text-xs font-mono">{s.replace(/^local\//, "")}</Badge>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function OverviewTab() {
   const { toast } = useToast();
   const { data, isLoading, refetch } = useQuery<VpsSummary[]>({
@@ -214,6 +266,8 @@ function OverviewTab() {
         </Button>
       </div>
 
+      <MainBackendCard />
+
       {isLoading ? (
         <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center">
           <Loader2 className="w-4 h-4 animate-spin" />Caricamento...
@@ -325,6 +379,12 @@ function DecisioniTab() {
     refetchInterval: 30000,
   });
 
+  const { data: mainData, refetch: refetchMain } = useQuery<FleetDecisionGroup>({
+    queryKey: ["main-crowdsec-decisions"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/main/crowdsec-decisions"); return r.json(); },
+    refetchInterval: 30000,
+  });
+
   // Deduplicate decisions by ID (all VPS share same LAPI)
   const seen = new Set<number>();
   const allDecisions: (Decision & { vpsName: string })[] = [];
@@ -335,6 +395,12 @@ function DecisioniTab() {
         seen.add(d.id);
         allDecisions.push({ ...d, vpsName: group.vpsName });
       }
+    }
+  }
+  for (const d of mainData?.decisions || []) {
+    if (!seen.has(d.id)) {
+      seen.add(d.id);
+      allDecisions.push({ ...d, vpsName: "Main Backend" });
     }
   }
 
@@ -350,13 +416,19 @@ function DecisioniTab() {
   });
 
   const unbanMutation = useMutation({
-    mutationFn: async (ip: string) => {
-      const r = await apiRequest("POST", "/api/fleet/crowdsec/unban", { ip });
+    mutationFn: async (d: Decision & { vpsName: string }) => {
+      if (d.vpsName === "Main Backend") {
+        const jail = (d.scenario || "").replace(/^local\//, "");
+        const r = await apiRequest("POST", "/api/main/unban", { ip: d.value, jail, type: "crowdsec" });
+        return r.json();
+      }
+      const r = await apiRequest("POST", "/api/fleet/crowdsec/unban", { ip: d.value });
       return r.json();
     },
-    onSuccess: () => {
+    onSuccess: (_data, d) => {
       queryClient.invalidateQueries({ queryKey: ["fleet-crowdsec-decisions"] });
-      toast({ title: "IP sbloccato da CrowdSec fleet" });
+      queryClient.invalidateQueries({ queryKey: ["main-crowdsec-decisions"] });
+      toast({ title: `IP sbloccato${d.vpsName === "Main Backend" ? " su Main Backend" : " da CrowdSec fleet"}` });
     },
     onError: (e: any) => toast({ title: "Errore unban", description: e.message, variant: "destructive" }),
   });
@@ -370,7 +442,7 @@ function DecisioniTab() {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">{allDecisions.length} ban totali</span>
-          <Button size="sm" variant="outline" onClick={() => refetch()}>
+          <Button size="sm" variant="outline" onClick={() => { refetch(); refetchMain(); }}>
             <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
           </Button>
         </div>
@@ -393,6 +465,7 @@ function DecisioniTab() {
                 <TableHead>ASN</TableHead>
                 <TableHead>Scenario</TableHead>
                 <TableHead>Origine</TableHead>
+                <TableHead>VPS</TableHead>
                 <TableHead>Tipo</TableHead>
                 <TableHead>Scadenza</TableHead>
                 <TableHead className="text-right">Azioni</TableHead>
@@ -407,13 +480,20 @@ function DecisioniTab() {
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate font-mono" title={d.scenario}>{d.scenario || "—"}</TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{d.origin}</Badge></TableCell>
+                  <TableCell>
+                    {d.vpsName === "Main Backend" ? (
+                      <Badge className="text-xs bg-orange-500/20 text-orange-400 border-orange-500/30" variant="outline">Main Backend</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">{d.vpsName}</span>
+                    )}
+                  </TableCell>
                   <TableCell><Badge className="bg-destructive/80 text-white text-xs">{d.type}</Badge></TableCell>
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{d.duration || d.until || "—"}</TableCell>
                   <TableCell className="text-right">
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => unbanMutation.mutate(d.value)}
+                      onClick={() => unbanMutation.mutate(d)}
                       disabled={unbanMutation.isPending}
                       className="text-xs"
                     >

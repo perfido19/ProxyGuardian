@@ -1475,6 +1475,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const MAIN_HOST = process.env.MAIN_HOST || "";
   const MAIN_SSH_PASS = process.env.MAIN_SSH_PASS || "";
   const MAIN_JAILS = ["player-api-stuffing", "player-api", "panel-api", "nginx-abuse", "404-0", "block22", "sshd"];
+  // local/xtream-username-multi-ip riattivato 2026-08-19 con soglia dati-informata (max 2 IP/username osservato su clienti reali, soglia 3)
+  const MAIN_CROWDSEC_SCENARIOS = [
+    "local/xtream-ip-multi-username",
+    "local/xtream-live-categories-probe",
+    "local/xtream-username-multi-ip",
+  ];
 
   async function mainSsh(cmd: string, timeoutMs = 10000): Promise<string> {
     if (!MAIN_HOST || !MAIN_SSH_PASS) throw new Error("MAIN_HOST/MAIN_SSH_PASS non configurati in .env");
@@ -1491,7 +1497,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const parseIps = (raw: string) =>
         raw.split("\n").map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s));
 
-      const [f2bResults, manualRaw, f2bChainRaw, iptvRaw] = await Promise.allSettled([
+      const [f2bResults, manualRaw, f2bChainRaw, iptvRaw, crowdsecResults] = await Promise.allSettled([
         Promise.allSettled(MAIN_JAILS.map(async jail => {
           const raw = await mainSsh(`fail2ban-client get ${jail} banlist 2>/dev/null || echo ""`);
           return { name: jail, ips: raw.split(/[\s,]+/).map((s: string) => s.trim()).filter((s: string) => /^\d+\.\d+\.\d+\.\d+$/.test(s)) };
@@ -1499,9 +1505,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         mainSsh(`iptables -S INPUT | grep ' -j DROP' | grep -oE '([0-9]{1,3}\\.){3}[0-9]{1,3}' | sort -u`),
         mainSsh(`iptables -S | awk '/^-A f2b-/{chain=$2; for(i=1;i<=NF;i++) if($i=="-s") ip=$(i+1); if(chain&&ip) print chain":"ip; chain=""; ip=""}'`),
         mainSsh(`ipset list iptv_ban 2>/dev/null | grep -E '^[0-9]+\\.' | awk '{print $1}' | sort -u`),
+        Promise.allSettled(MAIN_CROWDSEC_SCENARIOS.map(async scenario => {
+          const raw = await mainSsh(`cscli decisions list -s ${scenario} -o json 2>/dev/null || echo "[]"`);
+          let alerts: any[] = [];
+          try { alerts = JSON.parse(raw) || []; } catch { alerts = []; }
+          const ips = new Set<string>();
+          for (const item of alerts) {
+            const decs = Array.isArray(item?.decisions) ? item.decisions : [];
+            for (const dec of decs) {
+              if (dec?.value && /^\d{1,3}(\.\d{1,3}){3}$/.test(dec.value)) ips.add(dec.value);
+            }
+          }
+          return { name: scenario, ips: [...ips], jailKey: scenario.replace(/^local\//, "") };
+        })),
       ]);
 
-      type MainJailEntry = { name: string; ips: string[]; type: "f2b" | "iptables-chain" | "iptables-manual" | "iptv_ban"; jailKey?: string };
+      type MainJailEntry = { name: string; ips: string[]; type: "f2b" | "iptables-chain" | "iptables-manual" | "iptv_ban" | "crowdsec"; jailKey?: string };
       const jails: MainJailEntry[] = [];
 
       // fail2ban managed bans
@@ -1541,6 +1560,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (ips.length > 0) jails.push({ name: "iptv_ban", ips, type: "iptv_ban" });
       }
 
+      // CrowdSec decisions (scenari xtream-*) — enforcement via nginx drop, non iptables
+      if (crowdsecResults.status === "fulfilled") {
+        for (const r of crowdsecResults.value) {
+          if (r.status === "fulfilled" && r.value.ips.length > 0)
+            jails.push({ ...r.value, type: "crowdsec" });
+        }
+      }
+
       res.json({ jails, updatedAt: new Date().toISOString() });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1552,8 +1579,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
     // strict: only lowercase alphanumeric, hyphen, underscore — no spaces/parens used in shell
     if (!jail || !/^[a-z0-9_-]{1,64}$/.test(jail)) return res.status(400).json({ error: "Jail non valida" });
-    const validTypes = ["f2b", "iptables-chain", "iptables-manual", "iptv_ban"] as const;
+    const validTypes = ["f2b", "iptables-chain", "iptables-manual", "iptv_ban", "crowdsec"] as const;
     if (!validTypes.includes(type)) return res.status(400).json({ error: "Tipo non valido" });
+    if (type === "crowdsec" && !MAIN_CROWDSEC_SCENARIOS.includes("local/" + jail)) {
+      return res.status(400).json({ error: "Scenario CrowdSec non valido" });
+    }
     try {
       if (type === "iptables-manual") {
         // ip validated above, no user-controlled shell metacharacters
@@ -1564,10 +1594,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await mainSsh(`iptables -D ${chain} -s ${ip}/32 -j DROP 2>/dev/null; true`);
       } else if (type === "f2b") {
         await mainSsh(`fail2ban-client set ${jail} unbanip ${ip} 2>/dev/null; true`);
+      } else if (type === "crowdsec") {
+        // jail validato contro whitelist MAIN_CROWDSEC_SCENARIOS sopra
+        await mainSsh(`cscli decisions delete -i ${ip} -s local/${jail} 2>/dev/null; true`);
       } else {
         return res.status(400).json({ error: "Tipo non supportato per unban" });
       }
       res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/main/crowdsec-summary", requireAuth, async (_req, res) => {
+    try {
+      const [crowdsecActiveRaw, bouncerActiveRaw, decisionsResults] = await Promise.allSettled([
+        mainSsh(`systemctl is-active crowdsec 2>/dev/null || true`),
+        mainSsh(`systemctl is-active crowdsec-firewall-bouncer 2>/dev/null || true`),
+        Promise.allSettled(MAIN_CROWDSEC_SCENARIOS.map(async scenario => {
+          const raw = await mainSsh(`cscli decisions list -s ${scenario} -o json 2>/dev/null || echo "[]"`);
+          let alerts: any[] = [];
+          try { alerts = JSON.parse(raw) || []; } catch { alerts = []; }
+          let count = 0;
+          for (const item of alerts) count += Array.isArray(item?.decisions) ? item.decisions.length : 0;
+          return count;
+        })),
+      ]);
+
+      const crowdsecActive = crowdsecActiveRaw.status === "fulfilled" && crowdsecActiveRaw.value.trim() === "active";
+      const bouncerActive = bouncerActiveRaw.status === "fulfilled" && bouncerActiveRaw.value.trim() === "active";
+      let activeDecisions = 0;
+      if (decisionsResults.status === "fulfilled") {
+        for (const r of decisionsResults.value) if (r.status === "fulfilled") activeDecisions += r.value;
+      }
+
+      res.json({
+        vpsId: "main",
+        vpsName: "Main Backend",
+        installed: true,
+        crowdsecActive,
+        bouncerActive,
+        activeDecisions,
+        scenarios: MAIN_CROWDSEC_SCENARIOS,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/main/crowdsec-decisions", requireAuth, async (_req, res) => {
+    try {
+      const results = await Promise.allSettled(MAIN_CROWDSEC_SCENARIOS.map(async scenario => {
+        const raw = await mainSsh(`cscli decisions list -s ${scenario} -o json 2>/dev/null || echo "[]"`);
+        let alerts: any[] = [];
+        try { alerts = JSON.parse(raw) || []; } catch { alerts = []; }
+        const decisions: any[] = [];
+        for (const alert of alerts) {
+          const src = alert?.source || {};
+          for (const dec of (Array.isArray(alert?.decisions) ? alert.decisions : [])) {
+            decisions.push({
+              id: dec.id,
+              origin: dec.origin,
+              scenario: dec.scenario || scenario,
+              scope: dec.scope,
+              value: dec.value,
+              type: dec.type,
+              duration: dec.duration,
+              as_name: src.as_name,
+              as_number: src.as_number,
+              country: src.cn,
+            });
+          }
+        }
+        return decisions;
+      }));
+      const decisions = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
+      res.json({ vpsId: "main", vpsName: "Main Backend", decisions, skipped: false });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

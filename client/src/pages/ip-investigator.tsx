@@ -114,7 +114,7 @@ function UsernameStatsTable({ stats }: { stats: Record<string, Record<string, nu
 interface MainJail {
   name: string;
   ips: string[];
-  type: "f2b" | "iptables-chain" | "iptables-manual" | "iptv_ban";
+  type: "f2b" | "iptables-chain" | "iptables-manual" | "iptv_ban" | "crowdsec";
   jailKey?: string;
 }
 
@@ -179,7 +179,7 @@ function MainBansSection() {
               Main Backend — IP Bannati
             </CardTitle>
             <CardDescription className="text-xs mt-0.5">
-              Fail2ban + iptables su main backend
+              Fail2ban + iptables + CrowdSec su main backend
               {data?.updatedAt && (
                 <span className="ml-2 opacity-60">
                   Aggiornato: {new Date(data.updatedAt).toLocaleTimeString("it-IT")}
