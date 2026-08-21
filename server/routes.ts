@@ -1490,11 +1490,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
       .filter(Boolean)
       .flatMap((r: any) => r.banned.map((b: any) => ({ ip: b.ip, jail: b.jail, banTime: b.banTime, vpsId: r.vpsId, vpsName: r.vpsName })));
 
+    // Controlli aggiuntivi (ASN blocklist, Tor exit, CrowdSec) - solo sui VPS dove
+    // l'username ha davvero attivita', per non fare 3x55 chiamate a vuoto.
+    const extraChecks = await Promise.allSettled(hits.map(async (hit) => {
+      const vps = vpsList.find(v => v.id === hit.vpsId);
+      if (!vps) return null;
+      const ipsHere = Object.keys(hit.ipStats);
+
+      const [asnResults, torData, crowdsecData] = await Promise.allSettled([
+        Promise.allSettled(ipsHere.map(async ip => {
+          try { const r = await agentPost(vps, "/api/asn/test-ip", { ip }, 8000); return { ip, blocked: !!r.blocked }; }
+          catch { return { ip, blocked: false }; }
+        })),
+        agentGet(vps, "/api/ipset/tor_exit?limit=50000", 10000).catch(() => null),
+        agentGet(vps, "/api/crowdsec/decisions", 10000).catch(() => null),
+      ]);
+
+      const asn = asnResults.status === "fulfilled"
+        ? asnResults.value.map(r => r.status === "fulfilled" ? r.value : null).filter(Boolean) as Array<{ ip: string; blocked: boolean }>
+        : [];
+      const torMembers: string[] = torData.status === "fulfilled" && torData.value ? (torData.value.members || []) : [];
+      const tor = ipsHere.filter(ip => torMembers.some((m: string) => m === ip || m.startsWith(ip + " ")));
+      const crowdsecDecisions: any[] = crowdsecData.status === "fulfilled" && crowdsecData.value ? crowdsecData.value : [];
+      const crowdsec = ipsHere
+        .filter(ip => crowdsecDecisions.some(d => d.value === ip))
+        .map(ip => {
+          const d = crowdsecDecisions.find(dd => dd.value === ip);
+          return { ip, scenario: d?.scenario || d?.type || "sconosciuto", duration: d?.duration || null };
+        });
+
+      return { vpsId: vps.id, vpsName: vps.name, asnBlocked: asn.filter(a => a.blocked).map(a => a.ip), torBlocked: tor, crowdsecBlocked: crowdsec };
+    }));
+
+    const extra = extraChecks.map(r => r.status === "fulfilled" ? r.value : null).filter(Boolean) as any[];
+    const asnBans = extra.flatMap(e => e.asnBlocked.map((ip: string) => ({ ip, vpsId: e.vpsId, vpsName: e.vpsName })));
+    const torBans = extra.flatMap(e => e.torBlocked.map((ip: string) => ({ ip, vpsId: e.vpsId, vpsName: e.vpsName })));
+    const crowdsecBans = extra.flatMap(e => e.crowdsecBlocked.map((c: any) => ({ ip: c.ip, scenario: c.scenario, duration: c.duration, vpsId: e.vpsId, vpsName: e.vpsName })));
+
+    const blockedByAnyMechanism = (ip: string) =>
+      bans.some(b => b.ip === ip) || asnBans.some(b => b.ip === ip) || torBans.some(b => b.ip === ip) || crowdsecBans.some(b => b.ip === ip);
+
     const ips = Object.entries(ipMap)
-      .map(([ip, data]) => ({ ip, totalCount: data.totalCount, vpsHits: data.vpsHits, banned: bans.some(b => b.ip === ip) }))
+      .map(([ip, data]) => ({ ip, totalCount: data.totalCount, vpsHits: data.vpsHits, banned: blockedByAnyMechanism(ip) }))
       .sort((a, b) => b.totalCount - a.totalCount);
 
-    res.json({ username, ips, bans, totalVpsWithActivity: hits.length });
+    res.json({ username, ips, bans, asnBans, torBans, crowdsecBans, totalVpsWithActivity: hits.length });
   });
 
   app.get("/api/fleet/banned-ips/stream", requireAuth, async (req, res) => {

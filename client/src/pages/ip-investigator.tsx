@@ -336,10 +336,15 @@ interface UsernameIpHit {
   vpsHits: Array<{ vpsId: string; vpsName: string; count: number; statuses: Record<string, number> }>;
 }
 interface UsernameBan { ip: string; jail: string; banTime: string; vpsId: string; vpsName: string; }
+interface UsernameAsnTorBan { ip: string; vpsId: string; vpsName: string; }
+interface UsernameCrowdsecBan { ip: string; scenario: string; duration: string | null; vpsId: string; vpsName: string; }
 interface UsernameInvestigateResult {
   username: string;
   ips: UsernameIpHit[];
   bans: UsernameBan[];
+  asnBans: UsernameAsnTorBan[];
+  torBans: UsernameAsnTorBan[];
+  crowdsecBans: UsernameCrowdsecBan[];
   totalVpsWithActivity: number;
 }
 
@@ -449,16 +454,42 @@ function UsernameInvestigateCard() {
                       </Button>
                     )}
                   </div>
-                  {ipBans.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {ipBans.map((b, i) => (
-                        <div key={i} className="text-xs text-red-400/90 flex items-center gap-2">
-                          <ShieldBan className="w-3 h-3" />
-                          <span className="font-mono">{b.vpsName}</span> — jail <span className="font-mono">{b.jail}</span> — {new Date(b.banTime).toLocaleString("it-IT")}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  {(() => {
+                    const asn = result!.asnBans.filter(b => b.ip === ipHit.ip);
+                    const tor = result!.torBans.filter(b => b.ip === ipHit.ip);
+                    const cs = result!.crowdsecBans.filter(b => b.ip === ipHit.ip);
+                    if (ipBans.length === 0 && asn.length === 0 && tor.length === 0 && cs.length === 0) {
+                      return <p className="mt-2 text-xs text-muted-foreground">Nessun blocco attivo in Fail2ban, ipset, CrowdSec, ASN o Tor.</p>;
+                    }
+                    return (
+                      <div className="mt-2 space-y-1">
+                        {ipBans.map((b, i) => (
+                          <div key={"f2b" + i} className="text-xs text-red-400/90 flex items-center gap-2">
+                            <ShieldBan className="w-3 h-3" />
+                            Fail2ban — <span className="font-mono">{b.vpsName}</span> — jail <span className="font-mono">{b.jail}</span> — {new Date(b.banTime).toLocaleString("it-IT")}
+                          </div>
+                        ))}
+                        {asn.map((b, i) => (
+                          <div key={"asn" + i} className="text-xs text-red-400/90 flex items-center gap-2">
+                            <ShieldBan className="w-3 h-3" />
+                            Blocklist ASN — <span className="font-mono">{b.vpsName}</span>
+                          </div>
+                        ))}
+                        {tor.map((b, i) => (
+                          <div key={"tor" + i} className="text-xs text-red-400/90 flex items-center gap-2">
+                            <ShieldBan className="w-3 h-3" />
+                            Tor exit-node — <span className="font-mono">{b.vpsName}</span>
+                          </div>
+                        ))}
+                        {cs.map((b, i) => (
+                          <div key={"cs" + i} className="text-xs text-red-400/90 flex items-center gap-2">
+                            <ShieldBan className="w-3 h-3" />
+                            CrowdSec — <span className="font-mono">{b.vpsName}</span> — scenario <span className="font-mono">{b.scenario}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
