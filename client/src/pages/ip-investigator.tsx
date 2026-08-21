@@ -327,6 +327,148 @@ function QuickUnbanCard() {
   );
 }
 
+// ── Ricerca per username ─────────────────────────────────────────────────────
+
+interface UsernameIpHit {
+  ip: string;
+  totalCount: number;
+  banned: boolean;
+  vpsHits: Array<{ vpsId: string; vpsName: string; count: number; statuses: Record<string, number> }>;
+}
+interface UsernameBan { ip: string; jail: string; banTime: string; vpsId: string; vpsName: string; }
+interface UsernameInvestigateResult {
+  username: string;
+  ips: UsernameIpHit[];
+  bans: UsernameBan[];
+  totalVpsWithActivity: number;
+}
+
+function UsernameInvestigateCard() {
+  const { toast } = useToast();
+  const [username, setUsername] = useState("");
+  const [result, setResult] = useState<UsernameInvestigateResult | null>(null);
+  const [unbanningIp, setUnbanningIp] = useState<string | null>(null);
+
+  const investigate = useMutation({
+    mutationFn: async (u: string) => {
+      const res = await apiRequest("POST", "/api/fleet/username-investigate", { username: u });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json() as Promise<UsernameInvestigateResult>;
+    },
+    onSuccess: setResult,
+    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+  });
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const u = username.trim();
+    if (!u) { toast({ title: "Inserisci uno username", variant: "destructive" }); return; }
+    setResult(null);
+    investigate.mutate(u);
+  };
+
+  const unbanIp = async (ip: string) => {
+    setUnbanningIp(ip);
+    try {
+      const res = await apiRequest("POST", "/api/fleet/ip-unban", { ip });
+      const data = await res.json();
+      toast({ title: `Sbannato su ${data.ok} VPS`, description: data.fail > 0 ? `${data.fail} VPS falliti` : "IP rimosso da tutta la fleet" });
+      investigate.mutate(username.trim());
+    } catch (e: any) {
+      toast({ title: "Errore sblocco", description: e.message, variant: "destructive" });
+    } finally {
+      setUnbanningIp(null);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <User className="w-4 h-4 text-blue-400" />
+          Cerca per username cliente
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Trova gli IP usati da un account su tutta la fleet e controlla se sono bannati (jail fail2ban reali, non solo iptv_ban)
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <form onSubmit={submit} className="flex gap-3">
+          <Input
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            placeholder="Es. 2amicmas"
+            className="font-mono text-sm max-w-xs"
+          />
+          <Button type="submit" disabled={investigate.isPending} className="gap-1.5">
+            {investigate.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            Cerca
+          </Button>
+        </form>
+
+        {investigate.isPending && (
+          <div className="flex items-center gap-3 text-muted-foreground text-sm">
+            <RefreshCw className="w-4 h-4 animate-spin" />
+            Scansione di tutta la fleet in corso…
+          </div>
+        )}
+
+        {result && result.ips.length === 0 && (
+          <p className="text-sm text-muted-foreground">Nessuna attività trovata per <span className="font-mono">{result.username}</span> su nessun VPS (log attuali).</p>
+        )}
+
+        {result && result.ips.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              {result.ips.length} IP distinti su {result.totalVpsWithActivity} VPS con attività
+              {result.bans.length > 0 && <span className="text-red-400 font-medium"> — {result.bans.length} ban attivi trovati</span>}
+            </p>
+            {result.ips.map(ipHit => {
+              const ipBans = result.bans.filter(b => b.ip === ipHit.ip);
+              return (
+                <div key={ipHit.ip} className={`rounded-md border p-3 ${ipHit.banned ? "border-red-500/40 bg-red-500/5" : "border-border"}`}>
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-sm">{ipHit.ip}</span>
+                      {ipHit.banned ? (
+                        <Badge variant="destructive" className="gap-1"><ShieldBan className="w-3 h-3" />Bannato</Badge>
+                      ) : (
+                        <Badge variant="outline" className="gap-1 text-green-400 border-green-500/30"><ShieldCheck className="w-3 h-3" />Libero</Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground">{ipHit.totalCount} richieste su {ipHit.vpsHits.length} VPS</span>
+                    </div>
+                    {ipHit.banned && (
+                      <Button
+                        size="sm" variant="outline"
+                        disabled={unbanningIp === ipHit.ip}
+                        onClick={() => unbanIp(ipHit.ip)}
+                        className="gap-1.5 border-orange-500/40 text-orange-400 hover:bg-orange-500/10"
+                      >
+                        {unbanningIp === ipHit.ip ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Unlock className="w-3.5 h-3.5" />}
+                        Sbanna su tutta la fleet
+                      </Button>
+                    )}
+                  </div>
+                  {ipBans.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {ipBans.map((b, i) => (
+                        <div key={i} className="text-xs text-red-400/90 flex items-center gap-2">
+                          <ShieldBan className="w-3 h-3" />
+                          <span className="font-mono">{b.vpsName}</span> — jail <span className="font-mono">{b.jail}</span> — {new Date(b.banTime).toLocaleString("it-IT")}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function IpInvestigator() {
   const { toast } = useToast();
   const search = useSearch();
@@ -431,6 +573,8 @@ export default function IpInvestigator() {
       </Card>
 
       <QuickUnbanCard />
+
+      <UsernameInvestigateCard />
 
       {investigate.isPending && (
         <div className="flex items-center gap-3 text-muted-foreground text-sm">

@@ -1431,6 +1431,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ ok: data.filter(d => d.ok).length, fail: data.filter(d => !d.ok).length, results: data, centralLapi });
   });
 
+  // Cerca un username nei log di tutta la fleet, trova gli IP associati e
+  // controlla se quegli IP sono bannati da qualche parte (jail fail2ban reali,
+  // non solo iptv_ban come ip-investigate — e' la lacuna che ci ha fatto perdere
+  // tempo indagando manualmente il ban di 2amicmas il 21/08/2026).
+  app.post("/api/fleet/username-investigate", requireAuth, async (req, res) => {
+    const { username } = req.body;
+    if (!username || typeof username !== "string" || !/^[A-Za-z0-9_@.+-]{1,64}$/.test(username)) {
+      return res.status(400).json({ error: "Username non valido" });
+    }
+
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter((v): v is any => !!v);
+
+    const grepResults = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const data = await agentGet(vps, `/api/grep?q=${encodeURIComponent("username=" + username)}&type=nginx_access`, 15000);
+        const rawLines: string[] = (data.entries || []).map((e: any) => e.message || e).filter(Boolean);
+        if (rawLines.length === 0) return null;
+
+        const ipRe = /^(\d{1,3}(?:\.\d{1,3}){3})/;
+        const statusRe = /"\s+(\d{3})\s+/;
+        const ipStats: Record<string, { count: number; statuses: Record<string, number>; lastSeen: string | null }> = {};
+        for (const line of rawLines) {
+          const ipM = ipRe.exec(line);
+          if (!ipM) continue;
+          const ip = ipM[1];
+          if (!ipStats[ip]) ipStats[ip] = { count: 0, statuses: {}, lastSeen: null };
+          ipStats[ip].count++;
+          const sM = statusRe.exec(line);
+          if (sM) ipStats[ip].statuses[sM[1]] = (ipStats[ip].statuses[sM[1]] || 0) + 1;
+        }
+        return { vpsId: vps.id, vpsName: vps.name, ipStats };
+      } catch { return null; }
+    }));
+
+    const hits = grepResults.map(r => r.status === "fulfilled" ? r.value : null).filter(Boolean) as any[];
+
+    // Aggrega per IP su tutta la fleet
+    const ipMap: Record<string, { totalCount: number; vpsHits: Array<{ vpsId: string; vpsName: string; count: number; statuses: Record<string, number> }> }> = {};
+    for (const hit of hits) {
+      for (const [ip, stats] of Object.entries(hit.ipStats) as any) {
+        if (!ipMap[ip]) ipMap[ip] = { totalCount: 0, vpsHits: [] };
+        ipMap[ip].totalCount += stats.count;
+        ipMap[ip].vpsHits.push({ vpsId: hit.vpsId, vpsName: hit.vpsName, count: stats.count, statuses: stats.statuses });
+      }
+    }
+    const foundIps = new Set(Object.keys(ipMap));
+
+    // Controlla i ban reali (fail2ban jails + iptv_ban) su tutta la fleet per gli IP trovati
+    const banResults = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const banned: Array<{ ip: string; jail: string; banTime: string }> = await agentGet(vps, "/api/banned-ips", 10000);
+        return { vpsId: vps.id, vpsName: vps.name, banned: (banned || []).filter(b => foundIps.has(b.ip)) };
+      } catch { return null; }
+    }));
+    const bans = banResults
+      .map(r => r.status === "fulfilled" ? r.value : null)
+      .filter(Boolean)
+      .flatMap((r: any) => r.banned.map((b: any) => ({ ip: b.ip, jail: b.jail, banTime: b.banTime, vpsId: r.vpsId, vpsName: r.vpsName })));
+
+    const ips = Object.entries(ipMap)
+      .map(([ip, data]) => ({ ip, totalCount: data.totalCount, vpsHits: data.vpsHits, banned: bans.some(b => b.ip === ip) }))
+      .sort((a, b) => b.totalCount - a.totalCount);
+
+    res.json({ username, ips, bans, totalVpsWithActivity: hits.length });
+  });
+
   app.get("/api/fleet/banned-ips/stream", requireAuth, async (req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
