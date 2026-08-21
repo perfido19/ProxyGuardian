@@ -522,9 +522,12 @@ function UserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
 
 // ── Bad User-Agent ─────────────────────────────────────────────────────────────
 
+interface UaEntry { value: string; exact: boolean; }
+
 function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
-  const [patterns, setPatterns] = useState<string[]>([]);
+  const [entries, setEntries] = useState<UaEntry[]>([]);
   const [newPattern, setNewPattern] = useState("");
+  const [newExact, setNewExact] = useState(false);
   const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
   const saveMutation = useSaveConfig("block_baduseragents.conf", saveTarget);
@@ -540,25 +543,29 @@ function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
       const parsed = configData.content.split("\n").map(line => {
         const t = line.trim();
         if (t.startsWith("#") || !t) return null;
-        const m = t.match(/^~?\*?(.+?)\s+\S+;/);
-        return m ? m[1].trim() : null;
-      }).filter(Boolean) as string[];
-      setPatterns(parsed); setHasChanges(false);
+        // ~*pattern 1;  -> regex/contiene (case-insensitive)
+        // "pattern" 1;  o  pattern 1;  -> match esatto (nessun modificatore = confronto letterale in nginx map)
+        const regexMatch = t.match(/^~\*?(.+?)\s+\S+;/);
+        if (regexMatch) return { value: regexMatch[1].trim().replace(/^"|"$/g, ""), exact: false };
+        const exactMatch = t.match(/^=?"?(.+?)"?\s+\S+;/);
+        return exactMatch ? { value: exactMatch[1].trim(), exact: true } : null;
+      }).filter(Boolean) as UaEntry[];
+      setEntries(parsed); setHasChanges(false);
     }
   }, [configData]);
 
   const addPattern = () => {
-    if (newPattern && !patterns.includes(newPattern)) {
-      setPatterns([...patterns, newPattern]); setNewPattern(""); setHasChanges(true);
+    if (newPattern && !entries.some(e => e.value === newPattern)) {
+      setEntries([...entries, { value: newPattern, exact: newExact }]); setNewPattern(""); setHasChanges(true);
     }
   };
 
   const handleSave = () => {
-    const content = patterns.map(p => `~*${p} 1;`).join("\n") + "\n";
+    const content = entries.map(e => e.exact ? `"${e.value}" 1;` : `~*${e.value} 1;`).join("\n") + "\n";
     saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
   };
 
-  const filtered = search ? patterns.filter(p => p.toLowerCase().includes(search.toLowerCase())) : patterns;
+  const filtered = search ? entries.filter(e => e.value.toLowerCase().includes(search.toLowerCase())) : entries;
 
   if (!refVps) return <div className="py-8 text-center text-muted-foreground">Nessun VPS online disponibile</div>;
   if (isLoading) return <LoadingState message="Caricamento..." />;
@@ -568,26 +575,35 @@ function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
       <CardHeader><CardTitle>Bad User-Agent</CardTitle><CardDescription>Blocca specifici user agent — file: block_baduseragents.conf</CardDescription></CardHeader>
       <CardContent className="space-y-4">
         <VpsBanner refVps={refVps} saveTarget={saveTarget} totalCount={totalCount} />
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <Input placeholder="Pattern (es. python-requests|curl)" className="md:col-span-2" value={newPattern} onChange={e => setNewPattern(e.target.value)} onKeyDown={e => e.key === "Enter" && addPattern()} />
+          <Select value={newExact ? "exact" : "contains"} onValueChange={v => setNewExact(v === "exact")}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="contains">Contiene (~*)</SelectItem>
+              <SelectItem value="exact">Esatto (=)</SelectItem>
+            </SelectContent>
+          </Select>
           <Button onClick={addPattern}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
         </div>
+        <p className="text-xs text-muted-foreground">"Contiene" blocca qualsiasi User-Agent che include il testo (es. "Chrome/120.0.0.0" blocca ogni browser con quella versione, anche clienti veri). "Esatto" blocca solo lo User-Agent identico al carattere — più sicuro per firme lunghe e specifiche.</p>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input placeholder="Cerca pattern..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
-        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {patterns.length} risultati</p>}
+        {search && <p className="text-xs text-muted-foreground">{filtered.length} / {entries.length} risultati</p>}
         <div className="border rounded-md overflow-x-auto">
           <Table>
-            <TableHeader><TableRow><TableHead>Pattern</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>Pattern</TableHead><TableHead>Tipo</TableHead><TableHead>Stato</TableHead><TableHead className="text-right">Azioni</TableHead></TableRow></TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun pattern configurato"}</TableCell></TableRow>
-              ) : filtered.map(pattern => (
-                <TableRow key={pattern}>
-                  <TableCell className="font-mono text-sm">{pattern}</TableCell>
+                <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">{search ? "Nessun risultato" : "Nessun pattern configurato"}</TableCell></TableRow>
+              ) : filtered.map(entry => (
+                <TableRow key={entry.value}>
+                  <TableCell className="font-mono text-sm">{entry.value}</TableCell>
+                  <TableCell><Badge variant={entry.exact ? "secondary" : "outline"}>{entry.exact ? "Esatto" : "Contiene"}</Badge></TableCell>
                   <TableCell><Badge variant="destructive">Bloccato</Badge></TableCell>
-                  <TableCell className="text-right"><Button variant="ghost" size="icon" onClick={() => { setPatterns(patterns.filter(p => p !== pattern)); setHasChanges(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button></TableCell>
+                  <TableCell className="text-right"><Button variant="ghost" size="icon" onClick={() => { setEntries(entries.filter(e => e.value !== entry.value)); setHasChanges(true); }}><Trash2 className="w-4 h-4 text-destructive" /></Button></TableCell>
                 </TableRow>
               ))}
             </TableBody>
