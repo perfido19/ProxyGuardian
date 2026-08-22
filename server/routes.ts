@@ -1377,7 +1377,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ ip, totalVps: hits.length, totalRequests, allUsernames, allUsernameStats, geoInfo, vpsResults: hits });
   });
 
-  app.post("/api/fleet/ip-ban", requireAuth, requireAdmin, async (req, res) => {
+  app.post("/api/fleet/ip-ban", requireAuth, requireOperator, async (req, res) => {
     const { ip } = req.body;
     if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
     const octets = ip.split(".").map(Number);
@@ -1393,7 +1393,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ ok: data.filter(d => d.ok).length, fail: data.filter(d => !d.ok).length, results: data });
   });
 
-  app.post("/api/fleet/ip-unban", requireAuth, requireAdmin, async (req, res) => {
+  app.post("/api/fleet/ip-unban", requireAuth, requireOperator, async (req, res) => {
     const { ip } = req.body;
     if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
     const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter((v): v is any => !!v);
