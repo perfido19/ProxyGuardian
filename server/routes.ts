@@ -1680,7 +1680,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/main/unban", requireAuth, requireAdmin, async (req, res) => {
+  app.post("/api/main/unban", requireAuth, requireOperator, async (req, res) => {
     const { ip, jail, type } = req.body;
     if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
     // strict: only lowercase alphanumeric, hyphen, underscore — no spaces/parens used in shell
