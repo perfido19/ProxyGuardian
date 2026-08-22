@@ -1856,6 +1856,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const MAIN_BLOCK_ASN_PATH = "/home/xtreamcodes/iptv_xtream_codes/nginx/conf/block_asn.conf.map";
+
+  // Converte asn-blocklist.txt (formato dashboard/fleet: "AS<n>  # desc") nel
+  // formato nginx-map usato da main ("<n>\t1; # desc", nessun prefisso "AS").
+  function convertAsnBlocklistForMain(central: string): string {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of central.split("\n")) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const m = line.match(/^AS(\d+)\s*#?\s*(.*)$/);
+      if (!m) continue;
+      const [, num, desc] = m;
+      if (seen.has(num)) continue;
+      seen.add(num);
+      out.push(desc ? `${num}\t1; # ${desc}` : `${num}\t1;`);
+    }
+    return out.join("\n") + "\n";
+  }
+
+  app.get("/api/main/asn-block/status", requireAuth, async (_req, res) => {
+    try {
+      const central = readFleetFile("asn-blocklist.txt");
+      const centralAsns = new Set(
+        central.split("\n").map(l => l.trim().match(/^AS(\d+)/)?.[1]).filter((x): x is string => !!x)
+      );
+
+      const [rawMain, mtimeRaw] = await Promise.all([
+        mainSsh(`cat ${MAIN_BLOCK_ASN_PATH} 2>/dev/null || true`, 10000),
+        mainSsh(`stat -c %Y ${MAIN_BLOCK_ASN_PATH} 2>/dev/null || echo 0`, 10000),
+      ]);
+      const mainAsns = new Set(
+        rawMain.split("\n").map(l => l.trim().match(/^(\d+)\s/)?.[1]).filter((x): x is string => !!x)
+      );
+
+      const missingOnMain = [...centralAsns].filter(a => !mainAsns.has(a)).length;
+      const extraOnMain = [...mainAsns].filter(a => !centralAsns.has(a)).length;
+      const mtime = parseInt(mtimeRaw.trim(), 10);
+
+      res.json({
+        centralCount: centralAsns.size,
+        mainCount: mainAsns.size,
+        missingOnMain,
+        extraOnMain,
+        inSync: missingOnMain === 0 && extraOnMain === 0,
+        lastModified: mtime > 0 ? new Date(mtime * 1000).toISOString() : null,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/main/asn-block/sync", requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const central = readFleetFile("asn-blocklist.txt");
+      if (!central.trim()) return res.status(400).json({ error: "Blocklist centrale vuota" });
+      const converted = convertAsnBlocklistForMain(central);
+      const b64 = Buffer.from(converted, "utf-8").toString("base64");
+      const backupPath = `/root/block_asn.conf.map.pre-sync-${Date.now()}`;
+
+      await mainSsh(`cp ${MAIN_BLOCK_ASN_PATH} ${backupPath} 2>/dev/null || true`, 10000);
+      await mainSsh(`echo ${b64} | base64 -d > ${MAIN_BLOCK_ASN_PATH}`, 15000);
+
+      try {
+        await mainSsh(`${XTREAM_NGINX_BIN} -t`, 10000);
+      } catch (testErr: any) {
+        // Config invalida - ripristina subito il file precedente, non toccare nginx
+        await mainSsh(`cp ${backupPath} ${MAIN_BLOCK_ASN_PATH} 2>/dev/null || true`, 10000);
+        return res.status(500).json({ error: `Config non valida dopo la sync, ripristinato il file precedente: ${testErr.message}` });
+      }
+
+      await mainSsh(`${XTREAM_NGINX_BIN} -s reload`, 15000);
+      const count = converted.split("\n").filter(l => l.trim()).length;
+      res.json({ ok: true, count, backupPath });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ─── Fleet Upgrade ────────────────────────────────────────────────────────────
 
   // Job attivo più recente (per riconnettersi dopo navigazione)

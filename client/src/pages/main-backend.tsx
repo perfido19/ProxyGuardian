@@ -10,7 +10,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { CheckCircle, XCircle, RotateCw, Server, Cpu, HardDrive, MemoryStick } from "lucide-react";
+import { CheckCircle, XCircle, RotateCw, Server, Cpu, HardDrive, MemoryStick, Globe, RefreshCw } from "lucide-react";
 
 interface MainService { name: string; status: string; }
 interface MainSystem {
@@ -21,6 +21,14 @@ interface MainSystem {
   disk: { total: string; used: string; available: string; percent: string };
   services: MainService[];
   updatedAt: string;
+}
+interface AsnBlockStatus {
+  centralCount: number;
+  mainCount: number;
+  missingOnMain: number;
+  extraOnMain: number;
+  inSync: boolean;
+  lastModified: string | null;
 }
 
 const SERVICE_LABELS: Record<string, string> = {
@@ -45,6 +53,17 @@ function useMainSystem() {
   });
 }
 
+function useMainAsnBlock() {
+  return useQuery<AsnBlockStatus>({
+    queryKey: ["main-asn-block-status"],
+    queryFn: async () => {
+      const r = await apiRequest("GET", "/api/main/asn-block/status");
+      return r.json();
+    },
+    refetchInterval: 60000,
+  });
+}
+
 function StatusDot({ active }: { active: boolean }) {
   return active
     ? <CheckCircle className="w-4 h-4 text-green-500 inline" />
@@ -54,7 +73,9 @@ function StatusDot({ active }: { active: boolean }) {
 export default function MainBackend() {
   const { toast } = useToast();
   const { data, isLoading, refetch } = useMainSystem();
+  const { data: asnStatus, isLoading: asnLoading, refetch: refetchAsn } = useMainAsnBlock();
   const [confirmService, setConfirmService] = useState<string | null>(null);
+  const [confirmAsnSync, setConfirmAsnSync] = useState(false);
 
   const restartMutation = useMutation({
     mutationFn: async (name: string) => {
@@ -70,6 +91,22 @@ export default function MainBackend() {
       toast({ title: "Errore riavvio", description: e.message, variant: "destructive" });
     },
     onSettled: () => setConfirmService(null),
+  });
+
+  const asnSyncMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", "/api/main/asn-block/sync", {});
+      if (!r.ok) throw new Error((await r.json()).error || "Sync fallita");
+      return r.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "ASN Block sincronizzato", description: `${data.count} ASN scritti su main, nginx ricaricato` });
+      queryClient.invalidateQueries({ queryKey: ["main-asn-block-status"] });
+    },
+    onError: (e: any) => {
+      toast({ title: "Errore sync ASN Block", description: e.message, variant: "destructive" });
+    },
+    onSettled: () => setConfirmAsnSync(false),
   });
 
   if (isLoading) return <LoadingState />;
@@ -160,6 +197,73 @@ export default function MainBackend() {
           })}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Globe className="w-5 h-5" /> ASN Block</CardTitle>
+          <CardDescription>
+            Blocklist ASN a livello nginx su main (<code>block_asn.conf.map</code>) — main non ha l'agent ProxyGuardian,
+            quindi non riceve automaticamente gli aggiornamenti fatti dal tab "ASN Block" della fleet. Sincronizzazione manuale.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {asnLoading ? (
+            <LoadingState />
+          ) : asnStatus && (
+            <>
+              <div className="flex items-center gap-3">
+                {asnStatus.inSync
+                  ? <Badge className="gap-1"><CheckCircle className="w-3.5 h-3.5" /> Allineato</Badge>
+                  : <Badge variant="destructive" className="gap-1"><XCircle className="w-3.5 h-3.5" /> Non allineato</Badge>}
+                <span className="text-sm text-muted-foreground" data-testid="text-asn-status">
+                  Centrale: {asnStatus.centralCount} ASN — Main: {asnStatus.mainCount} ASN
+                  {!asnStatus.inSync && ` (mancanti su main: ${asnStatus.missingOnMain}, extra su main: ${asnStatus.extraOnMain})`}
+                </span>
+              </div>
+              {asnStatus.lastModified && (
+                <div className="text-xs text-muted-foreground">
+                  Ultima modifica file su main: {new Date(asnStatus.lastModified).toLocaleString("it-IT")}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => refetchAsn()}
+                  data-testid="button-refresh-asn"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" /> Ricontrolla
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={asnSyncMutation.isPending}
+                  onClick={() => setConfirmAsnSync(true)}
+                  data-testid="button-sync-asn"
+                >
+                  <RotateCw className="w-4 h-4 mr-2" /> Sincronizza con blocklist centrale
+                </Button>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <AlertDialog open={confirmAsnSync} onOpenChange={setConfirmAsnSync}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Sincronizzare ASN Block su main?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Sostituisce <code>block_asn.conf.map</code> su main con la blocklist ASN centrale (formato convertito),
+              poi ricarica nginx (test di validità prima, ripristino automatico se la config risultasse non valida).
+              Backup del file precedente salvato su main. Confermi?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annulla</AlertDialogCancel>
+            <AlertDialogAction onClick={() => asnSyncMutation.mutate()}>Sincronizza</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={!!confirmService} onOpenChange={(open) => !open && setConfirmService(null)}>
         <AlertDialogContent>
