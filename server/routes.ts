@@ -1781,6 +1781,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const MAIN_SERVICES = ["nginx", "mariadb", "fail2ban", "crowdsec", "crowdsec-firewall-bouncer", "xtreamcodes"];
+  // Solo questi due sono riavviabili dalla scheda main - whitelist esplicita,
+  // il nome finisce dentro un comando shell via mainSsh().
+  const MAIN_RESTARTABLE_SERVICES = ["nginx", "fail2ban"];
+
+  app.get("/api/main/system", requireAuth, async (_req, res) => {
+    try {
+      const [uptimeRaw, memRaw, diskRaw, servicesRaw] = await Promise.allSettled([
+        mainSsh(`uptime`),
+        mainSsh(`free -m | awk '/^Mem:/{print $2","$3","$7}'`),
+        mainSsh(`df -h / | awk 'NR==2{print $2","$3","$4","$5}'`),
+        Promise.allSettled(MAIN_SERVICES.map(async (name) => ({
+          name,
+          status: (await mainSsh(`systemctl is-active ${name} 2>/dev/null || true`)).trim(),
+        }))),
+      ]);
+
+      let load = { "1m": 0, "5m": 0, "15m": 0 };
+      if (uptimeRaw.status === "fulfilled") {
+        const m = uptimeRaw.value.match(/load average:\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)/);
+        if (m) load = { "1m": parseFloat(m[1]), "5m": parseFloat(m[2]), "15m": parseFloat(m[3]) };
+      }
+
+      let memory = { totalMb: 0, usedMb: 0, availableMb: 0 };
+      if (memRaw.status === "fulfilled") {
+        const [total, used, available] = memRaw.value.split(",").map(Number);
+        memory = { totalMb: total || 0, usedMb: used || 0, availableMb: available || 0 };
+      }
+
+      let disk = { total: "", used: "", available: "", percent: "" };
+      if (diskRaw.status === "fulfilled") {
+        const [total, used, available, percent] = diskRaw.value.split(",");
+        disk = { total, used, available, percent };
+      }
+
+      const services = servicesRaw.status === "fulfilled"
+        ? servicesRaw.value.map(r => r.status === "fulfilled" ? r.value : { name: "?", status: "unknown" })
+        : [];
+
+      res.json({ vpsId: "main", vpsName: "Main Backend", load, memory, disk, services, updatedAt: new Date().toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/main/service/:name/restart", requireAuth, requireAdmin, async (req, res) => {
+    const { name } = req.params;
+    if (!MAIN_RESTARTABLE_SERVICES.includes(name)) {
+      return res.status(400).json({ error: `Servizio non riavviabile da qui: ${name}` });
+    }
+    try {
+      await mainSsh(`systemctl restart ${name}`, 20000);
+      const status = (await mainSsh(`systemctl is-active ${name} 2>/dev/null || true`)).trim();
+      res.json({ ok: true, name, status });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ─── Fleet Upgrade ────────────────────────────────────────────────────────────
 
   // Job attivo più recente (per riconnettersi dopo navigazione)
