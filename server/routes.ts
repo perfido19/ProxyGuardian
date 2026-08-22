@@ -1785,6 +1785,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Solo questi due sono riavviabili dalla scheda main - whitelist esplicita,
   // il nome finisce dentro un comando shell via mainSsh().
   const MAIN_RESTARTABLE_SERVICES = ["nginx", "fail2ban"];
+  // Il nginx di sistema (unita' systemd "nginx") e' un'installazione a parte,
+  // inerte - quello che serve davvero il traffico e' il binario XtreamCodes,
+  // avviato manualmente/da init.d, senza una unit systemd propria.
+  const XTREAM_NGINX_BIN = "/home/xtreamcodes/iptv_xtream_codes/nginx/sbin/nginx";
 
   app.get("/api/main/system", requireAuth, async (_req, res) => {
     try {
@@ -1794,7 +1798,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         mainSsh(`df -h / | awk 'NR==2{print $2","$3","$4","$5}'`),
         Promise.allSettled(MAIN_SERVICES.map(async (name) => ({
           name,
-          status: (await mainSsh(`systemctl is-active ${name} 2>/dev/null || true`)).trim(),
+          status: name === "nginx"
+            ? (await mainSsh(`pgrep -f '${XTREAM_NGINX_BIN}$' >/dev/null && echo active || echo inactive`)).trim()
+            : (await mainSsh(`systemctl is-active ${name} 2>/dev/null || true`)).trim(),
         }))),
       ]);
 
@@ -1832,6 +1838,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).json({ error: `Servizio non riavviabile da qui: ${name}` });
     }
     try {
+      if (name === "nginx") {
+        // Il nginx di sistema (systemctl) e' un'installazione a parte, inerte -
+        // quello reale che serve il traffico e' il binario XtreamCodes, avviato
+        // manualmente/da init.d, mai sotto una unit systemd propria. Test prima
+        // del reload (mai un restart secco: interromperebbe il traffico live).
+        await mainSsh(`${XTREAM_NGINX_BIN} -t`, 10000);
+        await mainSsh(`${XTREAM_NGINX_BIN} -s reload`, 15000);
+        const running = (await mainSsh(`pgrep -f '${XTREAM_NGINX_BIN}$' >/dev/null && echo active || echo inactive`)).trim();
+        return res.json({ ok: true, name, status: running });
+      }
       await mainSsh(`systemctl restart ${name}`, 20000);
       const status = (await mainSsh(`systemctl is-active ${name} 2>/dev/null || true`)).trim();
       res.json({ ok: true, name, status });

@@ -127,7 +127,7 @@ export default function MainBackend() {
       <Card>
         <CardHeader>
           <CardTitle>Servizi</CardTitle>
-          <CardDescription>Stato in tempo reale (SSH diretto). Riavvio disponibile solo per nginx e fail2ban.</CardDescription>
+          <CardDescription>Stato in tempo reale (SSH diretto). Riavvio disponibile solo per nginx (reload a caldo del binario XtreamCodes, non il servizio di sistema) e fail2ban.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           {data?.services.map((svc) => {
@@ -166,7 +166,9 @@ export default function MainBackend() {
           <AlertDialogHeader>
             <AlertDialogTitle>Riavviare {confirmService && (SERVICE_LABELS[confirmService] || confirmService)}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Interrompe brevemente il servizio su <strong>main</strong> (server centrale, traffico live). Confermi?
+              {confirmService === "nginx"
+                ? <>Reload a caldo del nginx XtreamCodes su <strong>main</strong> (server centrale, traffico live) — nessuna interruzione se la config e' valida. Confermi?</>
+                : <>Interrompe brevemente il servizio su <strong>main</strong> (server centrale, traffico live). Confermi?</>}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
