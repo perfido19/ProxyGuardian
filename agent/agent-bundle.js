@@ -27165,6 +27165,16 @@ async function autoHealLoop() {
     try {
       const s = await getServiceStatus(svc);
       if (s.status !== "running") {
+        const procs = PGREP_NAMES[svc] || [];
+        let actuallyAlive = false;
+        for (const proc of procs) {
+          const { ok } = await runCmd(`pgrep -f ${proc} > /dev/null 2>&1`);
+          if (ok) {
+            actuallyAlive = true;
+            break;
+          }
+        }
+        if (actuallyAlive) continue;
         const last = lastServiceRestart[svc] || 0;
         const now = Date.now();
         if (now - last > AUTOHEAL_COOLDOWN) {

@@ -2835,6 +2835,20 @@ async function autoHealLoop() {
     try {
       const s = await getServiceStatus(svc);
       if (s.status !== "running") {
+        // systemctl is-active puo' dare un falso "stopped" (es. PID file non
+        // tracciato correttamente da systemd dopo un reload) mentre il
+        // processo e' realmente vivo e serve traffico - un restart in quel
+        // caso e' inutile e distruttivo (kill+riavvio interrompe le
+        // connessioni clienti attive). Verifica diretta col processo prima
+        // di agire.
+        const procs = PGREP_NAMES[svc] || [];
+        let actuallyAlive = false;
+        for (const proc of procs) {
+          const { ok } = await runCmd(`pgrep -f ${proc} > /dev/null 2>&1`);
+          if (ok) { actuallyAlive = true; break; }
+        }
+        if (actuallyAlive) continue;
+
         const last = lastServiceRestart[svc] || 0;
         const now = Date.now();
         if (now - last > AUTOHEAL_COOLDOWN) {
