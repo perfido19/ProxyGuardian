@@ -258,6 +258,23 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl restart anti-iptv",
   "pgagent ALL=(ALL) NOPASSWD: /bin/cat /usr/local/sbin/anti-iptv.sh",
   "pgagent ALL=(ALL) NOPASSWD: /bin/cat /usr/local/sbin/anti-iptv.py",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/ipset.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /var/log/anti-iptv/bans.log",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/fail2ban/jail.local",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/fail2ban/fail2ban.local",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/fail2ban/filter.d/*",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/nginx.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/country_whitelist.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/block_asn.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/block_isp.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/useragent.rules",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/ip_whitelist.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/exclusion_ip.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/block_badagents.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/conf/modsecurity.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/nginx/conf/owasp-modsecurity-crs/crs-setup.conf",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/asn-whitelist-nets.txt",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/asn-blocklist.txt",
   "",
 ].join("\n");
 const DEPLOY_LOGROTATE_CONF = [
@@ -3129,8 +3146,6 @@ ${asnBlockSetup}
 
 ${antiIptvSetup}
 
-${crowdSecSetup}
-
 ${torBlockSetup}
 
 ${scannerBlockSetup}
@@ -3211,6 +3226,13 @@ systemctl restart fail2ban
 ok "Nginx 1.26.2 + ModSecurity v3 + OWASP CRS v4 installati"
 ok "Fail2ban configurato"
 ok "GeoIP2 configurato"
+
+# CrowdSec va DOPO la connessione NetBird sopra: se installato, si autentica
+# subito contro la LAPI centrale (100.116.132.180:8080), raggiungibile solo
+# via mesh NetBird. Prima di questo fix girava ancor prima di NetBird e
+# falliva sempre al primo avvio (systemctl restart crowdsec in timeout),
+# abortendo l'intero script per via di 'set -euo pipefail'.
+${crowdSecSetup}
 
 # ── NETBIRD ────────────────────────────────────────────────
 info "Installing / updating NetBird..."
