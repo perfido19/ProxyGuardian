@@ -1875,6 +1875,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const MAIN_BLOCK_ASN_PATH = "/home/xtreamcodes/iptv_xtream_codes/nginx/conf/block_asn.conf.map";
 
+  // ASN presenti nella blocklist centrale ma esplicitamente esentati su main
+  // (bug reale trovato il 2026-08-23: AS13335 CLOUDFLARENET ha nella blocklist
+  // centrale il commento "bloccato ovunque tranne main e DynamoXc", ma la sync
+  // lo bloccava comunque anche su main, 403 su tutto il traffico dietro
+  // Cloudflare/WARP - vedi memoria project_robback_deploy... no, vedi il fix
+  // stesso commit). DynamoXc usa un meccanismo separato (ipset, non nginx-map)
+  // e non ha questo problema.
+  const MAIN_ASN_EXCEPTIONS = new Set<string>(["13335"]);
+
   // Converte asn-blocklist.txt (formato dashboard/fleet: "AS<n>  # desc") nel
   // formato nginx-map usato da main ("<n>\t1; # desc", nessun prefisso "AS").
   function convertAsnBlocklistForMain(central: string): string {
@@ -1886,7 +1895,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const m = line.match(/^AS(\d+)\s*#?\s*(.*)$/);
       if (!m) continue;
       const [, num, desc] = m;
-      if (seen.has(num)) continue;
+      if (seen.has(num) || MAIN_ASN_EXCEPTIONS.has(num)) continue;
       seen.add(num);
       out.push(desc ? `${num}\t1; # ${desc}` : `${num}\t1;`);
     }
@@ -1897,7 +1906,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const central = readFleetFile("asn-blocklist.txt");
       const centralAsns = new Set(
-        central.split("\n").map(l => l.trim().match(/^AS(\d+)/)?.[1]).filter((x): x is string => !!x)
+        central.split("\n").map(l => l.trim().match(/^AS(\d+)/)?.[1])
+          .filter((x): x is string => !!x && !MAIN_ASN_EXCEPTIONS.has(x))
       );
 
       const [rawMain, mtimeRaw] = await Promise.all([
