@@ -1,0 +1,11 @@
+name: local/main-custom-whitelist
+description: "Whitelist IP di servizi terze parti noti e legittimi sul main backend"
+whitelist:
+  reason: "ss-iptv.com - portale IPTV terze parti (reverse DNS confermato), scarica periodicamente la playlist per conto di piu' clienti reali che vi hanno registrato il proprio account - verificato 2026-08-20: ogni username usato da questo IP ha anche un IP residenziale proprio indipendente"
+  ip:
+    - "116.202.118.184"
+  cidr:
+    - "51.161.128.0/17"  # IPTV Smarters (servizio terze parti legittimo, segnalato da cliente, whitelist fleet 2026-08-21)
+    - "51.15.0.0/16"     # Scaleway - richiesta utente 2026-08-23
+    - "51.254.0.0/15"    # Scaleway - richiesta utente 2026-08-23
+    - "51.255.0.0/15"    # Scaleway - richiesta utente 2026-08-23
