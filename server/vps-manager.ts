@@ -399,6 +399,101 @@ export function startCompliancePoller(intervalMs = 3600000): void {
   setTimeout(() => { run(); setInterval(run, intervalMs); }, 60000);
 }
 
+export interface MultiVpsProbeResult {
+  vpsChecked: number;
+  suspiciousIps: Array<{ ip: string; vpsHit: number; usernames: string[] }>;
+  banned: string[];
+  errors: number;
+}
+
+const MULTIVPS_PROBE_MIN_VPS = 3;
+const MULTIVPS_PROBE_LINES_PER_VPS = 300;
+
+// Rileva credential-stuffing distribuito: stesso IP colpisce 3+ VPS distinti
+// con username DIVERSO su ognuno (nessun username condiviso tra i VPS). Un
+// cliente CGNAT legittimo riusa lo stesso account su piu' IP - non username
+// diverso per ogni VPS - quindi questa firma esclude quel falso positivo.
+// Fail2ban/CrowdSec locali non scattano mai su questo pattern perche' ogni
+// agent vede solo 1-2 richieste sul proprio VPS, sotto qualsiasi soglia
+// locale sensata (vedi memoria project_multivps_correlation_todo_2026-08-24).
+export async function detectMultiVpsCredentialStuffing(): Promise<MultiVpsProbeResult> {
+  const enabled = Array.from(vpsStore.values()).filter(v => v.enabled && v.lastStatus !== "offline");
+
+  // ip -> vpsId -> Set<username>
+  const ipMap = new Map<string, Map<string, Set<string>>>();
+
+  await Promise.allSettled(enabled.map(async vps => {
+    try {
+      const entries: Array<{ message: string }> = await agentGet(
+        vps,
+        `/api/logs/nginx_access?grep=${encodeURIComponent("username=")}&lines=${MULTIVPS_PROBE_LINES_PER_VPS}`,
+        15000
+      );
+      const ipRe = /^(\d{1,3}(?:\.\d{1,3}){3})/;
+      const userRe = /[?&]username=([^&\s"*]+)/;
+      for (const e of entries || []) {
+        const line = e.message || "";
+        const ipM = ipRe.exec(line);
+        const userM = userRe.exec(line);
+        if (!ipM || !userM) continue;
+        const ip = ipM[1];
+        const user = userM[1];
+        if (!ipMap.has(ip)) ipMap.set(ip, new Map());
+        const perVps = ipMap.get(ip)!;
+        if (!perVps.has(vps.id)) perVps.set(vps.id, new Set());
+        perVps.get(vps.id)!.add(user);
+      }
+    } catch { /* vps irraggiungibile in questo ciclo, salta */ }
+  }));
+
+  const isNetbirdRangeIp = (ip: string): boolean => {
+    const octets = ip.split(".").map(Number);
+    return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
+  };
+
+  const suspicious: MultiVpsProbeResult["suspiciousIps"] = [];
+  for (const [ip, perVps] of ipMap) {
+    if (isNetbirdRangeIp(ip)) continue;
+    if (perVps.size < MULTIVPS_PROBE_MIN_VPS) continue;
+
+    // firma: nessun username condiviso tra due VPS diversi per questo IP
+    const usernameCounts = new Map<string, number>();
+    for (const set of perVps.values()) {
+      for (const u of set) usernameCounts.set(u, (usernameCounts.get(u) || 0) + 1);
+    }
+    const anyReused = [...usernameCounts.values()].some(c => c > 1);
+    if (anyReused) continue;
+
+    const usernames = [...usernameCounts.keys()];
+    suspicious.push({ ip, vpsHit: perVps.size, usernames });
+  }
+
+  const banned: string[] = [];
+  let errors = 0;
+  for (const s of suspicious) {
+    try {
+      const results = await Promise.allSettled(enabled.map(vps => agentPost(vps, "/api/ipset/iptv_ban/add", { ip: s.ip })));
+      if (results.some(r => r.status === "fulfilled")) banned.push(s.ip);
+      else errors++;
+    } catch {
+      errors++;
+    }
+  }
+
+  return { vpsChecked: enabled.length, suspiciousIps: suspicious, banned, errors };
+}
+
+export function startMultiVpsProbePoller(intervalMs = 120000): void {
+  const run = () => detectMultiVpsCredentialStuffing()
+    .then(r => {
+      if (r.suspiciousIps.length > 0) {
+        console.log(`[MultiVpsProbe] rilevati ${r.suspiciousIps.length} IP sospetti, bannati ${r.banned.length}: ${r.banned.join(", ")}`);
+      }
+    })
+    .catch(e => console.error("[MultiVpsProbe] error:", e));
+  setTimeout(() => { run(); setInterval(run, intervalMs); }, 90000);
+}
+
 export interface BulkResult {
   vpsId: string; vpsName: string; success: boolean; data?: any; error?: string;
 }

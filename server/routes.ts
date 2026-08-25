@@ -9,7 +9,7 @@ import { open as openMaxMind, type Reader, validate as validateIp } from "maxmin
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, removeVpsFromAllUsers, type UserRole } from "./auth";
-import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller, ensureComplianceFleet, startCompliancePoller } from "./vps-manager";
+import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller, ensureComplianceFleet, startCompliancePoller, startMultiVpsProbePoller, detectMultiVpsCredentialStuffing } from "./vps-manager";
 import { refreshTorList, getTorListState, pushTorListToFleet, getLastPush, startTorBlockPoller } from "./tor-block";
 import { getScannerBlockState, pushScannerBlockToFleet } from "./scanner-block";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
@@ -780,6 +780,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Ri-verifica fleet-wide UDP51820/journald cap/bouncer CrowdSec — vedi ensureComplianceFleet.
   app.post("/api/fleet/compliance/ensure", requireAuth, requireOperator, async (_req, res) => {
     const result = await ensureComplianceFleet();
+    res.json(result);
+  });
+
+  // Trigger manuale del rilevamento credential-stuffing multi-VPS (gira anche
+  // in automatico ogni 2 minuti via startMultiVpsProbePoller) — vedi
+  // detectMultiVpsCredentialStuffing per la firma di rilevamento.
+  app.post("/api/fleet/multivps-probe/check", requireAuth, requireOperator, async (_req, res) => {
+    const result = await detectMultiVpsCredentialStuffing();
     res.json(result);
   });
 
@@ -3527,6 +3535,7 @@ fi
   startEstablishedPoller(3600000);
   startCompliancePoller(3600000);
   startTorBlockPoller(3600000);
+  startMultiVpsProbePoller(120000);
 
   const server = createServer(app);
   attachSshWebSocket(server);
