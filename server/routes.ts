@@ -1466,10 +1466,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const rawLines: string[] = (data.entries || []).map((e: any) => e.message || e).filter(Boolean);
         if (rawLines.length === 0) return null;
 
+        // Il grep dell'agent e' un substring match ("username=giorusso88" matcha
+        // anche "username=giorusso880"), quindi qui filtriamo per match esatto
+        // sul valore del parametro username prima di aggregare per IP.
+        const usernameParamRe = /[?&]username=([^&\s"*]+)/;
+        const exactLines = rawLines.filter(line => {
+          const m = usernameParamRe.exec(line);
+          return !!m && m[1] === username;
+        });
+        if (exactLines.length === 0) return null;
+
         const ipRe = /^(\d{1,3}(?:\.\d{1,3}){3})/;
         const statusRe = /"\s+(\d{3})\s+/;
         const ipStats: Record<string, { count: number; statuses: Record<string, number>; lastSeen: string | null }> = {};
-        for (const line of rawLines) {
+        for (const line of exactLines) {
           const ipM = ipRe.exec(line);
           if (!ipM) continue;
           const ip = ipM[1];
@@ -1547,8 +1557,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const blockedByAnyMechanism = (ip: string) =>
       bans.some(b => b.ip === ip) || asnBans.some(b => b.ip === ip) || torBans.some(b => b.ip === ip) || crowdsecBans.some(b => b.ip === ip);
 
-    const ips = Object.entries(ipMap)
-      .map(([ip, data]) => ({ ip, totalCount: data.totalCount, vpsHits: data.vpsHits, banned: blockedByAnyMechanism(ip) }))
+    const ipEntries = Object.entries(ipMap);
+    const geoByIp = new Map<string, IpInfo>(
+      await Promise.all(ipEntries.map(async ([ip]) => [ip, await getOrLoadIpInfo(ip)] as const))
+    );
+
+    const ips = ipEntries
+      .map(([ip, data]) => ({
+        ip,
+        totalCount: data.totalCount,
+        vpsHits: data.vpsHits,
+        banned: blockedByAnyMechanism(ip),
+        geoInfo: geoByIp.get(ip) || null,
+      }))
       .sort((a, b) => b.totalCount - a.totalCount);
 
     res.json({ username, ips, bans, asnBans, torBans, crowdsecBans, totalVpsWithActivity: hits.length });

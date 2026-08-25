@@ -334,6 +334,7 @@ interface UsernameIpHit {
   totalCount: number;
   banned: boolean;
   vpsHits: Array<{ vpsId: string; vpsName: string; count: number; statuses: Record<string, number> }>;
+  geoInfo: { asn?: string; org?: string; countryCode?: string } | null;
 }
 interface UsernameBan { ip: string; jail: string; banTime: string; vpsId: string; vpsName: string; }
 interface UsernameAsnTorBan { ip: string; vpsId: string; vpsName: string; }
@@ -440,7 +441,14 @@ function UsernameInvestigateCard() {
                       ) : (
                         <Badge variant="outline" className="gap-1 text-green-400 border-green-500/30"><ShieldCheck className="w-3 h-3" />Libero</Badge>
                       )}
-                      <span className="text-xs text-muted-foreground">{ipHit.totalCount} richieste su {ipHit.vpsHits.length} VPS</span>
+                      <span className="text-xs text-muted-foreground">
+                        {ipHit.totalCount} richieste su {ipHit.vpsHits.map(v => v.vpsName).join(", ")}
+                      </span>
+                      {ipHit.geoInfo?.asn && (
+                        <span className="text-xs text-muted-foreground font-mono">
+                          {ipHit.geoInfo.asn}{ipHit.geoInfo.org ? ` — ${ipHit.geoInfo.org}` : ""}
+                        </span>
+                      )}
                     </div>
                     {ipHit.banned && (
                       <Button
