@@ -406,6 +406,28 @@ export interface MultiVpsProbeResult {
   errors: number;
 }
 
+export interface MultiVpsDetection {
+  ip: string;
+  vpsHit: number;
+  vpsNames: string[];
+  usernames: string[];
+  firstSeen: string;
+  lastSeen: string;
+  banned: boolean;
+}
+
+// Storico in-memory delle rilevazioni (si azzera al restart, va bene: una
+// minaccia ancora attiva viene ri-rilevata al ciclo successivo del poller).
+const multiVpsDetections = new Map<string, MultiVpsDetection>();
+
+export function getMultiVpsDetections(): MultiVpsDetection[] {
+  return Array.from(multiVpsDetections.values()).sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+}
+
+export function clearMultiVpsDetection(ip: string): void {
+  multiVpsDetections.delete(ip);
+}
+
 const MULTIVPS_PROBE_MIN_VPS = 3;
 const MULTIVPS_PROBE_LINES_PER_VPS = 300;
 
@@ -451,7 +473,8 @@ export async function detectMultiVpsCredentialStuffing(): Promise<MultiVpsProbeR
     return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
   };
 
-  const suspicious: MultiVpsProbeResult["suspiciousIps"] = [];
+  const vpsNameById = new Map(enabled.map(v => [v.id, v.name]));
+  const suspicious: Array<{ ip: string; vpsHit: number; usernames: string[]; vpsNames: string[] }> = [];
   for (const [ip, perVps] of ipMap) {
     if (isNetbirdRangeIp(ip)) continue;
     if (perVps.size < MULTIVPS_PROBE_MIN_VPS) continue;
@@ -465,22 +488,35 @@ export async function detectMultiVpsCredentialStuffing(): Promise<MultiVpsProbeR
     if (anyReused) continue;
 
     const usernames = [...usernameCounts.keys()];
-    suspicious.push({ ip, vpsHit: perVps.size, usernames });
+    const vpsNames = [...perVps.keys()].map(id => vpsNameById.get(id) || id);
+    suspicious.push({ ip, vpsHit: perVps.size, usernames, vpsNames });
   }
 
   const banned: string[] = [];
   let errors = 0;
+  const now = new Date().toISOString();
   for (const s of suspicious) {
+    let isBanned = false;
     try {
       const results = await Promise.allSettled(enabled.map(vps => agentPost(vps, "/api/ipset/iptv_ban/add", { ip: s.ip })));
-      if (results.some(r => r.status === "fulfilled")) banned.push(s.ip);
+      if (results.some(r => r.status === "fulfilled")) { banned.push(s.ip); isBanned = true; }
       else errors++;
     } catch {
       errors++;
     }
+    const existing = multiVpsDetections.get(s.ip);
+    multiVpsDetections.set(s.ip, {
+      ip: s.ip,
+      vpsHit: s.vpsHit,
+      vpsNames: s.vpsNames,
+      usernames: s.usernames,
+      firstSeen: existing?.firstSeen || now,
+      lastSeen: now,
+      banned: isBanned || existing?.banned || false,
+    });
   }
 
-  return { vpsChecked: enabled.length, suspiciousIps: suspicious, banned, errors };
+  return { vpsChecked: enabled.length, suspiciousIps: suspicious.map(({ ip, vpsHit, usernames }) => ({ ip, vpsHit, usernames })), banned, errors };
 }
 
 export function startMultiVpsProbePoller(intervalMs = 120000): void {

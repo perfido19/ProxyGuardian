@@ -267,6 +267,113 @@ function MainBansSection() {
   );
 }
 
+interface MultiVpsDetection {
+  ip: string;
+  vpsHit: number;
+  vpsNames: string[];
+  usernames: string[];
+  firstSeen: string;
+  lastSeen: string;
+  banned: boolean;
+  geoInfo: { asn?: string; org?: string; countryCode?: string } | null;
+}
+
+function MultiVpsProbeCard() {
+  const { toast } = useToast();
+  const [unbanningIp, setUnbanningIp] = useState<string | null>(null);
+
+  const { data, isLoading, refetch } = useQuery<MultiVpsDetection[]>({
+    queryKey: ["/api/fleet/multivps-probe/detections"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/fleet/multivps-probe/detections");
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    refetchInterval: 30000,
+  });
+
+  const unban = async (ip: string) => {
+    setUnbanningIp(ip);
+    try {
+      const res = await apiRequest("POST", "/api/fleet/ip-unban", { ip });
+      if (!res.ok) throw new Error(await res.text());
+      const result = await res.json();
+      await apiRequest("POST", "/api/fleet/multivps-probe/dismiss", { ip });
+      toast({ title: `Sbannato su ${result.ok} VPS`, description: result.fail > 0 ? `${result.fail} VPS falliti` : "IP rimosso da tutta la fleet" });
+      refetch();
+    } catch (e: any) {
+      toast({ title: "Errore sblocco", description: e.message, variant: "destructive" });
+    } finally {
+      setUnbanningIp(null);
+    }
+  };
+
+  const detections = data || [];
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Shield className="w-4 h-4 text-red-400" />
+          Credential-stuffing multi-VPS
+        </CardTitle>
+        <CardDescription className="text-xs">
+          IP rilevati su 3+ VPS con username diverso su ognuno (poller automatico ogni 2 minuti) — banna prima che serva un controllo manuale
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {isLoading && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Caricamento…
+          </div>
+        )}
+        {!isLoading && detections.length === 0 && (
+          <p className="text-sm text-muted-foreground">Nessuna rilevazione attiva al momento.</p>
+        )}
+        {detections.map(d => (
+          <div key={d.ip} className={`rounded-md border p-3 ${d.banned ? "border-red-500/40 bg-red-500/5" : "border-border"}`}>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono text-sm">{d.ip}</span>
+                {d.banned ? (
+                  <Badge variant="destructive" className="gap-1"><ShieldBan className="w-3 h-3" />Bannato</Badge>
+                ) : (
+                  <Badge variant="outline" className="gap-1 text-yellow-400 border-yellow-500/30"><AlertTriangle className="w-3 h-3" />Non bannato</Badge>
+                )}
+                {d.geoInfo?.asn && (
+                  <span className="text-xs text-muted-foreground font-mono">
+                    {d.geoInfo.asn}{d.geoInfo.org ? ` — ${d.geoInfo.org}` : ""}
+                  </span>
+                )}
+              </div>
+              {d.banned && (
+                <Button
+                  size="sm" variant="outline"
+                  disabled={unbanningIp === d.ip}
+                  onClick={() => unban(d.ip)}
+                  className="gap-1.5 border-orange-500/40 text-orange-400 hover:bg-orange-500/10"
+                >
+                  {unbanningIp === d.ip ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Unlock className="w-3.5 h-3.5" />}
+                  Sbanna
+                </Button>
+              )}
+            </div>
+            <div className="mt-2 text-xs text-muted-foreground">
+              <span className="font-medium">{d.vpsHit} VPS colpiti:</span> {d.vpsNames.join(", ")}
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              <span className="font-medium">Username usati:</span> <span className="font-mono">{d.usernames.join(", ")}</span>
+            </div>
+            <div className="mt-1 text-[11px] text-muted-foreground/70">
+              Prima rilevazione {new Date(d.firstSeen).toLocaleString("it-IT")} — ultima {new Date(d.lastSeen).toLocaleString("it-IT")}
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 function QuickUnbanCard() {
   const { toast } = useToast();
   const [ip, setIp] = useState("");
@@ -610,6 +717,8 @@ export default function IpInvestigator() {
           </form>
         </CardContent>
       </Card>
+
+      <MultiVpsProbeCard />
 
       <QuickUnbanCard />
 

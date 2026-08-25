@@ -9,7 +9,7 @@ import { open as openMaxMind, type Reader, validate as validateIp } from "maxmin
 import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, removeVpsFromAllUsers, type UserRole } from "./auth";
-import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller, ensureComplianceFleet, startCompliancePoller, startMultiVpsProbePoller, detectMultiVpsCredentialStuffing } from "./vps-manager";
+import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller, ensureComplianceFleet, startCompliancePoller, startMultiVpsProbePoller, detectMultiVpsCredentialStuffing, getMultiVpsDetections, clearMultiVpsDetection } from "./vps-manager";
 import { refreshTorList, getTorListState, pushTorListToFleet, getLastPush, startTorBlockPoller } from "./tor-block";
 import { getScannerBlockState, pushScannerBlockToFleet } from "./scanner-block";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
@@ -789,6 +789,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/fleet/multivps-probe/check", requireAuth, requireOperator, async (_req, res) => {
     const result = await detectMultiVpsCredentialStuffing();
     res.json(result);
+  });
+
+  // Elenco rilevazioni correnti (in-memory, aggiornato ad ogni ciclo del
+  // poller) con ASN/org arricchiti per la scheda IP Investigator.
+  app.get("/api/fleet/multivps-probe/detections", requireAuth, async (_req, res) => {
+    const detections = getMultiVpsDetections();
+    const geoByIp = new Map(
+      await Promise.all(detections.map(async d => [d.ip, await getOrLoadIpInfo(d.ip)] as const))
+    );
+    res.json(detections.map(d => ({ ...d, geoInfo: geoByIp.get(d.ip) || null })));
+  });
+
+  // Rimuove una rilevazione dalla lista (dopo sblocco manuale, o per
+  // archiviarla senza sbloccare). Non tocca il ban stesso.
+  app.post("/api/fleet/multivps-probe/dismiss", requireAuth, requireOperator, async (req, res) => {
+    const { ip } = req.body;
+    if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
+    clearMultiVpsDetection(ip);
+    res.json({ ok: true });
   });
 
   // Tor exit block: la lista vive sulla dashboard (eta', conteggio, esito ultimo
