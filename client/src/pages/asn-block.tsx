@@ -907,6 +907,11 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps, canWrit
   const [newDesc, setNewDesc] = useState("");
   const [content, setContent] = useState("");
 
+  // DynamoXc mantiene una blocklist ASN dedicata, esclusa dal salvataggio/sync
+  // fleet (vedi ASN_BLOCKLIST_EXCLUDED_VPS_NAMES lato server) — includerlo qui
+  // sporca la copertura mostrando ASN suoi privati come "1/56 VPS".
+  const coverageVps = onlineVps.filter(v => v.name.trim().toLowerCase() !== "dynamoxc");
+
   const { data: fleetBlocklist, isLoading: blocklistLoading, refetch: refetchBlocklist } = useQuery<{ content: string }>({
     queryKey: ["fleet-asn-blocklist"],
     queryFn: async () => { const r = await apiRequest("GET", "/api/fleet/asn/blocklist"); return r.json(); },
@@ -920,12 +925,12 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps, canWrit
     queryKey: ["asn-block-all", selectedVps],
     queryFn: async () => {
       const r = await apiRequest("POST", "/api/vps/bulk/get", {
-        vpsIds: onlineVps.map(v => v.id),
+        vpsIds: coverageVps.map(v => v.id),
         path: "/api/config/asn-blocklist.txt",
       });
       return r.json();
     },
-    enabled: onlineVps.length > 0,
+    enabled: coverageVps.length > 0,
     refetchInterval: 120000,
   });
 
@@ -1076,7 +1081,7 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps, canWrit
           <div className="flex items-center justify-between gap-4">
             <div>
               <CardTitle>ASN Bloccati</CardTitle>
-              <CardDescription>{allAsns.length} ASN — copertura su {onlineVps.length} VPS online</CardDescription>
+              <CardDescription>{allAsns.length} ASN — copertura su {coverageVps.length} VPS online</CardDescription>
             </div>
             <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
               <RefreshCw className="w-4 h-4 mr-1" />Aggiorna
@@ -1108,8 +1113,8 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps, canWrit
                       <TableCell className="font-mono font-semibold">{asn}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{description || "—"}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className={`text-xs ${presentIn.size === onlineVps.length ? "border-green-600/40 text-green-600" : "border-yellow-500/40 text-yellow-600"}`}>
-                          {presentIn.size}/{onlineVps.length} VPS
+                        <Badge variant="outline" className={`text-xs ${presentIn.size === coverageVps.length ? "border-green-600/40 text-green-600" : "border-yellow-500/40 text-yellow-600"}`}>
+                          {presentIn.size}/{coverageVps.length} VPS
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
