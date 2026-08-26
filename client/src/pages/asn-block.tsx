@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useVpsList, useVpsHealth } from "@/hooks/use-vps";
@@ -929,41 +929,75 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps, canWrit
     refetchInterval: 120000,
   });
 
-  const asnMap = new Map<string, { description?: string; presentIn: Set<string> }>();
-  const fleetEntries = parseAsnBlocklist(content);
-  const fleetAsns = new Set(fleetEntries.map(e => e.asn));
+  // content puo' arrivare a migliaia di righe (fleet blocklist) e bulkResults contiene
+  // lo stesso ordine di grandezza per ogni VPS online (~53) — riparse tutto ad ogni
+  // render (quindi ad ogni tasto/incolla nella textarea sotto) freezava il tab su un
+  // incollone grande. Ricalcola solo quando cambia davvero il contenuto sorgente.
+  const fleetEntries = useMemo(() => parseAsnBlocklist(content), [content]);
+  const fleetAsns = useMemo(() => new Set(fleetEntries.map(e => e.asn)), [fleetEntries]);
 
-  fleetEntries.forEach(({ asn, description }) => {
-    asnMap.set(asn, { description, presentIn: new Set() });
-  });
-
-  (bulkResults || []).filter(r => r.success && r.data?.content).forEach(r => {
-    const entries = parseAsnBlocklist(r.data.content);
-    entries.forEach(({ asn, description }) => {
-      if (!asnMap.has(asn)) asnMap.set(asn, { description, presentIn: new Set() });
-      asnMap.get(asn)!.presentIn.add(r.vpsId);
-      if (description && !asnMap.get(asn)!.description) asnMap.get(asn)!.description = description;
+  const allAsns = useMemo(() => {
+    const asnMap = new Map<string, { description?: string; presentIn: Set<string> }>();
+    fleetEntries.forEach(({ asn, description }) => {
+      asnMap.set(asn, { description, presentIn: new Set() });
     });
-  });
+    (bulkResults || []).filter(r => r.success && r.data?.content).forEach(r => {
+      const entries = parseAsnBlocklist(r.data.content);
+      entries.forEach(({ asn, description }) => {
+        if (!asnMap.has(asn)) asnMap.set(asn, { description, presentIn: new Set() });
+        asnMap.get(asn)!.presentIn.add(r.vpsId);
+        if (description && !asnMap.get(asn)!.description) asnMap.get(asn)!.description = description;
+      });
+    });
+    return Array.from(asnMap.entries()).map(([asn, data]) => ({ asn, ...data }));
+  }, [fleetEntries, bulkResults]);
 
-  const allAsns = Array.from(asnMap.entries()).map(([asn, data]) => ({ asn, ...data }));
-  const filtered = search
+  const filtered = useMemo(() => search
     ? allAsns.filter(e => e.asn.includes(search) || (e.description ?? "").toLowerCase().includes(search.toLowerCase()))
-    : allAsns;
+    : allAsns, [allAsns, search]);
+
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
 
   const saveFleetMutation = useMutation({
     mutationFn: async (nextContent: string) => {
-      const r = await apiRequest("POST", "/api/fleet/asn/blocklist", { content: nextContent });
-      return r.json();
+      // apiRequest lancia su risposta non-2xx con solo il testo grezzo — qui serve
+      // invece il campo validationErrors del 400 (righe malformate/duplicate), non
+      // un blob JSON illeggibile in un toast: fetch diretta per leggerlo sempre.
+      const res = await fetch("/api/fleet/asn/blocklist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: nextContent }),
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(data.error || `${res.status}`) as Error & { validationErrors?: string[] };
+        err.validationErrors = data.validationErrors;
+        throw err;
+      }
+      return data;
     },
     onSuccess: (data: any) => {
+      setValidationErrors([]);
       refetch();
       refetchBlocklist();
       const synced = (data.syncResults || []).filter((r: BulkResult) => r.success).length;
       const applied = (data.applyResults || []).filter((r: BulkResult) => r.success).length;
       toast({ title: "Blocklist ASN salvata", description: `Sincronizzata su ${synced} VPS, set rigenerato su ${applied} VPS` });
     },
-    onError: (e: any) => toast({ title: "Errore", description: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      if (Array.isArray(e.validationErrors) && e.validationErrors.length > 0) {
+        setValidationErrors(e.validationErrors);
+        toast({
+          title: "Blocklist non valida — nessuna modifica applicata",
+          description: `${e.validationErrors.length} riga/e con errori, vedi dettaglio sotto`,
+          variant: "destructive",
+        });
+      } else {
+        setValidationErrors([]);
+        toast({ title: "Errore", description: e.message, variant: "destructive" });
+      }
+    },
   });
 
   function updateEntry(asn: string, description: string | undefined, remove = false) {
@@ -1024,6 +1058,16 @@ function TabBlocklist({ selectedVps, setSelectedVps, vpsList, onlineVps, canWrit
               <Save className="w-4 h-4 mr-1" />{saveFleetMutation.isPending ? "Salvataggio..." : "Salva e sincronizza"}
             </Button>
           </div>
+          {validationErrors.length > 0 && (
+            <div className="text-xs space-y-1 border border-destructive/40 rounded-md p-3 bg-destructive/5 max-h-56 overflow-y-auto">
+              <p className="font-medium text-destructive mb-1">
+                Blocklist non valida — nessuna modifica applicata ({validationErrors.length} riga/e):
+              </p>
+              {validationErrors.map((err, i) => (
+                <p key={i} className="font-mono text-muted-foreground">{err}</p>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 
