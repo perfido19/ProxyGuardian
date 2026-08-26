@@ -447,6 +447,16 @@ export function clearMultiVpsDetection(ip: string): void {
 const MULTIVPS_PROBE_MIN_VPS = 3;
 const MULTIVPS_PROBE_LINES_PER_VPS = 300;
 
+// Un checker lento (una richiesta ogni 30-90 min per VPS) scoperto il 2026-08-26
+// impiegava ~6h a essere rilevato: ricostruendo la mappa da zero ogni ciclo dalle
+// sole ultime 300 righe, i 3 VPS dovevano risultare "colpiti di recente" tutti
+// nello stesso istante, cosa rara con un attacco spalmato su ore. Fix: stato
+// persistente tra i cicli (con scadenza) — basta che i 3 VPS vengano colpiti
+// entro la finestra, non nello stesso ciclo da 2 minuti.
+interface VpsSighting { usernames: Set<string>; lastSeen: number; }
+const persistentIpSightings = new Map<string, Map<string, VpsSighting>>(); // ip -> vpsId -> sighting
+const MULTIVPS_PROBE_SIGHTING_TTL_MS = 3 * 60 * 60 * 1000; // 3h
+
 // Rileva credential-stuffing distribuito: stesso IP colpisce 3+ VPS distinti
 // con username DIVERSO su ognuno (nessun username condiviso tra i VPS). Un
 // cliente CGNAT legittimo riusa lo stesso account su piu' IP - non username
@@ -456,10 +466,9 @@ const MULTIVPS_PROBE_LINES_PER_VPS = 300;
 // locale sensata (vedi memoria project_multivps_correlation_todo_2026-08-24).
 export async function detectMultiVpsCredentialStuffing(): Promise<MultiVpsProbeResult> {
   const enabled = Array.from(vpsStore.values()).filter(v => v.enabled && v.lastStatus !== "offline");
+  const nowMs = Date.now();
 
-  // ip -> vpsId -> Set<username>
-  const ipMap = new Map<string, Map<string, Set<string>>>();
-
+  // 1. Aggiorna lo stato persistente con le righe fresche di questo ciclo
   await Promise.allSettled(enabled.map(async vps => {
     try {
       const entries: Array<{ message: string }> = await agentGet(
@@ -476,13 +485,31 @@ export async function detectMultiVpsCredentialStuffing(): Promise<MultiVpsProbeR
         if (!ipM || !userM) continue;
         const ip = ipM[1];
         const user = userM[1];
-        if (!ipMap.has(ip)) ipMap.set(ip, new Map());
-        const perVps = ipMap.get(ip)!;
-        if (!perVps.has(vps.id)) perVps.set(vps.id, new Set());
-        perVps.get(vps.id)!.add(user);
+        if (!persistentIpSightings.has(ip)) persistentIpSightings.set(ip, new Map());
+        const perVps = persistentIpSightings.get(ip)!;
+        const sighting = perVps.get(vps.id);
+        if (sighting) { sighting.usernames.add(user); sighting.lastSeen = nowMs; }
+        else perVps.set(vps.id, { usernames: new Set([user]), lastSeen: nowMs });
       }
     } catch { /* vps irraggiungibile in questo ciclo, salta */ }
   }));
+
+  // 2. Pulizia: scarta avvistamenti per-VPS piu' vecchi della finestra, e gli
+  //    IP che restano senza nessun VPS "vivo" dentro la finestra
+  for (const [ip, perVps] of persistentIpSightings) {
+    for (const [vpsId, sighting] of perVps) {
+      if (nowMs - sighting.lastSeen > MULTIVPS_PROBE_SIGHTING_TTL_MS) perVps.delete(vpsId);
+    }
+    if (perVps.size === 0) persistentIpSightings.delete(ip);
+  }
+
+  // ip -> vpsId -> Set<username> (vista sullo stato persistente per il resto della funzione)
+  const ipMap = new Map<string, Map<string, Set<string>>>();
+  for (const [ip, perVps] of persistentIpSightings) {
+    const m = new Map<string, Set<string>>();
+    for (const [vpsId, sighting] of perVps) m.set(vpsId, sighting.usernames);
+    ipMap.set(ip, m);
+  }
 
   const isNetbirdRangeIp = (ip: string): boolean => {
     const octets = ip.split(".").map(Number);
