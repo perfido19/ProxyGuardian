@@ -780,6 +780,90 @@ function MetricheTab() {
   );
 }
 
+// ─── Whitelist tab ──────────────────────────────────────────────────────────
+
+function WhitelistTab() {
+  const { toast } = useToast();
+  const [content, setContent] = useState("");
+  const [loaded, setLoaded] = useState(false);
+
+  const { data, isLoading, refetch } = useQuery<{ content: string }>({
+    queryKey: ["crowdsec-whitelist"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/crowdsec/whitelist"); return r.json(); },
+  });
+
+  useEffect(() => {
+    if (data && !loaded) {
+      setContent(data.content);
+      setLoaded(true);
+    }
+  }, [data, loaded]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (c: string) => {
+      const r = await apiRequest("POST", "/api/crowdsec/whitelist", { content: c });
+      return r.json();
+    },
+    onSuccess: (result: { deploy: Array<{ ok: boolean; vpsName?: string; reason?: string }> }) => {
+      queryClient.invalidateQueries({ queryKey: ["crowdsec-whitelist"] });
+      const deployed = (result.deploy || []).filter(d => d.ok).length;
+      const total = (result.deploy || []).filter(d => d.reason !== "not installed").length;
+      toast({ title: "Whitelist salvata e deployata", description: `${deployed}/${total} VPS aggiornati` });
+    },
+    onError: (e: any) => toast({ title: "Errore salvataggio", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <p className="text-sm font-medium">local/fleet-custom-whitelist.yaml</p>
+          <p className="text-xs text-muted-foreground">
+            Eccezioni IP/CIDR per servizi terze parti legittimi (es. Scaleway, Cloudflare, IPTV Smarters). Salvato sempre in un file <span className="font-mono">local/</span> dedicato — mai nel file hub-managed <span className="font-mono">crowdsecurity/whitelists</span>, che un <span className="font-mono">cscli hub upgrade</span> sovrascriverebbe silenziosamente.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => refetch()}>
+            <RefreshCw className="w-4 h-4 mr-1" />Ricarica
+          </Button>
+          <Button size="sm" onClick={() => saveMutation.mutate(content)} disabled={saveMutation.isPending || isLoading}>
+            {saveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Upload className="w-3 h-3 mr-1" />}
+            Salva e Deploya su fleet
+          </Button>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center">
+          <Loader2 className="w-4 h-4 animate-spin" />Caricamento...
+        </div>
+      ) : (
+        <Textarea
+          value={content}
+          onChange={e => setContent(e.target.value)}
+          className="font-mono text-xs min-h-[420px] resize-y bg-muted/30"
+          spellCheck={false}
+        />
+      )}
+
+      {saveMutation.data && (
+        <div className="text-xs space-y-1 border rounded-md p-3 bg-muted/20">
+          <p className="font-medium mb-1">Deploy results:</p>
+          {(saveMutation.data.deploy || []).map((r: any, i: number) => (
+            <div key={i} className="flex items-center gap-2">
+              {r.ok
+                ? <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />
+                : <XCircle className="w-3 h-3 text-muted-foreground shrink-0" />}
+              <span className={`font-mono ${r.ok ? "text-foreground" : "text-muted-foreground"}`}>{r.vpsName || "?"}</span>
+              {!r.ok && r.reason && <span className="text-muted-foreground">{r.reason}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function CrowdSecPage() {
@@ -800,6 +884,7 @@ export default function CrowdSecPage() {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="decisioni">Decisioni</TabsTrigger>
           <TabsTrigger value="scenari">Scenari</TabsTrigger>
+          <TabsTrigger value="whitelist">Whitelist</TabsTrigger>
           <TabsTrigger value="metriche">Metriche</TabsTrigger>
         </TabsList>
 
@@ -813,6 +898,10 @@ export default function CrowdSecPage() {
 
         <TabsContent value="scenari" className="pt-4">
           <ScenariTab />
+        </TabsContent>
+
+        <TabsContent value="whitelist" className="pt-4">
+          <WhitelistTab />
         </TabsContent>
 
         <TabsContent value="metriche" className="pt-4">

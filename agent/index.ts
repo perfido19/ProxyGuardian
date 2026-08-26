@@ -1075,6 +1075,7 @@ const SUDOERS_CONTENT = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/local_api_credentials.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/parsers/s02-enrich/fleet-custom-whitelist.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /bin/chmod 440 /etc/sudoers.d/proxy-guardian-agent",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
   "Defaults:pgagent env_keep += \"DEBIAN_FRONTEND\"",
@@ -2534,6 +2535,25 @@ app.post("/api/crowdsec/scenario", async (req, res) => {
   }
 });
 
+app.post("/api/crowdsec/custom-whitelist", async (req, res) => {
+  try {
+    var content = typeof req.body.content === "string" ? req.body.content : "";
+    if (!content.trim()) {
+      res.status(400).json({ error: "Contenuto richiesto" });
+      return;
+    }
+    var whitelistPath = "/etc/crowdsec/parsers/s02-enrich/fleet-custom-whitelist.yaml";
+    await sudoWriteFile(whitelistPath, content);
+    var reload = await runCmd("sudo systemctl reload-or-restart crowdsec");
+    if (!reload.ok) reload = await runCmd("sudo systemctl restart crowdsec");
+    var active = await runCmd("systemctl is-active crowdsec");
+    var isActive = active.stdout.trim() === "active";
+    res.json({ ok: isActive, path: whitelistPath, reload: reload.stdout || reload.stderr, active: active.stdout.trim() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete("/api/crowdsec/scenario/:name", async (req, res) => {
   try {
     var name = req.params.name;
@@ -2589,6 +2609,7 @@ app.post("/api/crowdsec/install", async (req, res) => {
     centralLapi = { url: raw.url, login: raw.login, password: raw.password, bouncerKey: raw.bouncerKey };
   }
   var fleetWhitelist = typeof (req.body && req.body.fleetWhitelist) === "string" ? req.body.fleetWhitelist : null;
+  var fleetCustomWhitelist = typeof (req.body && req.body.fleetCustomWhitelist) === "string" ? req.body.fleetCustomWhitelist : null;
   var useCache = req.body && req.body.useCache === true;
   try {
     await writeFile("/tmp/pg-sudoers-crowdsec", SUDOERS_CONTENT, "utf-8");
@@ -2664,6 +2685,16 @@ app.post("/api/crowdsec/install", async (req, res) => {
       );
       try { await unlink("/tmp/pg-cs-fleet-whitelist.yaml"); } catch {}
       addStep("install fleet whitelist", wlWrite);
+    }
+
+    if (fleetCustomWhitelist) {
+      await writeFile("/tmp/pg-cs-fleet-custom-whitelist.yaml", fleetCustomWhitelist, { encoding: "utf-8", mode: 0o600 });
+      var customWlWrite = await runCmd(
+        "cat /tmp/pg-cs-fleet-custom-whitelist.yaml | sudo tee /etc/crowdsec/parsers/s02-enrich/fleet-custom-whitelist.yaml > /dev/null",
+        5000
+      );
+      try { await unlink("/tmp/pg-cs-fleet-custom-whitelist.yaml"); } catch {}
+      addStep("install fleet custom whitelist", customWlWrite);
     }
 
     if (centralLapi) {

@@ -1,0 +1,12 @@
+name: local/fleet-custom-whitelist
+description: "Whitelist IP di servizi terze parti noti e legittimi (replica dell'eccezione gia' approvata su main, gestita da dashboard CrowdSec > Whitelist)"
+whitelist:
+  reason: "ss-iptv.com / servizi terze parti legittimi - vedi project_crowdsec_whitelist_tainted_fix_2026-08-24 e project_cloudflare_asn_main_fix_2026-08-23"
+  ip:
+    - "116.202.118.184"
+  cidr:
+    - "51.161.128.0/17"  # IPTV Smarters (servizio terze parti legittimo, whitelist fleet 2026-08-21)
+    - "51.15.0.0/16"     # Scaleway - richiesta utente 2026-08-23
+    - "51.254.0.0/15"    # Scaleway - richiesta utente 2026-08-23
+    - "51.255.0.0/15"    # Scaleway - richiesta utente 2026-08-23
+    - "104.28.0.0/14"     # Cloudflare AS13335 - evita falsi ban CrowdSec su IP edge legittimi

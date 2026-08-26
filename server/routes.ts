@@ -228,6 +228,7 @@ const DEPLOY_AGENT_SUDOERS = [
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/local_api_credentials.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml",
+  "pgagent ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/crowdsec/parsers/s02-enrich/fleet-custom-whitelist.yaml",
   "pgagent ALL=(ALL) NOPASSWD: /usr/sbin/visudo -c",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec",
   "pgagent ALL=(ALL) NOPASSWD: /bin/systemctl enable crowdsec-firewall-bouncer",
@@ -2267,6 +2268,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       fleetWhitelist = readFileSync(join(process.cwd(), "crowdsec", "parsers", "s02-enrich", "fleet-whitelist.yaml"), "utf-8");
     } catch { fleetWhitelist = undefined; }
+    let fleetCustomWhitelist: string | undefined;
+    try {
+      fleetCustomWhitelist = readFileSync(join(process.cwd(), "crowdsec", "parsers", "s02-enrich", "fleet-custom-whitelist.yaml"), "utf-8");
+    } catch { fleetCustomWhitelist = undefined; }
 
     let useCache = false;
     const manifest = getCrowdsecPackageManifest();
@@ -2291,6 +2296,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await agentPost(vps, "/api/crowdsec/install", {
         centralLapi: { url: central.url, login: central.login, password: central.password, bouncerKey: central.bouncerKey },
         fleetWhitelist,
+        fleetCustomWhitelist,
         useCache,
       }, SLOW_REQUEST_TIMEOUT);
       res.json(result);
@@ -2469,6 +2475,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }));
     res.json({ deleted: true, deploy: deployResults.map(r => r.status === "fulfilled" ? r.value : { ok: false }) });
+  });
+
+  // ─── Whitelist custom (servizi terze parti legittimi, fleet-wide) ────────────
+  // Vive in local/fleet-custom-whitelist (mai in crowdsecurity/whitelists, il file
+  // hub-managed — vedi project_crowdsec_whitelist_tainted_fix_2026-08-24 e
+  // project_crowdsec_whitelist_retaint_fix_2026-08-26: editarlo direttamente lo
+  // ritainta e un futuro 'cscli hub upgrade' lo sovrascrive silenziosamente.
+
+  const CROWDSEC_CUSTOM_WHITELIST_PATH = join(process.cwd(), "crowdsec", "parsers", "s02-enrich", "fleet-custom-whitelist.yaml");
+
+  app.get("/api/crowdsec/whitelist", requireAuth, (_req, res) => {
+    try {
+      const content = readFileSync(CROWDSEC_CUSTOM_WHITELIST_PATH, "utf-8");
+      res.json({ content });
+    } catch {
+      res.json({ content: "" });
+    }
+  });
+
+  app.post("/api/crowdsec/whitelist", requireAuth, requireOperator, async (req, res) => {
+    const content = typeof req.body.content === "string" ? req.body.content : "";
+    if (!content.trim()) return res.status(400).json({ error: "Content required" });
+    writeFileSync(CROWDSEC_CUSTOM_WHITELIST_PATH, content, "utf-8");
+    // Deploy to all CrowdSec VPS
+    const vpsList = getAllVps().filter(v => v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
+    const deployResults = await Promise.allSettled(vpsList.map(async (vps) => {
+      try {
+        const status = await agentGet(vps, "/api/crowdsec/status", 5000);
+        if (!status.installed) return { vpsId: vps.id, vpsName: vps.name, ok: false, reason: "not installed" };
+        const r = await agentPost(vps, "/api/crowdsec/custom-whitelist", { content }, 15000);
+        return { vpsId: vps.id, vpsName: vps.name, ok: r.ok === true };
+      } catch (e: any) {
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, reason: e.message };
+      }
+    }));
+    res.json({ saved: true, deploy: deployResults.map(r => r.status === "fulfilled" ? r.value : { ok: false }) });
   });
 
   app.get("/api/fleet/crowdsec/decisions", requireAuth, async (_req, res) => {
@@ -2654,6 +2696,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const crowdsecFleetWhitelist = installCrowdSec
         ? (() => {
             try { return readFileSync(join(process.cwd(), "crowdsec", "parsers", "s02-enrich", "fleet-whitelist.yaml"), "utf-8"); }
+            catch { return null; }
+          })()
+        : null;
+      const crowdsecFleetCustomWhitelist = installCrowdSec
+        ? (() => {
+            try { return readFileSync(join(process.cwd(), "crowdsec", "parsers", "s02-enrich", "fleet-custom-whitelist.yaml"), "utf-8"); }
             catch { return null; }
           })()
         : null;
@@ -2877,6 +2925,10 @@ CSSCENEOF${i}`).join("\n")}
 ${crowdsecFleetWhitelist ? `cat > /etc/crowdsec/parsers/s02-enrich/fleet-whitelist.yaml << 'CSWLEOF'
 ${crowdsecFleetWhitelist}
 CSWLEOF` : "# fleet-whitelist.yaml non disponibile in fase di generazione script"}
+
+${crowdsecFleetCustomWhitelist ? `cat > /etc/crowdsec/parsers/s02-enrich/fleet-custom-whitelist.yaml << 'CSCUSTWLEOF'
+${crowdsecFleetCustomWhitelist}
+CSCUSTWLEOF` : "# fleet-custom-whitelist.yaml non disponibile in fase di generazione script"}
 
 ${crowdsecCentral ? `cat > /etc/crowdsec/local_api_credentials.yaml << 'CSCREDSEOF'
 url: ${crowdsecCentral.url}
