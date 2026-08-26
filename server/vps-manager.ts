@@ -2,6 +2,7 @@ import * as crypto from "crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { readFile } from "fs/promises";
+import { ipToInt, parseCidr, type Cidr } from "./tor-block-filter";
 
 export interface VpsConfig {
   id: string;
@@ -447,6 +448,20 @@ export function clearMultiVpsDetection(ip: string): void {
 const MULTIVPS_PROBE_MIN_VPS = 3;
 const MULTIVPS_PROBE_LINES_PER_VPS = 300;
 
+// Stessa whitelist di local/fleet-custom-whitelist.yaml (gestita da CrowdSec > Whitelist
+// in dashboard) — CrowdSec non c'entra con questo poller, bana via iptv_ban in modo
+// indipendente, quindi va escluso a mano. Letto a ogni ciclo (file piccolo, cambia
+// raramente) cosi' un salvataggio da dashboard si applica senza restart.
+function getFleetCustomWhitelistNets(): Cidr[] {
+  try {
+    const content = readFileSync(join(process.cwd(), "crowdsec", "parsers", "s02-enrich", "fleet-custom-whitelist.yaml"), "utf-8");
+    const matches = content.match(/\d{1,3}(?:\.\d{1,3}){3}(?:\/\d{1,2})?/g) || [];
+    return matches.map(parseCidr).filter((c): c is Cidr => c !== null);
+  } catch {
+    return [];
+  }
+}
+
 // Un checker lento (una richiesta ogni 30-90 min per VPS) scoperto il 2026-08-26
 // impiegava ~6h a essere rilevato: ricostruendo la mappa da zero ogni ciclo dalle
 // sole ultime 300 righe, i 3 VPS dovevano risultare "colpiti di recente" tutti
@@ -516,10 +531,17 @@ export async function detectMultiVpsCredentialStuffing(): Promise<MultiVpsProbeR
     return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
   };
 
+  const whitelistNets = getFleetCustomWhitelistNets();
+  const isFleetWhitelistedIp = (ip: string): boolean => {
+    const ipInt = ipToInt(ip);
+    return whitelistNets.some(n => (ipInt & n.mask) >>> 0 === n.base);
+  };
+
   const vpsNameById = new Map(enabled.map(v => [v.id, v.name]));
   const suspicious: Array<{ ip: string; vpsHit: number; usernames: string[]; vpsNames: string[] }> = [];
   for (const [ip, perVps] of ipMap) {
     if (isNetbirdRangeIp(ip)) continue;
+    if (isFleetWhitelistedIp(ip)) continue;
     if (perVps.size < MULTIVPS_PROBE_MIN_VPS) continue;
 
     // firma: nessun username condiviso tra due VPS diversi per questo IP

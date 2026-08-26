@@ -47,14 +47,14 @@ export function parseWhitelist(content: string): { cidrs: string[]; domains: str
   return { cidrs, domains };
 }
 
-interface Cidr { base: number; mask: number; }
+export interface Cidr { base: number; mask: number; }
 
-function ipToInt(ip: string): number {
+export function ipToInt(ip: string): number {
   const p = ip.split(".").map(Number);
   return (((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]) >>> 0;
 }
 
-function parseCidr(entry: string): Cidr | null {
+export function parseCidr(entry: string): Cidr | null {
   const [addr, bitsRaw] = entry.split("/");
   if (!isValidIpv4(addr)) return null;
   const bits = bitsRaw === undefined ? 32 : Number(bitsRaw);
