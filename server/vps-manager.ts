@@ -235,20 +235,36 @@ export interface BanSyncResult {
 
 const BANSYNC_MAX_PER_VPS = 50;
 
+// Jail il cui ban locale viene promosso a ban fleet-wide via BanSync — solo
+// quelle a basso rischio di falsi positivi CGNAT (non 404-0/sshd/block22).
+// Richiesta esplicita dell'utente 2026-08-26, solo ban recenti (30 min) per
+// evitare di ripropagare ogni ciclo tutto lo storico ban del jail.
+const FLEET_SYNCED_JAILS = new Set(["nginx-abuse", "xtream-api"]);
+const FLEET_SYNCED_JAIL_MAX_AGE_MS = 30 * 60 * 1000;
+
 export async function syncIptvBanFleet(): Promise<BanSyncResult> {
   // Salta VPS offline per non appesantire il ciclo
   const enabled = Array.from(vpsStore.values()).filter(v => v.enabled && v.lastStatus !== "offline");
 
-  // 1. Pull iptv_ban da tutti i VPS in parallelo
+  // 1. Pull iptv_ban + ban recenti delle jail selezionate da tutti i VPS in parallelo
   const pullResults = await Promise.allSettled(
     enabled.map(async vps => {
+      const ips = new Set<string>();
       try {
         const data = await agentGet(vps, "/api/ipset/iptv_ban?limit=10000", 15000);
         const members: string[] = (data.members || []).map((m: string) => m.split(" ")[0]).filter((ip: string) => /^\d+\.\d+\.\d+\.\d+$/.test(ip));
-        return { vpsId: vps.id, ips: members };
-      } catch {
-        return { vpsId: vps.id, ips: [] };
-      }
+        members.forEach(ip => ips.add(ip));
+      } catch { /* ipset non raggiungibile, ignora */ }
+      try {
+        const banned: Array<{ ip: string; jail: string; banTime: string }> = await agentGet(vps, "/api/banned-ips", 15000);
+        const now = Date.now();
+        for (const b of banned || []) {
+          if (!FLEET_SYNCED_JAILS.has(b.jail)) continue;
+          const age = now - new Date(b.banTime).getTime();
+          if (age >= 0 && age <= FLEET_SYNCED_JAIL_MAX_AGE_MS) ips.add(b.ip);
+        }
+      } catch { /* fail2ban non raggiungibile, ignora */ }
+      return { vpsId: vps.id, ips: [...ips] };
     })
   );
 
