@@ -2086,12 +2086,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { optimized: Object.values(checks).every(Boolean), checks, cacheSize: cacheSize || undefined };
   }
 
+  const NGINX_BACKUP_DIR = join(process.cwd(), "data", "nginx-backups");
+
+  // Salva su disco (dashboard) il nginx.conf attualmente in produzione su un VPS,
+  // prima di sovrascriverlo. Serve sia per rollback manuale sia per l'auto-restore
+  // in caso di nginx -t fallito. Ritorna { path, content } oppure null se il VPS
+  // non e' raggiungibile / non ha ancora un nginx.conf.
+  async function backupVpsNginx(vps: any): Promise<{ path: string; content: string } | null> {
+    try {
+      const data = await agentGet(vps, "/api/config/nginx.conf");
+      const content: string = data.content || "";
+      if (!content.trim()) return null;
+      if (!existsSync(NGINX_BACKUP_DIR)) mkdirSync(NGINX_BACKUP_DIR, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const path = join(NGINX_BACKUP_DIR, `${vps.id}.${ts}.conf`);
+      writeFileSync(path, content, "utf-8");
+      // tieni solo gli ultimi 10 backup per VPS
+      try {
+        const mine = readdirSync(NGINX_BACKUP_DIR)
+          .filter(f => f.startsWith(`${vps.id}.`) && f.endsWith(".conf"))
+          .sort();
+        for (const f of mine.slice(0, -10)) unlinkSync(join(NGINX_BACKUP_DIR, f));
+      } catch {}
+      return { path, content };
+    } catch {
+      return null;
+    }
+  }
+
   app.get("/api/fleet/nginx/template", requireAuth, (_req, res) => {
     try {
       const content = readFileSync(NGINX_TEMPLATE_PATH, "utf-8");
       res.json({ content });
     } catch (e: any) {
       res.status(500).json({ error: "Template non trovato: " + e.message });
+    }
+  });
+
+  // Edit del template nginx dalla dashboard. Backup del precedente + validazioni
+  // minime prima di scrivere: il placeholder __STREAM_CACHE_SIZE__ DEVE restare
+  // (senza, calculateCacheSize e' no-op e status marca tutti i VPS non-ottimizzati),
+  // parentesi graffe bilanciate, dimensione plausibile.
+  app.post("/api/fleet/nginx/template", requireAuth, requireAdmin, (req, res) => {
+    const { content } = req.body || {};
+    if (typeof content !== "string" || content.trim().length < 500) {
+      return res.status(400).json({ error: "content mancante o troppo corto" });
+    }
+    if (!content.includes("__STREAM_CACHE_SIZE__")) {
+      return res.status(422).json({ error: "Il placeholder __STREAM_CACHE_SIZE__ deve restare nel template" });
+    }
+    const opens = (content.match(/{/g) || []).length;
+    const closes = (content.match(/}/g) || []).length;
+    if (opens !== closes) {
+      return res.status(422).json({ error: `Parentesi graffe sbilanciate: ${opens} '{' vs ${closes} '}'` });
+    }
+    try {
+      if (existsSync(NGINX_TEMPLATE_PATH)) {
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        writeFileSync(`${NGINX_TEMPLATE_PATH}.bak.${ts}`, readFileSync(NGINX_TEMPLATE_PATH, "utf-8"), "utf-8");
+      }
+      writeFileSync(NGINX_TEMPLATE_PATH, content, "utf-8");
+      res.json({ ok: true, bytes: content.length });
+    } catch (e: any) {
+      res.status(500).json({ error: "Scrittura template fallita: " + e.message });
     }
   });
 
@@ -2127,7 +2184,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   app.post("/api/fleet/nginx/apply", requireAuth, requireAdmin, async (req, res) => {
-    const { vpsIds } = req.body;
+    const { vpsIds, batchSize } = req.body;
     if (!vpsIds || !Array.isArray(vpsIds)) return res.status(400).json({ error: "vpsIds[] richiesto" });
     let template: string;
     try {
@@ -2135,23 +2192,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) {
       return res.status(500).json({ error: "Template nginx non trovato sul server" });
     }
+    if (!template.includes("__STREAM_CACHE_SIZE__")) {
+      return res.status(422).json({ error: "Template senza placeholder __STREAM_CACHE_SIZE__ — rifiuto l'apply (cache size non calcolabile)" });
+    }
     const vpsList = getAllVps().filter(v => vpsIds.includes(v.id) && v.enabled).map(s => getVpsById(s.id)).filter(Boolean) as any[];
-    const results = await Promise.all(vpsList.map(async (vps) => {
+
+    const applyOne = async (vps: any) => {
+      // 1. backup del nginx.conf attuale PRIMA di toccare nulla
+      const backup = await backupVpsNginx(vps);
       try {
-        // Ottieni info disco dal VPS
         const sysInfo = await agentGet(vps, "/api/system");
         const diskFree = sysInfo.disk?.free || "5g";
         const cacheSize = calculateCacheSize(diskFree);
-        // Sostituisci placeholder nel template
         const config = template.replace(/__STREAM_CACHE_SIZE__/g, cacheSize);
         await agentPost(vps, "/api/system/setup-nginx-dirs", {});
-        await agentPost(vps, "/api/config/nginx.conf", { content: config });
+        try {
+          // l'agent scrive poi fa nginx -t: su fallimento lancia 422 ma lascia
+          // il file rotto su disco -> qui lo ripristiniamo dal backup noto-buono.
+          await agentPost(vps, "/api/config/nginx.conf", { content: config });
+        } catch (writeErr: any) {
+          if (backup) {
+            try {
+              await agentPost(vps, "/api/config/nginx.conf", { content: backup.content });
+              return { vpsId: vps.id, vpsName: vps.name, ok: false, cacheSize, restored: true,
+                       backupPath: backup.path, error: `write fallita, ripristinato backup: ${writeErr.message}` };
+            } catch (restoreErr: any) {
+              return { vpsId: vps.id, vpsName: vps.name, ok: false, cacheSize, restored: false,
+                       backupPath: backup.path, error: `write fallita E restore fallito: ${restoreErr.message}` };
+            }
+          }
+          return { vpsId: vps.id, vpsName: vps.name, ok: false, cacheSize, restored: false,
+                   backupPath: null, error: `write fallita, nessun backup disponibile: ${writeErr.message}` };
+        }
         const reload = await agentPost(vps, "/api/nginx/reload", {});
-        return { vpsId: vps.id, vpsName: vps.name, ok: reload.ok !== false, cacheSize, error: reload.error };
+        return { vpsId: vps.id, vpsName: vps.name, ok: reload.ok !== false, cacheSize,
+                 restored: false, backupPath: backup?.path || null, error: reload.error };
       } catch (e: any) {
-        return { vpsId: vps.id, vpsName: vps.name, ok: false, cacheSize: null, error: e.message };
+        return { vpsId: vps.id, vpsName: vps.name, ok: false, cacheSize: null,
+                 restored: false, backupPath: backup?.path || null, error: e.message };
       }
-    }));
+    };
+
+    // batching: default 8 VPS per giro, sequenziale tra i giri (canary = passare 1 id)
+    const size = Math.max(1, Math.min(Number(batchSize) || 8, vpsList.length || 1));
+    const results: any[] = [];
+    for (let i = 0; i < vpsList.length; i += size) {
+      const chunk = vpsList.slice(i, i + size);
+      results.push(...await Promise.all(chunk.map(applyOne)));
+    }
     res.json(results);
   });
 

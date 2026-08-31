@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingState } from "@/components/loading-state";
 import {
@@ -78,6 +79,8 @@ export default function FleetConfig() {
   const [netbirdUpdating, setNetbirdUpdating] = useState<Record<string, "idle" | "running" | "ok" | "error">>({});
   const [sudoersUpdating, setSudoersUpdating] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
+  const [templateDraft, setTemplateDraft] = useState<string | null>(null);
+  const [templateSaving, setTemplateSaving] = useState(false);
 
   const { data: statuses, isLoading, refetch, isFetching } = useQuery<VpsNginxStatus[]>({
     queryKey: ["/api/fleet/nginx/status"],
@@ -96,6 +99,34 @@ export default function FleetConfig() {
     },
     enabled: templateOpen,
   });
+
+  // carica il draft quando arriva il template; azzera alla chiusura del dialog
+  useEffect(() => {
+    if (templateOpen && templateData?.content != null && templateDraft === null) {
+      setTemplateDraft(templateData.content);
+    }
+    if (!templateOpen && templateDraft !== null) setTemplateDraft(null);
+  }, [templateOpen, templateData, templateDraft]);
+
+  const templateDirty = templateDraft !== null && templateData?.content != null && templateDraft !== templateData.content;
+
+  const saveTemplate = async () => {
+    if (templateDraft === null) return;
+    if (!templateDraft.includes("__STREAM_CACHE_SIZE__")) {
+      toast({ title: "Salvataggio bloccato", description: "Il placeholder __STREAM_CACHE_SIZE__ deve restare nel template", variant: "destructive" });
+      return;
+    }
+    setTemplateSaving(true);
+    try {
+      await apiRequest("POST", "/api/fleet/nginx/template", { content: templateDraft });
+      await queryClient.invalidateQueries({ queryKey: ["/api/fleet/nginx/template"] });
+      toast({ title: "Template salvato", description: "Il prossimo 'applica' userà questa versione. Backup del precedente salvato sul dashboard." });
+    } catch (e: any) {
+      toast({ title: "Errore salvataggio template", description: e.message, variant: "destructive" });
+    } finally {
+      setTemplateSaving(false);
+    }
+  };
 
   const { data: cleanupStatuses, refetch: refetchCleanup } = useQuery<VpsCleanupStatus[]>({
     queryKey: ["/api/fleet/netbird/cleanup-status"],
@@ -660,15 +691,41 @@ export default function FleetConfig() {
 
       {/* Template dialog */}
       <Dialog open={templateOpen} onOpenChange={setTemplateOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="font-heading">nginx-template.conf</DialogTitle>
+            <DialogDescription>
+              Modifica il template usato da <span className="font-mono">applica nginx</span>. Tieni il
+              placeholder <span className="font-mono">__STREAM_CACHE_SIZE__</span> (sostituito per-VPS in
+              base al disco). Al salvataggio viene tenuto un backup del precedente sul dashboard.
+            </DialogDescription>
           </DialogHeader>
           <div className="overflow-auto flex-1">
-            <pre className="text-xs font-mono bg-muted/50 rounded-lg p-4 whitespace-pre overflow-x-auto">
-              {templateData?.content || "Caricamento..."}
-            </pre>
+            {templateData?.content == null ? (
+              <div className="text-sm text-muted-foreground p-4">Caricamento...</div>
+            ) : (
+              <Textarea
+                value={templateDraft ?? templateData.content}
+                onChange={(e) => setTemplateDraft(e.target.value)}
+                spellCheck={false}
+                className="font-mono text-xs h-[60vh] whitespace-pre resize-none"
+              />
+            )}
           </div>
+          <DialogFooter className="flex items-center justify-between sm:justify-between">
+            <span className="text-xs text-muted-foreground">
+              {templateDirty ? "Modifiche non salvate" : "Nessuna modifica"}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setTemplateDraft(templateData?.content ?? null)} disabled={!templateDirty || templateSaving}>
+                Annulla modifiche
+              </Button>
+              <Button size="sm" onClick={saveTemplate} disabled={!templateDirty || templateSaving} className="gap-1.5">
+                {templateSaving ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <FileCode className="w-3.5 h-3.5" />}
+                Salva template
+              </Button>
+            </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
