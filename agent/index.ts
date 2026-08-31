@@ -233,13 +233,24 @@ app.get("/api/banned-ips", async (_req, res) => {
     while ((iptvLogMatch = iptvLogRe.exec(iptvLog)) !== null) {
       iptvLocalBanTimeByIp[iptvLogMatch[2]] = new Date(iptvLogMatch[1]).toISOString();
     }
-    var iptvR = await runCmd("sudo ipset list iptv_ban 2>/dev/null | awk '/^Members:/{found=1;next} found && /^[0-9]/{print $1}' || echo ''");
+    // "print" (riga intera, non solo $1): serve il "timeout <sec>" residuo per il refresh lato poller.
+    var iptvR = await runCmd("sudo ipset list iptv_ban 2>/dev/null | awk '/^Members:/{found=1;next} found && /^[0-9]/{print}' || echo ''");
     if (iptvR.ok && iptvR.stdout.trim()) {
-      var iptvIps = iptvR.stdout.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return /^\d+\.\d+\.\d+\.\d+$/.test(l); });
-      for (var i = 0; i < iptvIps.length; i++) {
-        var iptvIp = iptvIps[i];
+      var iptvLines = iptvR.stdout.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return /^\d+\.\d+\.\d+\.\d+/.test(l); });
+      for (var i = 0; i < iptvLines.length; i++) {
+        var iptvIp = iptvLines[i].split(/\s+/)[0];
+        var tMatch = iptvLines[i].match(/timeout (\d+)/);
+        // source: "local" = rilevato da QUESTO VPS (riga in bans.log); "sync" = copia ricevuta via
+        // BanSync. Il poller propaga solo le "local" fresche -> niente loop self-reinforcing.
+        var iptvIsLocal = !!iptvLocalBanTimeByIp[iptvIp];
         var iptvBanTime = iptvLocalBanTimeByIp[iptvIp] || iptvBanTimeByIp[iptvIp] || new Date().toISOString();
-        bannedIps.push({ ip: iptvIp, jail: "anti-iptv", banTime: iptvBanTime });
+        bannedIps.push({
+          ip: iptvIp,
+          jail: "anti-iptv",
+          banTime: iptvBanTime,
+          source: iptvIsLocal ? "local" : "sync",
+          timeout: tMatch ? parseInt(tMatch[1], 10) : null
+        });
       }
     }
     bannedIpsCache = { data: bannedIps, ts: Date.now() };
@@ -590,9 +601,19 @@ app.post("/api/ipset/:name/add", async (req, res) => {
   if (!/^[\w\-]+$/.test(name)) return res.status(400).json({ error: "Nome ipset non valido" });
   if (!ip || !/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(ip)) return res.status(400).json({ error: "IP non valido" });
   if (isNetbirdRangeIp(ip)) return res.status(400).json({ error: "IP nel range NetBird (100.64.0.0/10): non bannabile, e' la rete di gestione fleet" });
-  const result = await runCmd(`sudo ipset add ${name} ${ip}`);
+  // iptv_ban: -exist (re-add = refresh, non errore) + timeout 7g cosi' le entry scadono da sole
+  // quando il poller smette di rinfrescarle. Fallback senza timeout se l'ipset e' pre-migrazione.
+  let result;
+  if (name === "iptv_ban") {
+    result = await runCmd(`sudo ipset add -exist ${name} ${ip} timeout 604800 2>&1`);
+    if (!result.ok && /timeout/i.test((result.stderr || "") + (result.stdout || ""))) {
+      result = await runCmd(`sudo ipset add -exist ${name} ${ip} 2>&1`);
+    }
+  } else {
+    result = await runCmd(`sudo ipset add -exist ${name} ${ip} 2>&1`);
+  }
   if (result.ok && name === "iptv_ban") iptvBanTimeByIp[ip] = new Date().toISOString();
-  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+  res.json({ ok: result.ok, error: result.ok ? undefined : (result.stderr || result.stdout) });
 });
 
 app.post("/api/ipset/:name/remove", async (req, res) => {

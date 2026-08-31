@@ -243,57 +243,72 @@ const BANSYNC_MAX_PER_VPS = 50;
 const FLEET_SYNCED_JAILS = new Set(["nginx-abuse", "xtream-api"]);
 const FLEET_SYNCED_JAIL_MAX_AGE_MS = 30 * 60 * 1000;
 
+// iptv_ban: un ban anti-iptv rilevato localmente (source "local", riga in bans.log) viene
+// propagato fleet-wide finche' e' "fresco" (< 7g). Le copie ricevute (source "sync") NON
+// rientrano nell'unione -> niente loop self-reinforcing, le entry scadono col timeout ipset.
+const IPTV_LOCAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Un IP authoritative gia' presente su un VPS viene ri-spinto (refresh timeout a 7g) solo se
+// il timeout residuo e' sceso sotto questa soglia -> ~1 refresh/giorno per IP, non ogni ciclo.
+const IPTV_REFRESH_BELOW_S = 6 * 24 * 60 * 60;
+
 export async function syncIptvBanFleet(): Promise<BanSyncResult> {
   // Salta VPS offline per non appesantire il ciclo
   const enabled = Array.from(vpsStore.values()).filter(v => v.enabled && v.lastStatus !== "offline");
 
-  // 1. Pull iptv_ban + ban recenti delle jail selezionate da tutti i VPS in parallelo
+  // 1. Da ogni VPS: authoritative (da propagare) + presentFresh (gia' su quel VPS, no refresh dovuto)
   const pullResults = await Promise.allSettled(
     enabled.map(async vps => {
-      const ips = new Set<string>();
+      const authoritative = new Set<string>();
+      const presentFresh = new Set<string>();
       try {
-        const data = await agentGet(vps, "/api/ipset/iptv_ban?limit=10000", 15000);
-        const members: string[] = (data.members || []).map((m: string) => m.split(" ")[0]).filter((ip: string) => /^\d+\.\d+\.\d+\.\d+$/.test(ip));
-        members.forEach(ip => ips.add(ip));
-      } catch { /* ipset non raggiungibile, ignora */ }
-      try {
-        const banned: Array<{ ip: string; jail: string; banTime: string }> = await agentGet(vps, "/api/banned-ips", 15000);
+        const banned: Array<{ ip: string; jail: string; banTime: string; source?: string; timeout?: number | null }> =
+          await agentGet(vps, "/api/banned-ips", 15000);
         const now = Date.now();
         for (const b of banned || []) {
-          if (!FLEET_SYNCED_JAILS.has(b.jail)) continue;
+          if (!/^\d+\.\d+\.\d+\.\d+$/.test(b.ip)) continue;
           const age = now - new Date(b.banTime).getTime();
-          if (age >= 0 && age <= FLEET_SYNCED_JAIL_MAX_AGE_MS) ips.add(b.ip);
+          if (age < 0) continue;
+          if (b.jail === "anti-iptv") {
+            // tutti i membri iptv_ban di questo VPS = "presenti"; fresco se timeout residuo alto
+            if (typeof b.timeout === "number" && b.timeout >= IPTV_REFRESH_BELOW_S) presentFresh.add(b.ip);
+            // solo i ban rilevati QUI e recenti alimentano la propagazione fleet-wide
+            if (b.source === "local" && age <= IPTV_LOCAL_MAX_AGE_MS) authoritative.add(b.ip);
+          } else if (FLEET_SYNCED_JAILS.has(b.jail)) {
+            if (age <= FLEET_SYNCED_JAIL_MAX_AGE_MS) authoritative.add(b.ip);
+          }
         }
-      } catch { /* fail2ban non raggiungibile, ignora */ }
-      return { vpsId: vps.id, ips: [...ips] };
+      } catch { /* agent non raggiungibile, ignora */ }
+      return { vpsId: vps.id, authoritative: [...authoritative], presentFresh: [...presentFresh] };
     })
   );
 
-  // 2. Unione di tutti gli IP bannati nella fleet (esclude il range NetBird 100.64.0.0/10 —
+  // 2. Unione degli IP authoritative di tutta la fleet (esclude il range NetBird 100.64.0.0/10 —
   //    non deve mai propagarsi un self-ban della rete di gestione fleet)
   const isNetbirdRangeIp = (ip: string): boolean => {
     const octets = ip.split(".").map(Number);
     return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
   };
   const allBannedIps = new Set<string>();
-  const vpsBanMap = new Map<string, Set<string>>();
+  const presentFreshMap = new Map<string, Set<string>>();
   for (let i = 0; i < pullResults.length; i++) {
     const r = pullResults[i];
     const vps = enabled[i];
-    const ips = (r.status === "fulfilled" ? r.value.ips : []).filter(ip => !isNetbirdRangeIp(ip));
-    vpsBanMap.set(vps.id, new Set(ips));
-    ips.forEach(ip => allBannedIps.add(ip));
+    const val = r.status === "fulfilled" ? r.value : { authoritative: [], presentFresh: [] };
+    presentFreshMap.set(vps.id, new Set(val.presentFresh));
+    val.authoritative.filter(ip => !isNetbirdRangeIp(ip)).forEach(ip => allBannedIps.add(ip));
   }
 
-  // 3. Propaga IP mancanti a ogni VPS (max BANSYNC_MAX_PER_VPS per ciclo per non saturare)
+  // 3. Per ogni VPS spinge gli authoritative che non ha (o che vanno rinfrescati),
+  //    max BANSYNC_MAX_PER_VPS per ciclo per non saturare. Le entry non-authoritative
+  //    (copie di ban ormai vecchi) non vengono mai ri-spinte -> scadono col timeout ipset.
   let propagated = 0;
   let vpsUpdated = 0;
   let errors = 0;
 
   await Promise.allSettled(
     enabled.map(async vps => {
-      const existing = vpsBanMap.get(vps.id) || new Set();
-      const missing = [...allBannedIps].filter(ip => !existing.has(ip)).slice(0, BANSYNC_MAX_PER_VPS);
+      const fresh = presentFreshMap.get(vps.id) || new Set();
+      const missing = [...allBannedIps].filter(ip => !fresh.has(ip)).slice(0, BANSYNC_MAX_PER_VPS);
       if (missing.length === 0) return;
       let pushed = 0;
       for (const ip of missing) {
