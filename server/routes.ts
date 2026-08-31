@@ -2135,10 +2135,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!content.includes("__STREAM_CACHE_SIZE__")) {
       return res.status(422).json({ error: "Il placeholder __STREAM_CACHE_SIZE__ deve restare nel template" });
     }
-    const opens = (content.match(/{/g) || []).length;
-    const closes = (content.match(/}/g) || []).length;
-    if (opens !== closes) {
-      return res.status(422).json({ error: `Parentesi graffe sbilanciate: ${opens} '{' vs ${closes} '}'` });
+    // NB: niente conteggio graffe — le map nginx contengono regex con { letterali
+    // (es. ".{40,}", "${base}", "#{") che sbilanciano il conteggio pur essendo
+    // valide. Il vero gate e' "nginx -t" sull'agent durante l'apply.
+    if (!/\bhttp\s*{/.test(content) || !/\bevents\s*{/.test(content)) {
+      return res.status(422).json({ error: "Template non valido: mancano i blocchi http{} / events{}" });
     }
     try {
       if (existsSync(NGINX_TEMPLATE_PATH)) {

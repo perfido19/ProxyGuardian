@@ -697,7 +697,8 @@ export default function FleetConfig() {
             <DialogDescription>
               Modifica il template usato da <span className="font-mono">applica nginx</span>. Tieni il
               placeholder <span className="font-mono">__STREAM_CACHE_SIZE__</span> (sostituito per-VPS in
-              base al disco). Al salvataggio viene tenuto un backup del precedente sul dashboard.
+              base al disco). Al salvataggio: backup del precedente sul dashboard; la validazione vera
+              (<span className="font-mono">nginx -t</span>) avviene sull&apos;agent durante l&apos;apply.
             </DialogDescription>
           </DialogHeader>
           <div className="overflow-auto flex-1">
