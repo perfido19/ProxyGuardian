@@ -38,6 +38,21 @@ function statusColor(s: string) {
   return "text-yellow-400";
 }
 
+// Colore riga log nginx per status + body_bytes:
+//  - giallo: 200 con contenuto reale servito (>= 1 KB) — "200 <kb>"
+//  - rosso : risposta minuscola su 200/404 (es. "200 50", "404 25") = auth-fail / probe
+//  - verde : tutto il resto
+function logLineClass(line: string): string {
+  const m = line.match(/"\s+(\d{3})\s+(\d+)/);
+  if (m) {
+    const status = m[1];
+    const bytes = parseInt(m[2], 10);
+    if ((status === "200" || status === "404") && bytes < 100) return "text-red-400";
+    if (status === "200" && bytes >= 1024) return "text-yellow-400";
+  }
+  return "text-green-400/80";
+}
+
 function statusBadgeClass(s: string) {
   if (s === "200") return "bg-green-500/20 text-green-400 border-green-500/30";
   if (s === "503") return "bg-red-500/20 text-red-400 border-red-500/30";
@@ -934,17 +949,14 @@ export default function IpInvestigator() {
                           <div>
                             <div className="text-xs text-muted-foreground mb-1">Righe log ({vps.sample.length}):</div>
                             <div className="bg-black/40 rounded p-2 space-y-0.5 max-h-96 overflow-y-auto">
-                              {vps.sample.map((line, i) => {
-                                const has200 = /"\s+2\d{2}\s+/.test(line);
-                                return (
-                                  <div
-                                    key={i}
-                                    className={`text-[10px] font-mono break-all ${has200 ? "text-red-400/90" : "text-green-400/80"}`}
-                                  >
-                                    {line}
-                                  </div>
-                                );
-                              })}
+                              {vps.sample.map((line, i) => (
+                                <div
+                                  key={i}
+                                  className={`text-[10px] font-mono break-all ${logLineClass(line)}`}
+                                >
+                                  {line}
+                                </div>
+                              ))}
                             </div>
                           </div>
                         )}
