@@ -9,3 +9,9 @@ whitelist:
     - "51.15.0.0/16"     # Scaleway - richiesta utente 2026-08-23
     - "51.254.0.0/15"    # Scaleway - richiesta utente 2026-08-23
     - "51.255.0.0/15"    # Scaleway - richiesta utente 2026-08-23
+    - "104.28.0.0/14"     # Cloudflare AS13335 - evita falsi ban CrowdSec su IP edge legittimi, vedi project_cloudflare_asn_main_fix_2026-08-23
+  expression:
+    # 403/404 su URL riproduzione contenuti XtreamCodes (/tipo/user/pass/streamid[.ext]) = entitlement/geo/VOD rotto lato pannello, NON path scanning.
+    # I probe veri non hanno user/pass validi nel path. Evita FP su crowdsecurity/http-probing, local/iptv-404-probe, crowdsecurity/http-crawl-non_statics. (xtream content 4xx)
+    - "evt.Meta.log_type == 'http_access-log' && evt.Parsed.status in ['403','404'] && evt.Parsed.request matches '^/+(movie|series|live|hls|hlsr|timeshift)/[^/]+/[^/]+/'"
+    - "evt.Meta.log_type == 'http_access-log' && evt.Parsed.status in ['403','404'] && evt.Parsed.request matches '^/+[^/.]+/[^/.]+/[0-9]+([.][a-z0-9]{2,4})?([?].*)?$'"
