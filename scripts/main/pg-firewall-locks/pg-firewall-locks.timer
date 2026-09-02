@@ -1,0 +1,10 @@
+[Unit]
+Description=Auto-heal periodico delle regole firewall di allowlist (:8880, :7999)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
