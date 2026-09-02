@@ -1,12 +1,11 @@
 [Unit]
-Description=Applica le regole firewall di allowlist per porte sensibili di main (:8880, :7999)
+Description=Applica le regole firewall di allowlist per porte sensibili di main (8880/7999/51820)
 After=netfilter-persistent.service network-online.target
 Wants=netfilter-persistent.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/pg-firewall-locks.sh
-RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
