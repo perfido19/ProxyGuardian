@@ -1,0 +1,6 @@
+[Unit]
+Description=Aggiorna GeoLite2 mmdb (ASN/City/Country) e distribuisce a tutta la flotta
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/geoip-fleet-update.sh

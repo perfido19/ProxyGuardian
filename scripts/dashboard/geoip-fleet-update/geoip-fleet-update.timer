@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer settimanale per geoip-fleet-update (evita che i mmdb della flotta tornino stale)
+
+[Timer]
+OnCalendar=Wed *-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
