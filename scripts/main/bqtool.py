@@ -262,11 +262,135 @@ def cmd_rm(args):
     res = subprocess.run(DB, input=(sql+"\n").encode(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.decode()
     print("APPLY:", res.strip() or "(ok)")
 
+# ---------- menu interattivo ----------
+
+def _ask(prompt, default=""):
+    try:
+        v = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print(); sys.exit(0)
+    return v or default
+
+def _confirm(prompt):
+    return _ask(prompt + " [s/N]: ").lower() in ("s", "si", "y", "yes")
+
+def _pick_stream(label):
+    while True:
+        tok = _ask("  %s (id o pezzo di nome, vuoto=annulla): " % label)
+        if not tok:
+            return None, None
+        if re.fullmatch(r"\d+", tok):
+            r = qrows("SELECT id, stream_display_name FROM streams WHERE id=%s" % int(tok))
+            if r:
+                return r[0][0], r[0][1]
+            print("  id inesistente."); continue
+        safe = tok.replace("'", "''")
+        r = qrows("SELECT id, stream_display_name FROM streams WHERE stream_display_name LIKE '%%%s%%' "
+                  "ORDER BY added DESC LIMIT 40" % safe)
+        if not r:
+            print("  nessun match."); continue
+        if len(r) == 1:
+            print("  -> %s  %s" % (r[0][0], r[0][1]))
+            return r[0][0], r[0][1]
+        for k, x in enumerate(r[:40], 1):
+            print("    %2d) id=%-7s %s" % (k, x[0], x[1]))
+        s = _ask("  scegli numero (vuoto=riprova): ")
+        if s.isdigit() and 1 <= int(s) <= len(r):
+            return r[int(s)-1][0], r[int(s)-1][1]
+
+def _menu_move_add(kind):
+    sid, sname = _pick_stream("Stream da %s" % ("SPOSTARE" if kind == "move" else "AGGIUNGERE"))
+    if not sid:
+        return
+    if kind == "move":
+        pos = _ask("  posizione: [1] dopo  [2] prima  (default 1): ", "1")
+        mode = "--before" if pos == "2" else "--after"
+    else:
+        mode = "--after"
+    aid, aname = _pick_stream("Canale di riferimento (%s questo)" % ("prima di" if mode == "--before" else "dopo di"))
+    if not aid:
+        return
+    if kind == "add":
+        bq = _ask("  bouquet (lista '3,73' o 'all'): ")
+        if not bq:
+            print("  annullato."); return
+    else:
+        bq = _ask("  bouquet (invio = tutti quelli che contengono lo stream; lista; 'all'): ", "")
+    exc = _ask("  escludi bouquet id (es. 81,86; invio=nessuno): ")
+    argv = [sid, mode, aid]
+    if bq:
+        argv += ["--bouquets", bq]
+    if exc:
+        argv += ["--except", exc]
+    print("\n--- ANTEPRIMA (dry-run) ---")
+    (cmd_move if kind == "move" else cmd_add)(list(argv))
+    if _confirm("\nApplicare le modifiche?"):
+        (cmd_move if kind == "move" else cmd_add)(list(argv) + ["--apply"])
+    else:
+        print("annullato.")
+
+def _menu_rm():
+    sid, sname = _pick_stream("Stream da RIMUOVERE")
+    if not sid:
+        return
+    bq = _ask("  bouquet (lista o 'all'; invio = tutti quelli che lo contengono): ", "")
+    exc = _ask("  escludi id (invio=nessuno): ")
+    argv = [sid, "--bouquets", bq or "all"]
+    if exc:
+        argv += ["--except", exc]
+    print("\n--- ANTEPRIMA ---")
+    cmd_rm(list(argv))
+    if _confirm("\nRimuovere?"):
+        cmd_rm(list(argv) + ["--apply"])
+    else:
+        print("annullato.")
+
+def cmd_menu(args):
+    while True:
+        print("""
+========== BQ MENU ==========
+ 1) Cerca stream per nome
+ 2) Dove sta uno stream (where)
+ 3) Verifica ordine canali (check)
+ 4) Mostra finestra bouquet (show)
+ 5) Elenco bouquet
+ 6) SPOSTA stream (move)
+ 7) AGGIUNGI stream (add)
+ 8) RIMUOVI stream (rm)
+ 0) Esci""")
+        c = _ask("scelta: ")
+        if c == "0" or c == "":
+            return
+        elif c == "1":
+            cmd_find([_ask("  testo: ")])
+        elif c == "2":
+            t = _ask("  stream (id/nome): ")
+            if t: cmd_where([t])
+        elif c == "3":
+            t = _ask("  id canali separati da virgola: ")
+            if t: cmd_check([t])
+        elif c == "4":
+            b = _ask("  bouquet id: ")
+            s = _ask("  stream (id/nome) o range n1-n2 (invio=inizio): ")
+            cmd_show([b] + ([s] if s else []))
+        elif c == "5":
+            cmd_bouquets([])
+        elif c == "6":
+            _menu_move_add("move")
+        elif c == "7":
+            _menu_move_add("add")
+        elif c == "8":
+            _menu_rm()
+        else:
+            print("scelta non valida")
+
 CMDS = {"find": cmd_find, "where": cmd_where, "bouquets": cmd_bouquets, "show": cmd_show,
-        "check": cmd_check, "move": cmd_move, "add": cmd_add, "rm": cmd_rm}
+        "check": cmd_check, "move": cmd_move, "add": cmd_add, "rm": cmd_rm, "menu": cmd_menu}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+    if len(sys.argv) < 2:
+        cmd_menu([]); sys.exit(0)
+    if sys.argv[1] in ("-h", "--help", "help"):
         print(__doc__); sys.exit(0)
     c = sys.argv[1]
     if c not in CMDS: die("comando sconosciuto: %s (bq --help)" % c)
