@@ -1,10 +1,10 @@
 [Unit]
-Description=Runs netbird-swap check every 60s
+Description=Runs netbird-swap check every 20s
 
 [Timer]
-OnBootSec=90
-OnUnitActiveSec=60
-AccuracySec=10
+OnBootSec=30
+OnUnitActiveSec=20
+AccuracySec=2
 
 [Install]
 WantedBy=timers.target

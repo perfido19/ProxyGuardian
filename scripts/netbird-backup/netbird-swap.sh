@@ -20,19 +20,32 @@
 # reacts to transient blips that the primary would recover from on its
 # own within seconds - see the same incident above).
 #
-# Usage: netbird-swap.sh <main-primary-ip> <port> [fail-threshold]
+# Usage: netbird-swap.sh <main-primary-ip|self> <port> [fail-threshold]
 #   main-primary-ip: main's wt0 mesh IP (NOT the hostname - avoids any
 #                     dependency on NetBird's own DNS, which is exactly
 #                     what breaks during the conflict this script exists
-#                     to avoid triggering in the first place)
+#                     to avoid triggering in the first place). Use the
+#                     literal string "self" ONLY on main itself - main
+#                     can't check "reachability to main", and swapping
+#                     main's own daemon is far more disruptive (drops
+#                     ALL fleet peer tunnels at once, not just one
+#                     client's), so "self" mode requires TWO independent
+#                     signals to agree (local netbird status AND NetBird
+#                     Cloud's own API) before considering itself down -
+#                     see check_self_healthy below.
 #   port:             the port this host actually needs from main
-#                     (2096 for dynapannel, 8880 for a fleet VPS)
-#   fail-threshold:   consecutive failed checks before acting (default 5)
+#                     (2096 for dynapannel, 8880 for a fleet VPS).
+#                     Ignored (pass "-") when target is "self".
+#   fail-threshold:   consecutive failed checks before acting (default 6,
+#                     i.e. 2 minutes at the standard 20s timer interval -
+#                     short enough to matter during a real outage, long
+#                     enough that a single transient blip like the ~20s
+#                     one on 2026-09-15 09:44 does not trigger a swap)
 set -euo pipefail
 
-MAIN_IP="${1:?usage: netbird-swap.sh <main-primary-ip> <port> [fail-threshold]}"
-PORT="${2:?usage: netbird-swap.sh <main-primary-ip> <port> [fail-threshold]}"
-THRESHOLD="${3:-5}"
+MAIN_IP="${1:?usage: netbird-swap.sh <main-primary-ip|self> <port> [fail-threshold]}"
+PORT="${2:?usage: netbird-swap.sh <main-primary-ip|self> <port> [fail-threshold]}"
+THRESHOLD="${3:-6}"
 
 STATE_DIR=/var/lib/netbird-swap
 STATE_FILE="$STATE_DIR/state"
@@ -53,6 +66,32 @@ check_main_reachable() {
     timeout 5 bash -c "cat < /dev/null > /dev/tcp/$MAIN_IP/$PORT" 2>/dev/null
 }
 
+# main-only ("self" mode) health check. Unhealthy ONLY if BOTH signals
+# agree something is wrong: main's own primary daemon shows Management
+# AND Signal disconnected, AND NetBird Cloud's own API is unreachable
+# independently. Either signal alone looking fine is enough to call it
+# healthy - this is the deliberately more conservative counterpart to
+# check_main_reachable, because a false positive here is much costlier
+# (drops every fleet peer's tunnel to main at once).
+check_self_healthy() {
+    local st mgmt_bad=0 sig_bad=0
+    st=$(netbird status 2>/dev/null || echo "")
+    echo "$st" | grep -qE "Management:[[:space:]]*Connected" || mgmt_bad=1
+    echo "$st" | grep -qE "Signal:[[:space:]]*Connected" || sig_bad=1
+    if [ "$mgmt_bad" = 0 ] && [ "$sig_bad" = 0 ]; then
+        return 0
+    fi
+    check_netbird_cloud_recovered
+}
+
+check_primary_ok() {
+    if [ "$MAIN_IP" = "self" ]; then
+        check_self_healthy
+    else
+        check_main_reachable
+    fi
+}
+
 # Independent recovery signal while on backup: NetBird Cloud's own API,
 # not our own primary daemon (which we'd have to disruptively restart
 # just to test - this way we only attempt the real swap-back once we
@@ -70,7 +109,7 @@ check_netbird_cloud_recovered() {
 }
 
 if [ "$STATE" = "primary" ]; then
-    if check_main_reachable; then
+    if check_primary_ok; then
         [ "$COUNT" = "0" ] || echo 0 > "$COUNT_FILE"
         exit 0
     fi
@@ -98,7 +137,7 @@ else
         systemctl stop netbird-backup
         systemctl start netbird
         sleep 10
-        if check_main_reachable; then
+        if check_primary_ok; then
             echo primary > "$STATE_FILE"
             echo 0 > "$COUNT_FILE"
             LOG "swapped back to primary, verified reachable"
