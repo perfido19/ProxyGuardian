@@ -1,8 +1,14 @@
 [Unit]
-Description=Timer settimanale per geoip-fleet-update (evita che i mmdb della flotta tornino stale)
+Description=Timer giornaliero per geoip-fleet-update (evita che i mmdb della flotta tornino stale)
+# Era settimanale (Wed 03:00) - portato a giornaliero il 2026-09-16 dopo
+# l'incidente quota MaxMind: con UNA SOLA fetch centrale al giorno (non
+# 57), il rischio di rientrare nel daily limit e' trascurabile, e in caso
+# di un altro blocco temporaneo si recupera entro 24h invece che fino a
+# 6 giorni. MaxMind aggiorna i DB al massimo settimanalmente comunque,
+# quindi la maggior parte dei run giornalieri sara' un no-op (md5 invariato).
 
 [Timer]
-OnCalendar=Wed *-*-* 03:00:00
+OnCalendar=*-*-* 03:00:00
 Persistent=true
 RandomizedDelaySec=600
 
