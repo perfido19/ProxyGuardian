@@ -125,3 +125,25 @@ Not reached — blocked by the finding above.
   unauthenticated `/player_api.php` gets 444'd and immediately re-bans the tester's
   IP in nginx-abuse (by design, anti-scanner) - do not use plain curl probes against
   fleet :8880 for future verification, trust conntrack/real traffic instead.
+
+- Lupo (100.116.32.173, public 146.19.213.239): same as Smarters (wt1 mesh IP
+  100.91.177.18, UDP 51821, allowlist, swap timer, nginx upstream fixed). Verified
+  clean nginx reload, no errors.
+- gruppo3 salerno (100.116.206.239, public 176.123.2.5): same pattern (wt1 mesh IP
+  100.91.236.11, UDP 51821, allowlist, swap timer, nginx upstream fixed). Verified
+  clean nginx reload, no errors.
+
+## Phase 1 COMPLETE (2026-09-16)
+
+All 5 hosts (main, dynapannel, Smarters, Lupo, gruppo3 salerno) confirmed in final
+state: `netbird-swap` state=primary, `netbird-swap.timer` active (20s interval,
+2min/6-check threshold), `netbird-backup` inactive+disabled (ready, not running -
+matches the active/passive swap design, never both daemons simultaneously).
+
+Live-tested full swap cycle (both directions) on dynapannel. Not yet live-tested on
+the fleet pilot VPS or on main's self-mode under an actual simulated outage - would
+require repeating the same stop-primary/observe/restore cycle done on dynapannel.
+Recommended before calling Phase 1 fully validated and starting Phase 2 (remaining
+51 fleet VPS): run at least one more full swap-cycle test, ideally on a pilot fleet
+VPS (not main) to also exercise the client-mode path end-to-end with real 8880
+streaming traffic through the backup path, not just port 2096 admin panel traffic.
