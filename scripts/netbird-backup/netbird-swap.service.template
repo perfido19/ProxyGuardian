@@ -1,0 +1,7 @@
+[Unit]
+Description=NetBird primary/backup swap check (oneshot)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/netbird-swap.sh __MAIN_IP__ __PORT__ __THRESHOLD__
