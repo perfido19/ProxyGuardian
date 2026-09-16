@@ -74,5 +74,42 @@ dynapannel's backup was actually enrolled-then-disabled). Do not proceed to Task
 fleet VPS) or re-enable any netbird-backup service until this is resolved or the approach is
 reconsidered.**
 
+## REDESIGN (2026-09-16) — active/passive SWAP, never both daemons running
+
+User's proposal, tested live on dynapannel and confirmed working: **never run both daemons
+simultaneously.** Normal state = primary (`wt0`) running, backup (`netbird-backup`, `wt1`)
+stopped + disabled. On a sustained real failure of the primary, a swap script stops the
+primary and starts the backup (which now gets a clean iptables/DNS slate — no clash, since
+the primary already released its chains/DNS registration by the time the backup starts). On
+recovery, reverse: stop backup, start primary.
+
+**Live test on dynapannel (2026-09-16), both directions confirmed:**
+1. `systemctl stop netbird` (primary) → `systemctl start netbird-backup` → backup connected
+   cleanly (`Management: Connected`, no chain-already-exists error) → curl to
+   `https://dynapannel.com:2096/` externally returned `http_code=403` (the known-normal
+   response for that source IP — i.e. a REAL response, request served via `wt1` alone, `wt0`
+   fully down at the time).
+2. Reverse: `systemctl stop netbird-backup` → `systemctl start netbird` → primary reconnected
+   cleanly (`Peers count: 2/2`), external curl still `403` (normal) throughout.
+
+This eliminates the DNS/iptables conflict entirely (no more scoped-resource contention, since
+never more than one instance owns them at a time) and matches what the user actually wanted
+from the start ("l'importante che l'interfaccia funziona solo se la prima interfaccia cade").
+nginx's `backup` upstream entry becomes optional/redundant for this design (the swap itself
+IS the failover — same `main.netbird.cloud` hostname or main's wt0 IP stays the logical
+target, just served by whichever daemon is active) — but keeping it costs nothing and adds a
+second layer of resilience for the brief window during the swap itself, so leaving it in.
+
+**Next: build the swap-trigger script.** Requirements (same lessons as today's earlier
+incident — [[project_main_netbird_zero_peers_2026-09-15]]):
+- Detect on REAL impact (e.g. conntrack count to main's known port over a sustained window),
+  not raw `netbird status` (a control-plane blip like this morning's 20s hiccup must NOT
+  trigger a swap — established tunnels survive control-plane outages, no swap needed then).
+- N consecutive failed checks over M minutes before swapping (hysteresis on both directions:
+  trigger swap-to-backup and swap-back-to-primary).
+- The swap script only ever touches netbird/netbird-backup systemd units — never fail2ban,
+  nginx, or anything else, and every action logged explicitly (not silent "ok" forever, the
+  exact bug that hid the pg-firewall-locks duplication until it had grown to 4x).
+
 ## Failover test results
 Not reached — blocked by the finding above.
