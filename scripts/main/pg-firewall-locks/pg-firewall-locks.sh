@@ -9,7 +9,8 @@
 #   heal:  pg-firewall-locks.timer   (OnUnitActiveSec=5min)
 #
 # Idempotente: se il blocco di una porta e' gia' corretto (tutti gli ACCEPT
-# presenti + terminator subito dopo), non tocca nulla e non ri-salva.
+# presenti, in numero esatto, + un solo terminator subito dopo), non tocca
+# nulla e non ri-salva.
 set -u
 
 CONF=/etc/pg-firewall/locks.conf
@@ -56,26 +57,36 @@ for port in $PORTS; do
   done
 
   # --- lo stato e' gia' corretto? ---
+  # Non basta controllare che ogni regola desiderata esista (-C): se il
+  # blocco e' stato inserito piu' volte (es. da restart/timer sovrapposti),
+  # -C torna comunque vero sulla PRIMA copia e il duplicato non viene mai
+  # rilevato -> bloat che cresce ad ogni run "sano". Contiamo quindi anche
+  # il numero di ACCEPT/terminator effettivi per questa porta e pretendiamo
+  # che combacino esattamente con l'atteso (1 terminator, N accept).
   ok=1
   for r in "${desired[@]}"; do
     iptables -C INPUT $r 2>/dev/null || { ok=0; break; }
   done
-  term_line=$(iptables -nL INPUT --line-numbers | awk -v p="dpt:$port" '
-    $0 ~ p && ($2=="DROP" || $2=="REJECT") {print $1}' | tail -1)
-  max_acc_line=$(iptables -nL INPUT --line-numbers | awk -v p="dpt:$port" '
-    $0 ~ p && $2=="ACCEPT" {print $1}' | sort -n | tail -1)
-  if [ "$ok" = 1 ] && [ -n "$term_line" ] && [ -n "$max_acc_line" ] \
+  acc_lines=$(iptables -nL INPUT --line-numbers | awk -v p="dpt:$port" '$0 ~ p && $2=="ACCEPT" {print $1}')
+  term_lines=$(iptables -nL INPUT --line-numbers | awk -v p="dpt:$port" '$0 ~ p && ($2=="DROP" || $2=="REJECT") {print $1}')
+  acc_count=$(printf '%s\n' "$acc_lines" | grep -c '[0-9]')
+  term_count=$(printf '%s\n' "$term_lines" | grep -c '[0-9]')
+  max_acc_line=$(printf '%s\n' "$acc_lines" | sort -n | tail -1)
+  term_line=$(printf '%s\n' "$term_lines" | tail -1)
+  if [ "$ok" = 1 ] && [ "$term_count" = 1 ] && [ "$acc_count" = "${#desired[@]}" ] \
+     && [ -n "$term_line" ] && [ -n "$max_acc_line" ] \
      && [ "$term_line" -gt "$max_acc_line" ]; then
     LOG ":$port ok (accept x${#desired[@]} + terminator @$term_line)"
     continue
   fi
 
   # --- ricostruisci il blocco pulito ---
-  LOG ":$port da riparare (ok=$ok term=$term_line maxacc=$max_acc_line) -> ricostruisco"
-  # elimina TUTTE le regole INPUT che matchano questa dport (accept + term, in loop)
-  while read -r ln; do :; done < <(iptables -nL INPUT --line-numbers | awk -v p="dpt:$port" '$0~p{print $1}')
-  # cancellazione robusta: ripeti finche' spariscono
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
+  LOG ":$port da riparare (ok=$ok acc=$acc_count/${#desired[@]} term=$term_count) -> ricostruisco"
+  # elimina TUTTE le regole INPUT che matchano questa dport (accept + term,
+  # anche duplicati/copie vecchie accumulate, in loop). Nessun limite fisso:
+  # con piu' round duplicati (visto fino a 54 regole per una singola porta)
+  # un cap basso lascerebbe indietro dei residui.
+  while :; do
     ln=$(iptables -nL INPUT --line-numbers | awk -v p="dpt:$port" '$0~p{print $1; exit}')
     [ -n "$ln" ] || break
     iptables -D INPUT "$ln"
