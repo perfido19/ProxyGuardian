@@ -1,5 +1,5 @@
 import { NodeSSH } from "node-ssh";
-import { getAllVps, agentGet, type VpsConfig } from "./vps-manager";
+import { getAllVps, getVpsById, agentGet } from "./vps-manager";
 
 export interface NetbirdSwapStatus {
   id: string;
@@ -65,11 +65,14 @@ function getExtraHosts(): ExtraHost[] {
 }
 
 async function getFleetSwapStatus(): Promise<NetbirdSwapStatus[]> {
-  const vpsList = getAllVps().filter((v) => v.enabled);
+  // getAllVps() restituisce apiKey redatta ("***") per sicurezza - serve
+  // ririprendere il config completo per-id per avere la chiave vera
+  // (stesso pattern di /api/fleet/netbird/update-status poco sopra).
+  const vpsList = getAllVps().filter((v) => v.enabled).map((s) => getVpsById(s.id)).filter((v): v is NonNullable<typeof v> => v !== undefined);
   const results = await Promise.allSettled(
     vpsList.map(async (vps): Promise<NetbirdSwapStatus> => {
       try {
-        const data = await agentGet(vps as unknown as VpsConfig, "/api/netbird-swap/status");
+        const data = await agentGet(vps, "/api/netbird-swap/status");
         return { id: vps.id, name: vps.name, online: true, ...data };
       } catch (err: any) {
         return {
