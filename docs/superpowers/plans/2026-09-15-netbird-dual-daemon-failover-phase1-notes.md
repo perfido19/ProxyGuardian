@@ -147,3 +147,56 @@ Recommended before calling Phase 1 fully validated and starting Phase 2 (remaini
 51 fleet VPS): run at least one more full swap-cycle test, ideally on a pilot fleet
 VPS (not main) to also exercise the client-mode path end-to-end with real 8880
 streaming traffic through the backup path, not just port 2096 admin panel traffic.
+
+## Fleet pilot swap test (2026-09-16) - real incident during testing, 3 bugs found+fixed
+
+Live-tested the swap on Smarters (100.116.14.174, real production 8880 traffic). Found
+and fixed 3 real problems in the process, one of which caused an actual several-minute
+outage on Smarters:
+
+1. **Fleet-wide `netbird-watchdog.timer` fights the swap script.** It auto-restarts
+   `netbird` within ~1 minute of any stop, completely defeating the swap script's own
+   failure detection (which needs the primary to STAY stopped to count consecutive
+   failures). This exists on main + all 3 fleet pilot VPS (not on dynapannel, which is
+   why its earlier test worked cleanly). **Disabled on main, Smarters, Lupo, gruppo3
+   salerno.** Must be disabled on every host before/when installing netbird-swap - add
+   this to the fleet-wide install process before Phase 2.
+
+2. **Real outage caused: missing generic ESTABLISHED,RELATED rule.** Fleet's
+   `fix-iptables-post-netbird.sh` (ExecStartPost on netbird.service) rebuilds INPUT on
+   every netbird restart with only an `-i wt0` scoped ESTABLISHED,RELATED rule, not a
+   generic one covering `eth0`. Without it, return traffic from any server whose IP
+   falls in `blocked_asn` gets dropped as if it were a new unsolicited connection - hit
+   live on Smarters: DNS responses from 1.1.1.1 and 8.8.8.8 (both legitimate, both
+   presumably in some blocked ASN range) got dropped, breaking ALL outbound
+   connectivity including NetBird's own reconnection attempt. 100% ping loss to
+   8.8.8.8, `api.netbird.io` unreachable, `Management: Disconnected` reason
+   `context deadline exceeded`. A dashboard poller (`ensureEstablishedFleet`, hourly)
+   already guards this long-term but couldn't help fast enough. **Fixed:**
+   - Manually re-added the generic rule + persisted on Smarters (service recovered
+     immediately once added).
+   - **Proactively checked and fixed the same gap on main, Lupo, gruppo3 salerno too**
+     (all three were also missing it - latent, hadn't been triggered yet).
+   - `netbird-swap.sh` now calls a new `ensure_established_rule()` (idempotent
+     check-then-insert) immediately after every `systemctl start netbird` /
+     `netbird-backup` call, so every future swap-triggered restart self-heals this gap
+     instead of waiting up to an hour for the dashboard poller.
+
+3. **10s grace period after swap-back was too short.** After restarting the primary
+   post-outage, the script checked reachability after only 10s and (once, during this
+   test) incorrectly concluded the primary was still down and reverted back to backup,
+   even though the primary was actually fine - a fresh reconnect after real downtime
+   needs more time to renegotiate. **Increased to 45s.**
+
+**Operational lesson also relearned:** testing a host's swap via SSH that itself routes
+through that host's own NetBird mesh IP cuts your own access the moment you stop its
+primary daemon. Use the host's public IP for hands-on swap testing, not its mesh IP via
+the dashboard hop.
+
+After fixes: Smarters confirmed fully recovered (`Management: Connected`, `Peers count:
+2/2`, 38 live conntrack connections on 8880, `netbird-swap.timer` active, state file
+corrected to `primary`). Updated `netbird-swap.sh` redeployed to all 5 pilot hosts.
+
+**Before Phase 2 (remaining 51 fleet VPS):** the install process must also (a) disable
+`netbird-watchdog.timer` and (b) verify/add the generic ESTABLISHED,RELATED rule as
+standard steps, not follow-up fixes discovered live on each host.
