@@ -57,10 +57,16 @@ check_main_reachable() {
 # not our own primary daemon (which we'd have to disruptively restart
 # just to test - this way we only attempt the real swap-back once we
 # already have external evidence the outage is over).
+#
+# api.netbird.io/api/health has no real route and normally answers 404 -
+# that 404 IS the healthy signal (confirmed live during the 2026-09-15
+# outage: 503 while down, 404 once recovered). Only a connection failure
+# (curl prints 000) or an explicit 503 means the service itself is down;
+# any other real HTTP response means the server answered.
 check_netbird_cloud_recovered() {
     local code
     code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 https://api.netbird.io/api/health 2>/dev/null || echo 000)
-    [ "$code" = "200" ] || [ "$code" = "204" ]
+    [ "$code" != "000" ] && [ "$code" != "503" ]
 }
 
 if [ "$STATE" = "primary" ]; then
