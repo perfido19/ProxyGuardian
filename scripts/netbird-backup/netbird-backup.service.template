@@ -1,0 +1,17 @@
+[Unit]
+Description=NetBird backup daemon (self-hosted, wt1) - failover only, never restarts other services
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+ExecStart=/usr/bin/netbird service run \
+  --daemon-addr unix:///var/run/netbird-backup.sock \
+  --config /var/lib/netbird-backup/backup.json \
+  --log-file /var/log/netbird-backup/client.log
+
+[Install]
+WantedBy=multi-user.target

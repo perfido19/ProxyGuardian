@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Never touch, restart, or reconfigure the primary NetBird daemon (`/etc/netbird`, `wt0`, default socket) on any host.
+- Never touch, restart, or reconfigure the primary NetBird daemon (`/var/lib/netbird/default.json`, `wt0`, default socket `unix:///var/run/netbird.sock`) on any host.
 - No script written for this project may restart any *other* service (fail2ban, nginx, netbird primary) as a side effect — today's incident was caused by exactly that pattern.
 - All firewall rule insertions must be idempotent (check-then-insert via `iptables -C`, never blind `-A`/`-I` on every run).
 - Self-hosted management/dashboard API (port 443 on `94.249.153.69`) is reachable only from an explicit IP allowlist — never world-open.
@@ -240,13 +240,13 @@ In the dashboard, Access Control → Policies should show exactly one enabled po
 
 **Interfaces:**
 - Consumes: three positional args when run on a target host: `<management-url> <setup-key> <wt1-udp-port>`
-- Produces: `/etc/netbird-backup/`, `/var/log/netbird-backup/`, `/etc/systemd/system/netbird-backup.service`, an enabled+started `netbird-backup` systemd service — reused identically by Tasks 6, 7, 8 (only the setup-key argument changes per host)
+- Produces: `/var/lib/netbird-backup/backup.json`, `/var/log/netbird-backup/`, `/etc/systemd/system/netbird-backup.service`, an enabled+started `netbird-backup` systemd service — reused identically by Tasks 6, 7, 8 (only the setup-key argument changes per host)
 
-- [ ] **Step 1: Write the systemd unit template**
+**Correction made during execution (2026-09-16):** the plan originally assumed the primary daemon lives at `/etc/netbird` and that the long-running process is `netbird up --foreground-mode`. Neither is true for the netbird version actually running on main (0.77.0): there is no `/etc/netbird` directory at all, the default profile config is `/var/lib/netbird/default.json`, and the real systemd unit runs `netbird service run` — `netbird up` is a one-shot CLI call against an already-running daemon's socket (`--daemon-addr`) to enroll/connect it, not the persistent process itself. Verified directly against main's live `netbird.service` unit and `netbird --help`/`netbird up --help`/`netbird service run --help` output before writing the files below.
 
-```bash
-mkdir -p /home/massimo/Progetti/ProxyGuardian/scripts/netbird-backup
-cat > /home/massimo/Progetti/ProxyGuardian/scripts/netbird-backup/netbird-backup.service.template << 'EOF'
+- [ ] **Step 1: Write the systemd unit template** (already done — see `scripts/netbird-backup/netbird-backup.service.template`, committed. Content:)
+
+```
 [Unit]
 Description=NetBird backup daemon (self-hosted, wt1) - failover only, never restarts other services
 After=network-online.target
@@ -257,77 +257,16 @@ Type=simple
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
-ExecStart=/usr/bin/netbird up \
-  --config /etc/netbird-backup/config.json \
-  --log-file /var/log/netbird-backup/client.log \
+ExecStart=/usr/bin/netbird service run \
   --daemon-addr unix:///var/run/netbird-backup.sock \
-  --foreground-mode
+  --config /var/lib/netbird-backup/backup.json \
+  --log-file /var/log/netbird-backup/client.log
 
 [Install]
 WantedBy=multi-user.target
-EOF
 ```
 
-- [ ] **Step 2: Write the installer script**
-
-```bash
-cat > /home/massimo/Progetti/ProxyGuardian/scripts/netbird-backup/netbird-backup-install.sh << 'SCRIPT_EOF'
-#!/bin/bash
-# Installs the second NetBird daemon (wt1, self-hosted backup) on a host.
-# Does NOT touch /etc/netbird, wt0, or the primary daemon in any way.
-set -euo pipefail
-
-MGMT_URL="${1:?usage: netbird-backup-install.sh <management-url> <setup-key> <wt1-udp-port>}"
-SETUP_KEY="${2:?usage: netbird-backup-install.sh <management-url> <setup-key> <wt1-udp-port>}"
-WT1_PORT="${3:?usage: netbird-backup-install.sh <management-url> <setup-key> <wt1-udp-port>}"
-
-if [ -d /etc/netbird-backup ]; then
-    echo "netbird-backup already installed (/etc/netbird-backup exists) - aborting, remove it first if you want to reinstall"
-    exit 1
-fi
-
-mkdir -p /etc/netbird-backup
-mkdir -p /var/log/netbird-backup
-
-# netbird binary must already be present (installed for the primary daemon) -
-# the backup daemon reuses the same binary, just a different config/socket/interface
-if ! command -v netbird >/dev/null 2>&1; then
-    echo "netbird binary not found - install the primary NetBird client first"
-    exit 1
-fi
-
-# One-time login to the self-hosted management server using the setup key.
-# --interface wt1 keeps it on a separate WireGuard interface from the primary (wt0).
-# --wireguard-port sets the dedicated UDP port for this interface.
-netbird up \
-  --config /etc/netbird-backup/config.json \
-  --daemon-addr unix:///var/run/netbird-backup.sock \
-  --management-url "$MGMT_URL" \
-  --setup-key "$SETUP_KEY" \
-  --interface-name wt1 \
-  --wireguard-port "$WT1_PORT" \
-  --log-file /var/log/netbird-backup/client.log
-
-cp /root/proxy-dashboard-repo-scripts-netbird-backup-netbird-backup.service.template /etc/systemd/system/netbird-backup.service 2>/dev/null || true
-
-systemctl daemon-reload
-systemctl enable netbird-backup
-systemctl start netbird-backup
-
-sleep 3
-netbird status --daemon-addr unix:///var/run/netbird-backup.sock
-SCRIPT_EOF
-chmod +x /home/massimo/Progetti/ProxyGuardian/scripts/netbird-backup/netbird-backup-install.sh
-```
-
-- [ ] **Step 3: Fix the systemd unit copy path in the script (the placeholder path above is wrong — the installer needs the template shipped alongside it, not a hardcoded local path)**
-
-```bash
-sed -i "s#cp /root/proxy-dashboard-repo-scripts-netbird-backup-netbird-backup.service.template /etc/systemd/system/netbird-backup.service 2>/dev/null || true#cp \"\$(dirname \"\$0\")/netbird-backup.service.template\" /etc/systemd/system/netbird-backup.service#" \
-  /home/massimo/Progetti/ProxyGuardian/scripts/netbird-backup/netbird-backup-install.sh
-grep -n 'cp.*netbird-backup.service' /home/massimo/Progetti/ProxyGuardian/scripts/netbird-backup/netbird-backup-install.sh
-```
-Expected: shows the corrected line using `$(dirname "$0")`.
+- [ ] **Step 2: Write the installer script** (already done — see `scripts/netbird-backup/netbird-backup-install.sh`, committed). It: checks for an existing install, creates `/var/lib/netbird-backup` and `/var/log/netbird-backup`, installs+starts the systemd unit from Step 1 (waiting up to 10s for the control socket to appear), then runs the one-shot `netbird up --daemon-addr unix:///var/run/netbird-backup.sock --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --interface-name wt1 --wireguard-port "$WT1_PORT"` against that socket, and prints `netbird status --daemon-addr unix:///var/run/netbird-backup.sock` at the end.
 
 - [ ] **Step 4: Syntax-check the script**
 
@@ -385,7 +324,7 @@ sshpass -p 'uteDQ2G7aA' ssh -o StrictHostKeyChecking=no root@185.229.236.50 \
 ```
 Expected: final `netbird status` output shows `Management: Connected`, `Signal: Connected`, `Peers count: 0/0` (no other pilot peer online yet at this point).
 
-- [ ] **Step 2b: If step 2's install fails partway (e.g. `netbird up` errors before the systemd unit is created), do NOT retry blindly — read the error, and if `/etc/netbird-backup` was partially created, `rm -rf /etc/netbird-backup` before re-running (the installer refuses to run if the directory already exists, by design).**
+- [ ] **Step 2b: If step 2's install fails partway, do NOT retry blindly — read the error. If `/var/lib/netbird-backup/backup.json` was partially created, `systemctl stop netbird-backup; rm -rf /var/lib/netbird-backup` before re-running (the installer refuses to run if that file already exists, by design).**
 
 - [ ] **Step 3: Verify `wt0` and `wt1` coexist**
 
