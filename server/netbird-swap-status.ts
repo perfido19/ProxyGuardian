@@ -38,13 +38,18 @@ interface ExtraHost { id: string; name: string; host: string; username: string; 
 
 function getExtraHosts(): ExtraHost[] {
   const hosts: ExtraHost[] = [];
-  if (process.env.MAIN_SSH_HOST && process.env.MAIN_SSH_PASSWORD) {
+  // Riusa MAIN_HOST/MAIN_SSH_PASS, gia' configurate per la feature Main
+  // Backend (server/routes.ts) - stesso .env, evita variabili duplicate.
+  // MAIN_HOST e' l'IP pubblico (80.244.4.35): usarlo qui invece dell'IP
+  // NetBird evita un problema uovo-e-gallina se il controllo gira proprio
+  // durante un blackout NetBird (l'IP mesh sarebbe irraggiungibile).
+  if (process.env.MAIN_HOST && process.env.MAIN_SSH_PASS) {
     hosts.push({
       id: "main",
       name: "main",
-      host: process.env.MAIN_SSH_HOST,
+      host: process.env.MAIN_HOST,
       username: "root",
-      password: process.env.MAIN_SSH_PASSWORD,
+      password: process.env.MAIN_SSH_PASS,
     });
   }
   if (process.env.DYNAPANNEL_SSH_HOST && process.env.DYNAPANNEL_SSH_PASSWORD) {
