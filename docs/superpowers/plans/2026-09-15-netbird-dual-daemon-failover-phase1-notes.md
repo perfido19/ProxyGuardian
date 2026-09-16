@@ -200,3 +200,38 @@ corrected to `primary`). Updated `netbird-swap.sh` redeployed to all 5 pilot hos
 **Before Phase 2 (remaining 51 fleet VPS):** the install process must also (a) disable
 `netbird-watchdog.timer` and (b) verify/add the generic ESTABLISHED,RELATED rule as
 standard steps, not follow-up fixes discovered live on each host.
+
+## PHASE 2 COMPLETE (2026-09-16)
+
+Built `scripts/netbird-backup/phase2-deploy-host.sh` (per-host orchestrator combining
+every Phase 1 lesson: pre-flight health check, ESTABLISHED rule ensured first,
+watchdog disabled, backup install+immediately-stopped, wt1 port, swap timer, defensive
+nginx upstream fix) + a Python batch orchestrator run from the dashboard.
+
+**Pilot test on 1 new host (mugello) before the batch** found and fixed one more real
+bug: `nginx -t 2>&1 | grep -q "syntax is ok"` under `set -o pipefail` reports false
+failure due to SIGPIPE (grep -q exits on first match, killing nginx -t before it
+finishes writing, pipefail then reports the pipeline failed even though the config
+was valid). Fixed by checking `nginx -t`'s own exit code directly instead of grepping
+piped output. Also fixed the revert-on-failure path to pick the single most recent
+backup (`ls -t | head -1`) instead of a glob that broke `cp` with multiple timestamped
+backups present.
+
+**Batch run on the remaining 52 fleet VPS: 52/52 succeeded, zero failures** (including
+DynamoXc, included per explicit user request despite being excluded from other
+fleet-wide operations). ~25-30s per host, ~24 minutes total, sequential (not
+parallel) via a Python orchestrator on the dashboard.
+
+**Final consolidated health check across everything (58 hosts total: main +
+dynapannel + all 56 fleet VPS): 58/58 fully healthy** - `netbird-swap` state=primary,
+timer active, backup daemon inactive, primary Management Connected. Ran a dedicated
+verification script (not just trusting each individual deploy's own report) to catch
+anything that degraded after its own install step.
+
+**Rollout complete.** Every host that talks to main now has an automatic,
+tested, self-healing failover path to the self-hosted NetBird mesh if NetBird Cloud
+goes down again like it did on 2026-09-15, with the swap detection tuned to react in
+about 2 minutes and never run both daemons simultaneously (the root cause of every
+bug found during this rollout was, in one way or another, downstream of daemon
+conflicts or firewall/DNS state left stale by a restart - worth remembering for any
+future work that touches netbird on these hosts).
