@@ -10,6 +10,7 @@ import { storage } from "./storage";
 import { serviceActionSchema, unbanRequestSchema, updateConfigRequestSchema, updateJailRequestSchema, updateFilterRequestSchema, filterNameSchema, jailNameSchema } from "@shared/schema";
 import { requireAuth, requireOperator, requireAdmin, validateCredentials, getAllUsers, getUserById, createUser, updateUser, deleteUser, getUserAllowedVps, requireVpsAccess, removeVpsFromAllUsers, type UserRole } from "./auth";
 import { getAllVps, getVpsById, createVps, updateVps, deleteVps, checkVpsHealth, checkAllVpsHealth, getHealthFromCache, getLastPollTime, startHealthPoller, syncIptvBanFleet, startBanSyncPoller, agentGet, agentPost, agentDelete, bulkGet, bulkPost, agentUpdate, bulkAgentUpdate, SLOW_REQUEST_TIMEOUT, SLOW_PATHS, getCrowdsecPackageManifest, CROWDSEC_PACKAGES_DIR, agentUploadPackage, ensureEstablishedFleet, startEstablishedPoller, ensureComplianceFleet, startCompliancePoller, startMultiVpsProbePoller, detectMultiVpsCredentialStuffing, getMultiVpsDetections, clearMultiVpsDetection } from "./vps-manager";
+import { getAllNetbirdSwapStatus } from "./netbird-swap-status";
 import { refreshTorList, getTorListState, pushTorListToFleet, getLastPush, startTorBlockPoller } from "./tor-block";
 import { getScannerBlockState, pushScannerBlockToFleet } from "./scanner-block";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
@@ -2297,6 +2298,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }));
     res.json(results);
+  });
+
+  app.get("/api/fleet/netbird-swap/status", requireAuth, async (_req, res) => {
+    try {
+      res.json(await getAllNetbirdSwapStatus());
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   let netbirdLatestCache: { version: string; fetchedAt: number } | null = null;

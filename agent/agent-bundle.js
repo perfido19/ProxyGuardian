@@ -25421,6 +25421,26 @@ app.get("/api/netbird/status", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.get("/api/netbird-swap/status", async (_req, res) => {
+  try {
+    const [stateFile, timer, backup, lastEvent] = await Promise.all([
+      runCmd("cat /var/lib/netbird-swap/state 2>/dev/null"),
+      runCmd("systemctl is-active netbird-swap.timer 2>/dev/null"),
+      runCmd("systemctl is-active netbird-backup 2>/dev/null"),
+      runCmd("journalctl -t netbird-swap --no-pager -n 1 -o cat 2>/dev/null")
+    ]);
+    const installed = stateFile.stdout.trim().length > 0;
+    res.json({
+      installed,
+      state: installed ? stateFile.stdout.trim() : null,
+      timerActive: timer.stdout.trim() === "active",
+      backupDaemonActive: backup.stdout.trim() === "active",
+      lastEvent: lastEvent.stdout.trim() || null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 var NETBIRD_RESTART_NGINX_CONF = "[Service]\nExecStartPost=/bin/bash -c 'sleep 3 && systemctl restart nginx'\n";
 var NETBIRD_IPSET_CLEANUP_SH = [
   "#!/bin/bash",
