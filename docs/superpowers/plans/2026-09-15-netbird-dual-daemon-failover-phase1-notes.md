@@ -20,7 +20,7 @@
 - DROP everything else
 
 ## Mesh IPs
-(to be filled in as each host enrolls: main wt1, dynapannel wt1, pilot VPS wt1)
+- main wt1: 100.91.143.178
 
 ## Open item
 - Peer network CIDR: installer exposed no config option for it. Must verify once first peer (main) enrolls that its wt1 mesh IP does not overlap NetBird Cloud's 100.116.0.0/16 range used by wt0.
