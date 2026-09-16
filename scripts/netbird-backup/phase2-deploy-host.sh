@@ -98,12 +98,15 @@ if n != 1:
 open(f, "w").write(c.replace(old, new, 1))
 print("OK")
 PYEOF
-    if nginx -t 2>&1 | grep -q "syntax is ok"; then
+    NGINX_TEST_OUT="$(nginx -t 2>&1)"
+    NGINX_TEST_RC=$?
+    if [ "$NGINX_TEST_RC" -eq 0 ]; then
         nginx -s reload
         LOG "nginx upstream fixed and reloaded"
     else
-        LOG "WARNING: nginx -t failed after upstream edit - reverted, NOT reloaded"
-        cp "${NGINX_CONF}.bak-wt1-"* "$NGINX_CONF" 2>/dev/null || true
+        LOG "WARNING: nginx -t failed after upstream edit - reverting, NOT reloading. Output: $NGINX_TEST_OUT"
+        LATEST_BAK=$(ls -t "${NGINX_CONF}".bak-wt1-* 2>/dev/null | head -1)
+        [ -n "$LATEST_BAK" ] && cp "$LATEST_BAK" "$NGINX_CONF"
     fi
 else
     LOG "WARNING: nginx.conf doesn't match the expected upstream pattern - skipped, needs manual review"
