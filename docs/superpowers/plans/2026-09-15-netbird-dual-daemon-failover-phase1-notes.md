@@ -113,3 +113,15 @@ incident — [[project_main_netbird_zero_peers_2026-09-15]]):
 
 ## Failover test results
 Not reached — blocked by the finding above.
+
+## Pilot fleet VPS progress (2026-09-16)
+
+- Smarters (100.116.14.174, public 176.123.2.118): netbird-backup installed+disabled
+  (wt1 mesh IP 100.91.73.0), wt1 UDP 51821 open+persisted, added to self-hosted 443
+  allowlist, netbird-swap script+timer active (target=100.116.117.155:8880,
+  threshold=6), nginx upstream fixed to literal IPs (100.116.117.155 primary +
+  100.91.143.178:8880 backup). Verified: 166 live conntrack connections on 8880
+  unaffected by the change. Note: curl-testing this fleet nginx with bare `/` or
+  unauthenticated `/player_api.php` gets 444'd and immediately re-bans the tester's
+  IP in nginx-abuse (by design, anti-scanner) - do not use plain curl probes against
+  fleet :8880 for future verification, trust conntrack/real traffic instead.
