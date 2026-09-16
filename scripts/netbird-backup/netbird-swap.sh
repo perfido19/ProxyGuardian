@@ -108,6 +108,26 @@ check_netbird_cloud_recovered() {
     [ "$code" != "000" ] && [ "$code" != "503" ]
 }
 
+# Idempotent safety net, called right after every daemon start below. The
+# fleet's fix-iptables-post-netbird.sh (ExecStartPost on the netbird unit)
+# rebuilds the INPUT chain on every netbird restart and does NOT include a
+# generic (all-interface) ESTABLISHED,RELATED accept - only an -i wt0
+# scoped one. Without the generic rule, return traffic from any host whose
+# IP falls in blocked_asn (this hit 1.1.1.1 and 8.8.8.8's DNS responses
+# live on 2026-09-16 during this script's own testing) gets dropped,
+# breaking all outbound connectivity including NetBird's own reconnection.
+# A fleet-wide dashboard poller (ensureEstablishedFleet, hourly) already
+# guards against this long-term, but every restart this script triggers
+# reopens the gap for up to that full hour - so assert it here too,
+# immediately, every time.
+ensure_established_rule() {
+    iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || {
+        iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
+        LOG "re-asserted generic ESTABLISHED,RELATED accept rule (was missing after daemon restart)"
+    }
+}
+
 if [ "$STATE" = "primary" ]; then
     if check_primary_ok; then
         [ "$COUNT" = "0" ] || echo 0 > "$COUNT_FILE"
@@ -120,6 +140,7 @@ if [ "$STATE" = "primary" ]; then
         LOG "threshold reached - swapping to backup (stop netbird, start netbird-backup)"
         systemctl stop netbird
         systemctl start netbird-backup
+        ensure_established_rule
         echo backup > "$STATE_FILE"
         echo 0 > "$COUNT_FILE"
         LOG "swapped to backup"
@@ -136,7 +157,13 @@ else
         LOG "attempting swap back to primary (stop netbird-backup, start netbird)"
         systemctl stop netbird-backup
         systemctl start netbird
-        sleep 10
+        ensure_established_rule
+        # 45s, not 10s: a fresh reconnect after real downtime (the outage
+        # that triggered the swap, plus however long we stayed on backup)
+        # needs real time to renegotiate management/signal/P2P - verified
+        # live on 2026-09-16 that 10s was not enough and caused a spurious
+        # revert-to-backup even though the primary was actually fine.
+        sleep 45
         if check_primary_ok; then
             echo primary > "$STATE_FILE"
             echo 0 > "$COUNT_FILE"
@@ -145,6 +172,7 @@ else
             LOG "primary still not reachable after restart - reverting to backup"
             systemctl stop netbird
             systemctl start netbird-backup
+            ensure_established_rule
             echo backup > "$STATE_FILE"
             echo 0 > "$COUNT_FILE"
         fi
