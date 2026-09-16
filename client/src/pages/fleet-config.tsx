@@ -58,18 +58,6 @@ interface VpsNetbirdUpdateStatus {
   error: string | null;
 }
 
-interface NetbirdSwapStatus {
-  id: string;
-  name: string;
-  installed: boolean;
-  state: "primary" | "backup" | null;
-  timerActive: boolean;
-  backupDaemonActive: boolean;
-  lastEvent: string | null;
-  online: boolean;
-  error?: string;
-}
-
 const NETBIRD_FALLBACK = "0.73.1";
 
 const CHECK_LABELS: Record<keyof NginxCheck, { label: string; icon: React.ReactNode }> = {
@@ -165,16 +153,6 @@ export default function FleetConfig() {
       return res.json();
     },
     staleTime: 60000,
-  });
-
-  const { data: swapStatuses, isFetching: swapFetching, refetch: refetchSwap } = useQuery<NetbirdSwapStatus[]>({
-    queryKey: ["/api/fleet/netbird-swap/status"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/fleet/netbird-swap/status");
-      return res.json();
-    },
-    staleTime: 20000,
-    refetchInterval: 30000,
   });
 
   const { data: netbirdLatest } = useQuery<{ version: string | null }>({
@@ -710,88 +688,6 @@ export default function FleetConfig() {
           </Table>
         </CardContent>
       </Card>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="font-heading flex items-center gap-2">
-                <Radio className="w-4 h-4" />
-                Failover NetBird
-              </CardTitle>
-              <CardDescription>
-                Stato del secondo demone NetBird (self-hosted, wt1) su ogni host — attivo solo se il primario (NetBird Cloud) è giù da almeno ~2 minuti.
-              </CardDescription>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => refetchSwap()} disabled={swapFetching} className="gap-1.5">
-              <RefreshCw className={`w-3.5 h-3.5 ${swapFetching ? "animate-spin" : ""}`} />
-              Aggiorna
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {swapStatuses && swapStatuses.some((s) => s.state === "backup") && (
-            <div className="mb-4 rounded-md border border-orange-500/50 bg-orange-500/10 px-3 py-2 text-sm text-orange-600 dark:text-orange-400 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              {swapStatuses.filter((s) => s.state === "backup").length} host in failover (backup attivo) in questo momento.
-            </div>
-          )}
-          {!swapStatuses ? (
-            <LoadingState />
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Host</TableHead>
-                    <TableHead>Stato</TableHead>
-                    <TableHead>Timer</TableHead>
-                    <TableHead>Ultimo evento</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {swapStatuses.map((s) => (
-                    <TableRow key={s.id}>
-                      <TableCell className="font-medium">
-                        {s.name}
-                        {(s.id === "main" || s.id === "dynapannel") && (
-                          <Badge variant="outline" className="ml-2 text-[10px]">non-flotta</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {!s.online ? (
-                          <Badge variant="outline" className="gap-1 text-muted-foreground"><XCircle className="w-3 h-3" />offline</Badge>
-                        ) : !s.installed ? (
-                          <Badge variant="outline" className="gap-1 text-muted-foreground">non installato</Badge>
-                        ) : s.state === "backup" ? (
-                          <Badge className="gap-1 bg-orange-500 hover:bg-orange-500"><AlertCircle className="w-3 h-3" />backup attivo</Badge>
-                        ) : (
-                          <Badge className="gap-1 bg-green-600 hover:bg-green-600"><CheckCircle2 className="w-3 h-3" />primario</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {s.installed ? (
-                          s.timerActive ? (
-                            <span className="text-xs text-green-600">attivo</span>
-                          ) : (
-                            <span className="text-xs text-destructive">fermo</span>
-                          )
-                        ) : (
-                          <span className="text-xs text-muted-foreground">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground font-mono max-w-md truncate">
-                        {s.lastEvent || s.error || "-"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
       {/* Template dialog */}
       <Dialog open={templateOpen} onOpenChange={setTemplateOpen}>
         <DialogContent className="max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">

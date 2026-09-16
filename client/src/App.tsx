@@ -50,6 +50,7 @@ import DeployVps from "@/pages/deploy-vps";
 import IpInvestigator from "@/pages/ip-investigator";
 import CrowdSec from "@/pages/crowdsec";
 import MainBackend from "@/pages/main-backend";
+import NetbirdFailover from "@/pages/netbird-failover";
 import AntiIptvManagement from "@/pages/anti-iptv-management";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
@@ -163,6 +164,7 @@ function Router() {
       {user?.role === "admin" && <Route path="/deploy" component={DeployVps} />}
       <Route path="/ip-investigator" component={IpInvestigator} />
       <Route path="/main-backend" component={MainBackend} />
+      <Route path="/netbird-failover" component={NetbirdFailover} />
       <Route path="/crowdsec" component={CrowdSec} />
       <Route path="/anti-iptv-management" component={AntiIptvManagement} />
       <Route component={NotFound} />
