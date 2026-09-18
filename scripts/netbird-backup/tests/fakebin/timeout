@@ -1,0 +1,5 @@
+#!/bin/bash
+# Use the real timeout to avoid indefinite blocking on /dev/tcp
+# (fake binaries are for logging call patterns, not replacing timeout)
+echo "timeout $*" >> "$FAKEBIN_LOG"
+/usr/bin/timeout "$@"

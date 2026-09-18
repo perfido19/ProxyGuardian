@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "netfilter-persistent $*" >> "$FAKEBIN_LOG"
+exit 0

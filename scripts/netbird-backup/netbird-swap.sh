@@ -47,11 +47,28 @@ MAIN_IP="${1:?usage: netbird-swap.sh <main-primary-ip|self> <port> [fail-thresho
 PORT="${2:?usage: netbird-swap.sh <main-primary-ip|self> <port> [fail-threshold]}"
 THRESHOLD="${3:-6}"
 
-STATE_DIR=/var/lib/netbird-swap
+STATE_DIR="${NETBIRD_SWAP_STATE_DIR:-/var/lib/netbird-swap}"
 STATE_FILE="$STATE_DIR/state"
 COUNT_FILE="$STATE_DIR/count"
 
 LOG() { echo "$(date -u +%FT%TZ) netbird-swap: $*"; logger -t netbird-swap "$*"; }
+
+JITTER_MAX="${NETBIRD_SWAP_JITTER_MAX:-90}"
+
+# Random delay before executing a client-mode swap, so that when main has a
+# real outage the 50+ hosts watching it don't all restart their WireGuard
+# daemon in the same second and hammer main's backup daemon while it's
+# already cold-starting. /dev/urandom, not $RANDOM: $RANDOM is seeded per
+# bash process and hosts invoked at nearly the same wall-clock time (which is
+# exactly the scenario this exists for) can end up correlated. Not applied in
+# self mode (MAIN_IP=self) - a single host has no herd to stagger.
+jitter_seconds() {
+    if [ "$JITTER_MAX" -le 0 ]; then
+        echo 0
+        return
+    fi
+    echo $(( $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % (JITTER_MAX + 1) ))
+}
 
 mkdir -p "$STATE_DIR"
 [ -f "$STATE_FILE" ] || echo primary > "$STATE_FILE"
@@ -137,7 +154,19 @@ if [ "$STATE" = "primary" ]; then
     echo "$COUNT" > "$COUNT_FILE"
     LOG "primary path to $MAIN_IP:$PORT unreachable ($COUNT/$THRESHOLD)"
     if [ "$COUNT" -ge "$THRESHOLD" ]; then
-        LOG "threshold reached - swapping to backup (stop netbird, start netbird-backup)"
+        if [ "$MAIN_IP" = "self" ]; then
+            LOG "threshold reached - swapping to backup (stop netbird, start netbird-backup)"
+        else
+            J=$(jitter_seconds)
+            LOG "threshold reached - jitter ${J}s before swap to backup"
+            sleep "$J"
+            if check_primary_ok; then
+                LOG "condition resolved during jitter wait - swap to backup cancelled"
+                echo 0 > "$COUNT_FILE"
+                exit 0
+            fi
+            LOG "threshold still reached after jitter - swapping to backup (stop netbird, start netbird-backup)"
+        fi
         systemctl stop netbird
         systemctl start netbird-backup
         ensure_established_rule
@@ -154,6 +183,16 @@ else
     echo "$COUNT" > "$COUNT_FILE"
     LOG "NetBird Cloud API looks recovered ($COUNT/$THRESHOLD consecutive checks)"
     if [ "$COUNT" -ge "$THRESHOLD" ]; then
+        if [ "$MAIN_IP" != "self" ]; then
+            J=$(jitter_seconds)
+            LOG "recovery threshold reached - jitter ${J}s before swap back to primary"
+            sleep "$J"
+            if ! check_netbird_cloud_recovered; then
+                LOG "condition resolved during jitter wait - swap back cancelled, staying on backup"
+                echo 0 > "$COUNT_FILE"
+                exit 0
+            fi
+        fi
         LOG "attempting swap back to primary (stop netbird-backup, start netbird)"
         systemctl stop netbird-backup
         systemctl start netbird

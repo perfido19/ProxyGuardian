@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "netbird $*" >> "$FAKEBIN_LOG"
+cat "${FAKE_NETBIRD_STATUS_FILE:-/dev/null}"

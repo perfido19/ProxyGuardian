@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "iptables $*" >> "$FAKEBIN_LOG"
+exit "${FAKE_IPTABLES_EXIT:-1}"

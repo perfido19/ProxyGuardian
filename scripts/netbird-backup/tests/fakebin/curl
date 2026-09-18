@@ -1,0 +1,4 @@
+#!/bin/bash
+echo "curl $*" >> "$FAKEBIN_LOG"
+echo -n "${FAKE_CURL_CODE:-000}"
+exit 0
