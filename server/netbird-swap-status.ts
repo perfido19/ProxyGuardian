@@ -9,6 +9,7 @@ export interface NetbirdSwapStatus {
   timerActive: boolean;
   backupDaemonActive: boolean;
   lastEvent: string | null;
+  stateSince: string | null;
   online: boolean;
   error?: string;
 }
@@ -17,17 +18,24 @@ const SWAP_CHECK_CMD =
   "cat /var/lib/netbird-swap/state 2>/dev/null; echo ---; " +
   "systemctl is-active netbird-swap.timer 2>/dev/null; echo ---; " +
   "systemctl is-active netbird-backup 2>/dev/null; echo ---; " +
-  "journalctl -t netbird-swap --no-pager -n 1 -o cat 2>/dev/null";
+  "journalctl -t netbird-swap --no-pager -n 1 -o cat 2>/dev/null; echo ---; " +
+  // journald retention varies per host (some rotate away in hours, giving a
+  // false "no event" reading right after a real swap - see DynamoXc during
+  // the 2026-09-17 incident). syslog keeps rotated .gz history much longer.
+  "grep -ah 'netbird-swap:' /var/log/syslog 2>/dev/null | tail -1; echo ---; " +
+  "stat -c %Y /var/lib/netbird-swap/state 2>/dev/null";
 
 function parseSwapOutput(stdout: string): Omit<NetbirdSwapStatus, "id" | "name" | "online" | "error"> {
-  const [state, timer, backup, lastEvent] = stdout.split("---").map((s) => s.trim());
+  const [state, timer, backup, journalEvent, syslogRaw, stateSinceRaw] = stdout.split("---").map((s) => s.trim());
   const installed = state.length > 0;
+  const syslogEvent = syslogRaw ? syslogRaw.replace(/^.*netbird-swap:\s*/, "") : "";
   return {
     installed,
     state: installed ? (state as "primary" | "backup") : null,
     timerActive: timer === "active",
     backupDaemonActive: backup === "active",
-    lastEvent: lastEvent || null,
+    lastEvent: journalEvent || syslogEvent || null,
+    stateSince: stateSinceRaw ? new Date(Number(stateSinceRaw) * 1000).toISOString() : null,
   };
 }
 
@@ -83,6 +91,7 @@ async function getFleetSwapStatus(): Promise<NetbirdSwapStatus[]> {
           timerActive: false,
           backupDaemonActive: false,
           lastEvent: null,
+          stateSince: null,
           online: false,
           error: err.message,
         };
@@ -92,7 +101,7 @@ async function getFleetSwapStatus(): Promise<NetbirdSwapStatus[]> {
   return results.map((r) =>
     r.status === "fulfilled"
       ? r.value
-      : { id: "?", name: "?", installed: false, state: null, timerActive: false, backupDaemonActive: false, lastEvent: null, online: false, error: "unknown" }
+      : { id: "?", name: "?", installed: false, state: null, timerActive: false, backupDaemonActive: false, lastEvent: null, stateSince: null, online: false, error: "unknown" }
   );
 }
 
@@ -116,6 +125,7 @@ async function getExtraHostsSwapStatus(): Promise<NetbirdSwapStatus[]> {
           timerActive: false,
           backupDaemonActive: false,
           lastEvent: null,
+          stateSince: null,
           online: false,
           error: err.message,
         };
@@ -125,7 +135,7 @@ async function getExtraHostsSwapStatus(): Promise<NetbirdSwapStatus[]> {
   return results.map((r) =>
     r.status === "fulfilled"
       ? r.value
-      : { id: "?", name: "?", installed: false, state: null, timerActive: false, backupDaemonActive: false, lastEvent: null, online: false, error: "unknown" }
+      : { id: "?", name: "?", installed: false, state: null, timerActive: false, backupDaemonActive: false, lastEvent: null, stateSince: null, online: false, error: "unknown" }
   );
 }
 
