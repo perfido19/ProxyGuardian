@@ -21,9 +21,22 @@ const SWAP_CHECK_CMD =
   "journalctl -t netbird-swap --no-pager -n 1 -o cat 2>/dev/null; echo ---; " +
   // journald retention varies per host (some rotate away in hours, giving a
   // false "no event" reading right after a real swap - see DynamoXc during
-  // the 2026-09-17 incident). syslog keeps rotated .gz history much longer.
+  // the 2026-09-17 incident). This grep only reads the live /var/log/syslog
+  // file (not rotated .gz archives), but that still covers the current day
+  // before rotation - longer than journald's volatile retention on some hosts.
   "grep -ah 'netbird-swap:' /var/log/syslog 2>/dev/null | tail -1; echo ---; " +
   "stat -c %Y /var/lib/netbird-swap/state 2>/dev/null";
+
+function parseStateSince(stateSinceRaw: string | undefined): string | null {
+  if (!stateSinceRaw) return null;
+  const epochMs = Number(stateSinceRaw) * 1000;
+  // Guard against a malformed value (e.g. "---" from a stat error leaking
+  // through, or any other non-numeric junk) - Number() on it yields NaN,
+  // and new Date(NaN).toISOString() throws RangeError instead of returning
+  // a sentinel, which would otherwise take down this whole status endpoint.
+  if (!Number.isFinite(epochMs)) return null;
+  return new Date(epochMs).toISOString();
+}
 
 function parseSwapOutput(stdout: string): Omit<NetbirdSwapStatus, "id" | "name" | "online" | "error"> {
   const [state, timer, backup, journalEvent, syslogRaw, stateSinceRaw] = stdout.split("---").map((s) => s.trim());
@@ -35,7 +48,7 @@ function parseSwapOutput(stdout: string): Omit<NetbirdSwapStatus, "id" | "name" 
     timerActive: timer === "active",
     backupDaemonActive: backup === "active",
     lastEvent: journalEvent || syslogEvent || null,
-    stateSince: stateSinceRaw ? new Date(Number(stateSinceRaw) * 1000).toISOString() : null,
+    stateSince: parseStateSince(stateSinceRaw),
   };
 }
 

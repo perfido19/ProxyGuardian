@@ -23561,8 +23561,11 @@ app.get("/api/netbird-swap/status", async (_req, res) => {
       // journald retention varies wildly per host (some rotate away in hours) and
       // gives a false "no event" reading even right after a real swap - see the
       // 2026-09-17 incident where DynamoXc looked like it never swapped. syslog
-      // (via logger -t netbird-swap, same call the script already makes) keeps
-      // rotated .gz history much longer, so fall back to it when journald is empty.
+      // (via logger -t netbird-swap, same call the script already makes) is a
+      // fallback, not a fix for rotation in general: the grep below only reads
+      // the live /var/log/syslog file, not rotated .gz archives, but that still
+      // covers the current day before rotation - longer than journald's volatile
+      // retention on some hosts - so fall back to it when journald is empty.
       runCmd("grep -ah 'netbird-swap:' /var/log/syslog 2>/dev/null | tail -1"),
       // mtime of the state file = the moment the last swap actually happened
       // (the script only ever writes this file inside the swap branches).
@@ -23573,13 +23576,14 @@ app.get("/api/netbird-swap/status", async (_req, res) => {
     const journalLine = journalEvent.stdout.trim();
     const syslogLine = syslogEvent.stdout.trim().replace(/^.*netbird-swap:\s*/, "");
     const stateSinceEpoch = stateSince.stdout.trim();
+    const stateSinceMs = stateSinceEpoch ? Number(stateSinceEpoch) * 1e3 : NaN;
     res.json({
       installed,
       state: installed ? stateFile.stdout.trim() : null,
       timerActive: timer.stdout.trim() === "active",
       backupDaemonActive: backup.stdout.trim() === "active",
       lastEvent: journalLine || syslogLine || null,
-      stateSince: stateSinceEpoch ? new Date(Number(stateSinceEpoch) * 1e3).toISOString() : null
+      stateSince: Number.isFinite(stateSinceMs) ? new Date(stateSinceMs).toISOString() : null
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
