@@ -1,4 +1,33 @@
 #!/bin/bash
 echo "curl $*" >> "$FAKEBIN_LOG"
-echo -n "${FAKE_CURL_CODE:-000}"
+
+# If FAKE_CURL_CALL_COUNTER is set (points to a file), increment a counter
+# and return different codes based on call number. This lets tests simulate
+# "condition changes during jitter": first call returns one code (e.g. 000),
+# second call returns another (e.g. 404), exercising the re-check logic.
+if [ -n "${FAKE_CURL_CALL_COUNTER:-}" ]; then
+    # Initialize counter to 0 if file doesn't exist
+    if [ ! -f "$FAKE_CURL_CALL_COUNTER" ]; then
+        echo 0 > "$FAKE_CURL_CALL_COUNTER"
+    fi
+    # Increment counter
+    CALL_NUM=$(($(cat "$FAKE_CURL_CALL_COUNTER") + 1))
+    echo "$CALL_NUM" > "$FAKE_CURL_CALL_COUNTER"
+
+    # FAKE_CURL_CODE_SEQUENCE is a space/comma-separated list (e.g. "000 404")
+    # Return the N-th code from the list (1-indexed)
+    if [ -n "${FAKE_CURL_CODE_SEQUENCE:-}" ]; then
+        CODE=$(echo "$FAKE_CURL_CODE_SEQUENCE" | tr ',' ' ' | cut -d' ' -f"$CALL_NUM")
+        if [ -z "$CODE" ]; then
+            # If list is exhausted, use the last code
+            CODE=$(echo "$FAKE_CURL_CODE_SEQUENCE" | tr ',' ' ' | awk '{print $NF}')
+        fi
+        echo -n "$CODE"
+    else
+        echo -n "${FAKE_CURL_CODE:-000}"
+    fi
+else
+    # No counter, just use static code
+    echo -n "${FAKE_CURL_CODE:-000}"
+fi
 exit 0

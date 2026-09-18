@@ -53,7 +53,17 @@ COUNT_FILE="$STATE_DIR/count"
 
 LOG() { echo "$(date -u +%FT%TZ) netbird-swap: $*"; logger -t netbird-swap "$*"; }
 
+# Stagger daemon restarts across ~90s when a real outage hits all 58 hosts
+# (main + dynapannel + 56 fleet VPS) simultaneously, so they don't hammer
+# main's backup daemon all at once while it's cold-starting. 90s / 58 hosts
+# ≈ 1.5s per host on average. Only applies to client mode (MAIN_IP!=self);
+# main doesn't use jitter (single host, no herd to stagger). Uses /dev/urandom
+# (not $RANDOM, which is seeded per-bash and correlates across near-simultaneous
+# invocations) to extract random delay, then re-checks the trigger condition
+# before acting — if it resolved during the wait, the swap is cancelled entirely.
 JITTER_MAX="${NETBIRD_SWAP_JITTER_MAX:-90}"
+# Validate that JITTER_MAX is numeric to avoid cryptic failures under set -euo pipefail
+case "$JITTER_MAX" in ''|*[!0-9]*) JITTER_MAX=90;; esac
 
 # Random delay before executing a client-mode swap, so that when main has a
 # real outage the 50+ hosts watching it don't all restart their WireGuard
