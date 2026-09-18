@@ -215,26 +215,31 @@ ensure_established_rule() {
             ;;
     esac
 
-    # Not satisfied at position 1. Before inserting, remove any generic
-    # (non-interface-scoped) ESTABLISHED,RELATED accept rules that may
-    # already exist further down the chain - e.g. left over from an earlier
-    # run of this same function - so repeated invocations (once per netbird
-    # restart) don't pile up duplicate rules over time. Same
-    # delete-then-insert-at-1 pattern as scripts/update-asn-block.sh.
-    local rule spec
-    while IFS= read -r rule; do
-        case "$rule" in
-            *" -i "*|*" -o "*) continue ;;
-            *"-m conntrack --ctstate"*ESTABLISHED*|*"-m state --state"*ESTABLISHED*)
-                spec="${rule#-A INPUT }"
-                iptables -D INPUT $spec 2>/dev/null || true
-                ;;
-        esac
-    done < <(iptables -S INPUT 2>/dev/null | tail -n +2 || true)
-
+    # Not satisfied at position 1. Insert the generic rule FIRST, then clean
+    # up any duplicate left over from an earlier run of this same function -
+    # never the other way around: deleting before the insert would leave the
+    # chain with zero generic ESTABLISHED rule for however long it takes the
+    # insert to run, and if that insert then fails (the exact lock-contention
+    # scenario the `|| true` above exists for), the host is stuck in the
+    # 2026-08-04 outage condition until the hourly dashboard poller catches
+    # it. The dedup pattern below is anchored to the two EXACT generic-ACCEPT
+    # forms this project ever installs (this function, or a past run of it) -
+    # NOT a bare substring match on ESTABLISHED, which would also delete
+    # unrelated rules that happen to mention it (a `--dport 22 ... NEW,
+    # ESTABLISHED` SSH-hardening rule, or an unrelated LOG rule).
     iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
     LOG "re-asserted generic ESTABLISHED,RELATED accept rule at position 1 (was missing, interface-scoped only, or not first after daemon restart)"
+
+    local rule
+    while IFS= read -r rule; do
+        case "$rule" in
+            "-A INPUT -m conntrack --ctstate "*ESTABLISHED*" -j ACCEPT"|\
+            "-A INPUT -m state --state "*ESTABLISHED*" -j ACCEPT")
+                iptables -D INPUT ${rule#-A INPUT } 2>/dev/null || true
+                ;;
+        esac
+    done < <(iptables -S INPUT 2>/dev/null | tail -n +3 || true)
 }
 
 if [ "$STATE" = "primary" ]; then

@@ -9,11 +9,21 @@ touching main, dynapannel, or the rest of the fleet.
 
 - [ ] Pick a non-critical pilot host (same criterion used for every other
       fleet-wide script rollout this project has done - not main, not
-      dynapannel, not a VPS carrying live paying traffic if avoidable).
+      dynapannel, and **hard requirement, not "if avoidable"**: not a VPS
+      carrying live paying traffic. The simulated outage below really drops
+      the pilot's upstream to main for several minutes - expect it to serve
+      zero customer traffic for the duration.
 - [ ] Confirm current script version/backup exists on the pilot
       (`cp /usr/local/sbin/netbird-swap.sh /root/netbird-swap.sh.bak-$(date +%Y%m%d-%H%M%S)`).
-- [ ] Copy the new `netbird-swap.sh` to the pilot, `chmod +x`, do **not**
-      touch the systemd unit yet.
+- [ ] Copy the new `netbird-swap.sh` to the pilot, `chmod +x`.
+- [ ] Update `netbird-swap.service.template` on the pilot NOW, before the
+      simulation below, not after: `TimeoutStartSec=210` (the swap-back path
+      calls the 15s recovery check twice, plus up to 90s jitter plus the 45s
+      post-restart verification sleep - the old 150s value is not enough and
+      the very run this checklist asks you to watch for "no timeout" would
+      otherwise be the one that gets killed mid-swap).
+      `systemctl daemon-reload`, confirm the timer still fires normally on
+      its next 20s tick before proceeding.
 
 ## Simulate a real main outage, locally on the pilot only
 
@@ -39,10 +49,6 @@ touching main, dynapannel, or the rest of the fleet.
 
 ## Only after a clean pilot run
 
-- [ ] Update `netbird-swap.service.template` on the pilot too (the
-      `TimeoutStartSec=150` line), reload systemd
-      (`systemctl daemon-reload`), confirm the timer still fires normally
-      on its next 20s tick.
 - [ ] Decide with the user: roll out to the rest of the fleet via the
       same mechanism already used for prior fleet-wide script pushes, in
       batches, main and dynapannel last (they're the two hosts where a
