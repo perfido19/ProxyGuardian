@@ -4,12 +4,16 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-# 150s covers the worst case: up to 90s jitter + up to 45s post-swap-back
-# verification sleep + a few seconds of actual systemctl/curl work. Without
-# this, systemd's default oneshot timeout could kill the script mid-jitter,
-# leaving COUNT_FILE at threshold and the state file unchanged - the next
-# tick would just re-evaluate from scratch, but killing mid-swap (after
+# 210s covers the worst case on the swap-back path: check_netbird_cloud_recovered
+# (15s max-time curl) is called up to TWICE - once for the initial recovery
+# check that raises COUNT to threshold, once again as the jitter re-check -
+# plus up to 90s jitter plus the 45s post-swap-back verification sleep plus
+# a few seconds of actual systemctl/curl work: 15 + 90 + 15 + 45 + ~5 ≈ 170s
+# worst case. Rounded up with margin to 210s. Without this, systemd's
+# default oneshot timeout could kill the script mid-jitter, leaving
+# COUNT_FILE at threshold and the state file unchanged - the next tick
+# would just re-evaluate from scratch, but killing mid-swap (after
 # systemctl stop netbird has already run) would be worse, so give it room.
-TimeoutStartSec=150
+TimeoutStartSec=210
 ExecStart=/usr/local/sbin/netbird-swap.sh __MAIN_IP__ __PORT__ __THRESHOLD__
 # __THRESHOLD__ default 6 = 2 minutes at this unit's 20s timer interval
