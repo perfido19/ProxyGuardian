@@ -136,9 +136,28 @@ check_primary_ok() {
 # (curl prints 000) or an explicit 503 means the service itself is down;
 # any other real HTTP response means the server answered.
 check_netbird_cloud_recovered() {
-    local code
-    code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 https://api.netbird.io/api/health 2>/dev/null || echo 000)
-    [ "$code" != "000" ] && [ "$code" != "503" ]
+    local code curl_exit
+    code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 15 https://api.netbird.io/api/health 2>/dev/null)
+    curl_exit=$?
+    if [ "$curl_exit" -ne 0 ]; then
+        LOG "netbird cloud health check failed: curl exit $curl_exit"
+        return 1
+    fi
+    # A real curl also prints "000" for -w "%{http_code}" whenever no HTTP
+    # response was received (it's how curl represents that case in the
+    # write-out format), so this stays as a second, independent signal of
+    # "no response" even though curl's own exit code above already covers
+    # the connect-failure case in practice - keeps this in line with the
+    # historical behavior confirmed live during the 2026-09-15 outage.
+    if [ "$code" = "000" ]; then
+        LOG "netbird cloud health check: no response (http_code 000)"
+        return 1
+    fi
+    if [ "$code" = "503" ]; then
+        LOG "netbird cloud health check: got 503 (service down)"
+        return 1
+    fi
+    return 0
 }
 
 # Idempotent safety net, called right after every daemon start below. The

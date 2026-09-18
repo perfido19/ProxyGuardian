@@ -25,7 +25,7 @@ trap cleanup_listeners EXIT
 
 assert_contains() {
     local haystack="$1" needle="$2" msg="$3"
-    if grep -qF "$needle" <<< "$haystack"; then
+    if grep -qF -- "$needle" <<< "$haystack"; then
         echo "  PASS: $msg"
         pass=$((pass + 1))
     else
@@ -38,7 +38,7 @@ assert_contains() {
 
 assert_not_contains() {
     local haystack="$1" needle="$2" msg="$3"
-    if grep -qF "$needle" <<< "$haystack"; then
+    if grep -qF -- "$needle" <<< "$haystack"; then
         echo "  FAIL: $msg (did not expect to find: $needle)"
         fail=$((fail + 1))
     else
@@ -190,6 +190,18 @@ NETBIRD_SWAP_STATE_DIR="$STATE_DIR" NETBIRD_SWAP_JITTER_MAX=0 FAKE_CURL_CODE=000
 LOG=$(cat "$FAKEBIN_LOG")
 assert_contains "$LOG" "iptables -S INPUT" "checks actual rule position, not just existence"
 assert_contains "$LOG" "iptables -I INPUT 1" "re-inserts at position 1 when not first"
+
+echo ""
+echo "=== Test: check_netbird_cloud_recovered logs curl's exit code on failure ==="
+export FAKEBIN_LOG=$(mktemp)
+STATE_DIR=$(mktemp -d)
+echo backup > "$STATE_DIR/state"
+echo 0 > "$STATE_DIR/count"
+NETBIRD_SWAP_STATE_DIR="$STATE_DIR" NETBIRD_SWAP_JITTER_MAX=0 FAKE_CURL_EXIT_ERROR=7 \
+    "$SCRIPT" 10.0.0.1 8880 6 || true
+LOG=$(cat "$FAKEBIN_LOG")
+assert_contains "$LOG" "curl exit 7" "logs curl's own exit code, not just 'unreachable'"
+assert_contains "$LOG" "--max-time 15" "recovery check uses the 15s timeout, not 5s"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

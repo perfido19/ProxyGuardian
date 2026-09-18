@@ -1,6 +1,18 @@
 #!/bin/bash
 echo "curl $*" >> "$FAKEBIN_LOG"
 
+# FAKE_CURL_EXIT_ERROR simulates a curl-level connect failure (DNS failure,
+# connection refused, timeout, etc) as opposed to a real HTTP response code.
+# Real curl prints "000" for -w "%{http_code}" on a connect failure AND on
+# an actual 000 HTTP response would never happen, but it also exits non-zero
+# in the failure case - callers that only look at the printed code can't
+# tell "connection never happened" apart from "server literally returned
+# nothing", so this lets a test simulate the exit-code side of that too.
+if [ -n "${FAKE_CURL_EXIT_ERROR:-}" ]; then
+    echo -n "000"
+    exit "$FAKE_CURL_EXIT_ERROR"
+fi
+
 # If FAKE_CURL_CALL_COUNTER is set (points to a file), increment a counter
 # and return different codes based on call number. This lets tests simulate
 # "condition changes during jitter": first call returns one code (e.g. 000),
