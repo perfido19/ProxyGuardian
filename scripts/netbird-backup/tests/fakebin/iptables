@@ -1,3 +1,17 @@
 #!/bin/bash
 echo "iptables $*" >> "$FAKEBIN_LOG"
-exit "${FAKE_IPTABLES_EXIT:-1}"
+if [ "$1" = "-C" ]; then
+    exit "${FAKE_IPTABLES_CHECK_EXIT:-1}"
+fi
+if [ "$1" = "-S" ] && [ "$2" = "INPUT" ]; then
+    # Simulates the rule existing at position 4 (three other rules above it),
+    # matching what was found live on main on 2026-09-17.
+    printf '%s\n' \
+        "-P INPUT ACCEPT" \
+        "-A INPUT -i wt0 -j NETBIRD-ACL-INPUT" \
+        "-A INPUT -i wt0 -j DROP" \
+        "-A INPUT -p tcp -m multiport --dports 8880 -m set --match-set f2b-panel-api src -j REJECT" \
+        "${FAKE_ESTABLISHED_RULE_LINE:--A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT}"
+    exit 0
+fi
+exit "${FAKE_IPTABLES_EXIT:-0}"

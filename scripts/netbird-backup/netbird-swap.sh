@@ -154,11 +154,16 @@ check_netbird_cloud_recovered() {
 # reopens the gap for up to that full hour - so assert it here too,
 # immediately, every time.
 ensure_established_rule() {
-    iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || {
-        iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
-        LOG "re-asserted generic ESTABLISHED,RELATED accept rule (was missing after daemon restart)"
-    }
+    local first_rule
+    first_rule=$(iptables -S INPUT 2>/dev/null | sed -n '2p')
+    case "$first_rule" in
+        *"-m conntrack --ctstate"*ESTABLISHED*|*"-m state --state"*ESTABLISHED*)
+            return 0
+            ;;
+    esac
+    iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
+    LOG "re-asserted generic ESTABLISHED,RELATED accept rule at position 1 (was missing or not first after daemon restart)"
 }
 
 if [ "$STATE" = "primary" ]; then

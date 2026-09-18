@@ -180,6 +180,18 @@ assert_contains "$LOG" "recovery threshold reached - jitter" "jitter applied"
 assert_contains "$LOG" "swapped back to primary, verified reachable" "verified primary reachable after restart"
 
 echo ""
+echo "=== Test: ensure_established_rule re-inserts when rule exists but not at position 1 ==="
+export FAKEBIN_LOG=$(mktemp)
+STATE_DIR=$(mktemp -d)
+echo primary > "$STATE_DIR/state"
+echo 5 > "$STATE_DIR/count"
+NETBIRD_SWAP_STATE_DIR="$STATE_DIR" NETBIRD_SWAP_JITTER_MAX=0 FAKE_CURL_CODE=000 \
+    "$SCRIPT" 10.0.0.1 8880 6 || true
+LOG=$(cat "$FAKEBIN_LOG")
+assert_contains "$LOG" "iptables -S INPUT" "checks actual rule position, not just existence"
+assert_contains "$LOG" "iptables -I INPUT 1" "re-inserts at position 1 when not first"
+
+echo ""
 echo "Results: $pass passed, $fail failed"
 echo ""
 echo "Verifying no 10.0.0.1 literals..."
