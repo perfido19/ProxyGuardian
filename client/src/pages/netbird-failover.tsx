@@ -15,8 +15,16 @@ interface NetbirdSwapStatus {
   timerActive: boolean;
   backupDaemonActive: boolean;
   lastEvent: string | null;
+  stateSince: string | null;
   online: boolean;
   error?: string;
+}
+
+const STUCK_THRESHOLD_MINUTES = 15;
+
+function minutesOnBackup(s: NetbirdSwapStatus): number | null {
+  if (s.state !== "backup" || !s.stateSince) return null;
+  return Math.floor((Date.now() - new Date(s.stateSince).getTime()) / 60_000);
 }
 
 export default function NetbirdFailover() {
@@ -60,6 +68,16 @@ export default function NetbirdFailover() {
             <div className="mb-4 rounded-md border border-orange-500/50 bg-orange-500/10 px-3 py-2 text-sm text-orange-600 dark:text-orange-400 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
               {swapStatuses.filter((s) => s.state === "backup").length} host in failover (backup attivo) in questo momento.
+            </div>
+          )}
+          {swapStatuses && swapStatuses.some((s) => (minutesOnBackup(s) ?? 0) >= STUCK_THRESHOLD_MINUTES) && (
+            <div className="mb-4 rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-400 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              {swapStatuses
+                .filter((s) => (minutesOnBackup(s) ?? 0) >= STUCK_THRESHOLD_MINUTES)
+                .map((s) => `${s.name} (${minutesOnBackup(s)} min)`)
+                .join(", ")}{" "}
+              — su backup da oltre {STUCK_THRESHOLD_MINUTES} minuti senza rientro automatico. Controllo manuale consigliato.
             </div>
           )}
           {!swapStatuses ? (
@@ -108,6 +126,9 @@ export default function NetbirdFailover() {
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground font-mono max-w-md truncate">
                         {s.lastEvent || s.error || "-"}
+                        {minutesOnBackup(s) !== null && (
+                          <span className="ml-2 text-orange-500">({minutesOnBackup(s)} min su backup)</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
