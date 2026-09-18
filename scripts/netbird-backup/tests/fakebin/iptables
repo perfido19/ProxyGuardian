@@ -5,10 +5,13 @@ if [ "$1" = "-C" ]; then
 fi
 if [ "$1" = "-S" ] && [ "$2" = "INPUT" ]; then
     # Simulates the rule existing at position 4 (three other rules above it),
-    # matching what was found live on main on 2026-09-17.
+    # matching what was found live on main on 2026-09-17. Line 2
+    # (FAKE_IPTABLES_LINE2) defaults to NetBird's own -i wt0 jump rule; tests
+    # can override it to simulate a wt0-scoped ESTABLISHED rule sitting in
+    # position 1 (the real incident scenario from 2026-08-04/2026-09-16).
     printf '%s\n' \
         "-P INPUT ACCEPT" \
-        "-A INPUT -i wt0 -j NETBIRD-ACL-INPUT" \
+        "${FAKE_IPTABLES_LINE2:--A INPUT -i wt0 -j NETBIRD-ACL-INPUT}" \
         "-A INPUT -i wt0 -j DROP" \
         "-A INPUT -p tcp -m multiport --dports 8880 -m set --match-set f2b-panel-api src -j REJECT" \
         "${FAKE_ESTABLISHED_RULE_LINE:--A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT}"

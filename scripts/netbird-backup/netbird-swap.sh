@@ -53,6 +53,16 @@ COUNT_FILE="$STATE_DIR/count"
 
 LOG() { echo "$(date -u +%FT%TZ) netbird-swap: $*"; logger -t netbird-swap "$*"; }
 
+# Only write STATE_FILE when the value actually changes. The dashboard uses
+# this file's mtime to compute "how long has this host been stuck on
+# backup" (see the >15min banner). Writing "backup" every time the
+# swap-back attempt fails and reverts - even though the state was already
+# "backup" - would bump the mtime and silently reset that timer, masking
+# exactly the situation the banner exists to catch.
+write_state() {
+    [ "$(cat "$STATE_FILE" 2>/dev/null)" = "$1" ] || echo "$1" > "$STATE_FILE"
+}
+
 # Stagger daemon restarts across ~90s when a real outage hits all 58 hosts
 # (main + dynapannel + 56 fleet VPS) simultaneously, so they don't hammer
 # main's backup daemon all at once while it's cold-starting. 90s / 58 hosts
@@ -136,9 +146,16 @@ check_primary_ok() {
 # (curl prints 000) or an explicit 503 means the service itself is down;
 # any other real HTTP response means the server answered.
 check_netbird_cloud_recovered() {
-    local code curl_exit
-    code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 15 https://api.netbird.io/api/health 2>/dev/null)
-    curl_exit=$?
+    local code curl_exit=0
+    # Explicit `|| curl_exit=$?` rather than a bare `code=$(...)` followed by
+    # reading `$?` on the next line: under set -e, the latter only survives
+    # curl failing because this function always happens to be called from
+    # an if/! condition (which suspends errexit for everything evaluated as
+    # part of that condition, including this whole function body) - true
+    # today, but fragile against a future caller that invokes this as a
+    # bare statement, where the same code would abort the script instead of
+    # returning 1. This form is correct regardless of caller context.
+    code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 15 https://api.netbird.io/api/health 2>/dev/null) || curl_exit=$?
     if [ "$curl_exit" -ne 0 ]; then
         LOG "netbird cloud health check failed: curl exit $curl_exit"
         return 1
@@ -174,15 +191,50 @@ check_netbird_cloud_recovered() {
 # immediately, every time.
 ensure_established_rule() {
     local first_rule
-    first_rule=$(iptables -S INPUT 2>/dev/null | sed -n '2p')
+    # `|| true`: under set -euo pipefail, a var=$(...) assignment whose
+    # command substitution fails (e.g. iptables hit a lock and exited
+    # non-zero) would abort this script mid-swap otherwise - pipefail makes
+    # the whole pipeline's exit status iptables' non-zero one even though
+    # the trailing sed succeeded. Losing this one safety-net check to lock
+    # contention is far better than aborting the swap itself.
+    first_rule=$(iptables -S INPUT 2>/dev/null | sed -n '2p') || true
     case "$first_rule" in
+        *" -i "*|*" -o "*)
+            # Scoped to a specific interface - e.g. `-i wt0`, which NetBird's
+            # own daemon reinstalls in position 1 on every restart (see the
+            # 2026-08-04/2026-09-16 incidents and the same logic in
+            # agent/iptables-input.ts's findGenericEstablished(), which reads
+            # `iptables -nvL --line-numbers` and checks iface === "*" for the
+            # same reason). A scoped rule only covers mesh traffic, never
+            # public traffic on the proxy ports, so it does NOT satisfy the
+            # generic rule this function guarantees even when it matches
+            # ESTABLISHED,RELATED below - fall through to (re)insert.
+            ;;
         *"-m conntrack --ctstate"*ESTABLISHED*|*"-m state --state"*ESTABLISHED*)
             return 0
             ;;
     esac
+
+    # Not satisfied at position 1. Before inserting, remove any generic
+    # (non-interface-scoped) ESTABLISHED,RELATED accept rules that may
+    # already exist further down the chain - e.g. left over from an earlier
+    # run of this same function - so repeated invocations (once per netbird
+    # restart) don't pile up duplicate rules over time. Same
+    # delete-then-insert-at-1 pattern as scripts/update-asn-block.sh.
+    local rule spec
+    while IFS= read -r rule; do
+        case "$rule" in
+            *" -i "*|*" -o "*) continue ;;
+            *"-m conntrack --ctstate"*ESTABLISHED*|*"-m state --state"*ESTABLISHED*)
+                spec="${rule#-A INPUT }"
+                iptables -D INPUT $spec 2>/dev/null || true
+                ;;
+        esac
+    done < <(iptables -S INPUT 2>/dev/null | tail -n +2 || true)
+
     iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
-    LOG "re-asserted generic ESTABLISHED,RELATED accept rule at position 1 (was missing or not first after daemon restart)"
+    LOG "re-asserted generic ESTABLISHED,RELATED accept rule at position 1 (was missing, interface-scoped only, or not first after daemon restart)"
 }
 
 if [ "$STATE" = "primary" ]; then
@@ -210,7 +262,7 @@ if [ "$STATE" = "primary" ]; then
         systemctl stop netbird
         systemctl start netbird-backup
         ensure_established_rule
-        echo backup > "$STATE_FILE"
+        write_state backup
         echo 0 > "$COUNT_FILE"
         LOG "swapped to backup"
     fi
@@ -244,7 +296,7 @@ else
         # revert-to-backup even though the primary was actually fine.
         sleep 45
         if check_primary_ok; then
-            echo primary > "$STATE_FILE"
+            write_state primary
             echo 0 > "$COUNT_FILE"
             LOG "swapped back to primary, verified reachable"
         else
@@ -252,7 +304,7 @@ else
             systemctl stop netbird
             systemctl start netbird-backup
             ensure_established_rule
-            echo backup > "$STATE_FILE"
+            write_state backup
             echo 0 > "$COUNT_FILE"
         fi
     fi

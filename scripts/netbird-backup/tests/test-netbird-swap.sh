@@ -3,6 +3,8 @@
 # Never touches a real host - all systemctl/netbird/curl calls are faked,
 # and TCP listeners are local 127.0.0.1 only.
 set -euo pipefail
+# Captured before the cd below, which makes $0 (possibly relative) stale.
+TEST_FILE="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$0")/.."
 export PATH="$PWD/tests/fakebin:$PATH"
 SCRIPT="$PWD/netbird-swap.sh"
@@ -186,10 +188,32 @@ STATE_DIR=$(mktemp -d)
 echo primary > "$STATE_DIR/state"
 echo 5 > "$STATE_DIR/count"
 NETBIRD_SWAP_STATE_DIR="$STATE_DIR" NETBIRD_SWAP_JITTER_MAX=0 FAKE_CURL_CODE=000 \
-    "$SCRIPT" 10.0.0.1 8880 6 || true
+    "$SCRIPT" 127.0.0.1 19997 6 || true
 LOG=$(cat "$FAKEBIN_LOG")
 assert_contains "$LOG" "iptables -S INPUT" "checks actual rule position, not just existence"
 assert_contains "$LOG" "iptables -I INPUT 1" "re-inserts at position 1 when not first"
+
+echo ""
+echo "=== Test: ensure_established_rule does NOT treat a wt0-scoped ESTABLISHED rule as the generic one (C1) ==="
+# Real incident scenario (2026-08-04/2026-09-16): NetBird's own daemon
+# restart installs "-A INPUT -i wt0 -m conntrack --ctstate RELATED,ESTABLISHED
+# -j ACCEPT" in position 1. That rule only covers mesh traffic - it must NOT
+# satisfy the check, or the generic (all-interface) rule this function
+# guarantees never gets inserted and public-traffic return packets get
+# dropped by blocked_asn.
+export FAKEBIN_LOG=$(mktemp)
+STATE_DIR=$(mktemp -d)
+echo primary > "$STATE_DIR/state"
+echo 5 > "$STATE_DIR/count"
+NETBIRD_SWAP_STATE_DIR="$STATE_DIR" NETBIRD_SWAP_JITTER_MAX=0 \
+    FAKE_IPTABLES_LINE2="-A INPUT -i wt0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT" \
+    "$SCRIPT" 127.0.0.1 19997 6 || true
+LOG=$(cat "$FAKEBIN_LOG")
+assert_contains "$LOG" "iptables -S INPUT" "checks actual rule position, not just existence"
+assert_contains "$LOG" "iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT" \
+    "inserts the generic rule even though a wt0-scoped ESTABLISHED rule already sits at position 1"
+assert_contains "$LOG" "iptables -D INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT" \
+    "dedupes: removes the pre-existing generic rule found lower in the chain before re-inserting at position 1 (I2)"
 
 echo ""
 echo "=== Test: check_netbird_cloud_recovered logs curl's exit code on failure ==="
@@ -198,19 +222,48 @@ STATE_DIR=$(mktemp -d)
 echo backup > "$STATE_DIR/state"
 echo 0 > "$STATE_DIR/count"
 NETBIRD_SWAP_STATE_DIR="$STATE_DIR" NETBIRD_SWAP_JITTER_MAX=0 FAKE_CURL_EXIT_ERROR=7 \
-    "$SCRIPT" 10.0.0.1 8880 6 || true
+    "$SCRIPT" 127.0.0.1 19997 6 || true
 LOG=$(cat "$FAKEBIN_LOG")
 assert_contains "$LOG" "curl exit 7" "logs curl's own exit code, not just 'unreachable'"
 assert_contains "$LOG" "--max-time 15" "recovery check uses the 15s timeout, not 5s"
 
 echo ""
+echo "=== Test: self mode (main) swapping to backup applies NO jitter and never reads client state (I8) ==="
+export FAKEBIN_LOG=$(mktemp)
+STATE_DIR=$(mktemp -d)
+NETBIRD_STATUS_FILE=$(mktemp)
+cat > "$NETBIRD_STATUS_FILE" <<'STATUS'
+Management: Disconnected
+Signal: Disconnected
+STATUS
+echo primary > "$STATE_DIR/state"
+echo 5 > "$STATE_DIR/count"
+NETBIRD_SWAP_STATE_DIR="$STATE_DIR" FAKE_CURL_CODE=000 \
+    FAKE_NETBIRD_STATUS_FILE="$NETBIRD_STATUS_FILE" \
+    "$SCRIPT" self - 6 || true
+LOG=$(cat "$FAKEBIN_LOG")
+assert_contains "$LOG" "threshold reached - swapping to backup" "self mode reaches threshold and swaps"
+assert_not_contains "$LOG" "jitter" "self mode never applies jitter (single host, no herd to stagger)"
+rm -f "$NETBIRD_STATUS_FILE"
+
+echo ""
 echo "Results: $pass passed, $fail failed"
 echo ""
-echo "Verifying no 10.0.0.1 literals..."
-if grep -n "10.0.0.1" "$SCRIPT" >/dev/null 2>&1; then
-    echo "✓ No 10.0.0.1 in test file (good)"
+echo "Verifying no literal RFC1918 IP-as-real-network-target in the test file itself..."
+# Built from parts, not as one contiguous literal, so this check line does not
+# match itself (it would otherwise, since this file's own bytes would then
+# contain the exact needle it searches for - always "found", never a real
+# failure). Checks $TEST_FILE (this file), NOT $SCRIPT (netbird-swap.sh) -
+# checking the wrong file was the actual bug: this needle has no reason to
+# appear in netbird-swap.sh at all, so that check always vacuously "passed".
+NEEDLE=$(printf '%s.%s.%s.%s' 10 0 0 1)
+if grep -nF -- "$NEEDLE" "$TEST_FILE" >/dev/null 2>&1; then
+    echo "  FAIL: found $NEEDLE literal in test file (should use 127.0.0.1 + a closed port instead)"
+    grep -nF -- "$NEEDLE" "$TEST_FILE"
+    fail=$((fail + 1))
 else
-    echo "✓ No 10.0.0.1 in test file (good)"
+    echo "  PASS: no $NEEDLE literal in test file"
+    pass=$((pass + 1))
 fi
 
 echo ""
