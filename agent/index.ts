@@ -908,19 +908,33 @@ app.get("/api/netbird/status", async (_req, res) => {
 
 app.get("/api/netbird-swap/status", async (_req, res) => {
   try {
-    const [stateFile, timer, backup, lastEvent] = await Promise.all([
+    const [stateFile, timer, backup, journalEvent, syslogEvent, stateSince] = await Promise.all([
       runCmd("cat /var/lib/netbird-swap/state 2>/dev/null"),
       runCmd("systemctl is-active netbird-swap.timer 2>/dev/null"),
       runCmd("systemctl is-active netbird-backup 2>/dev/null"),
       runCmd("journalctl -t netbird-swap --no-pager -n 1 -o cat 2>/dev/null"),
+      // journald retention varies wildly per host (some rotate away in hours) and
+      // gives a false "no event" reading even right after a real swap - see the
+      // 2026-09-17 incident where DynamoXc looked like it never swapped. syslog
+      // (via logger -t netbird-swap, same call the script already makes) keeps
+      // rotated .gz history much longer, so fall back to it when journald is empty.
+      runCmd("grep -ah 'netbird-swap:' /var/log/syslog 2>/dev/null | tail -1"),
+      // mtime of the state file = the moment the last swap actually happened
+      // (the script only ever writes this file inside the swap branches).
+      // Used by the dashboard to flag a host stuck on backup too long.
+      runCmd("stat -c %Y /var/lib/netbird-swap/state 2>/dev/null"),
     ]);
     const installed = stateFile.stdout.trim().length > 0;
+    const journalLine = journalEvent.stdout.trim();
+    const syslogLine = syslogEvent.stdout.trim().replace(/^.*netbird-swap:\s*/, "");
+    const stateSinceEpoch = stateSince.stdout.trim();
     res.json({
       installed,
       state: installed ? (stateFile.stdout.trim() as "primary" | "backup") : null,
       timerActive: timer.stdout.trim() === "active",
       backupDaemonActive: backup.stdout.trim() === "active",
-      lastEvent: lastEvent.stdout.trim() || null,
+      lastEvent: journalLine || syslogLine || null,
+      stateSince: stateSinceEpoch ? new Date(Number(stateSinceEpoch) * 1000).toISOString() : null,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
