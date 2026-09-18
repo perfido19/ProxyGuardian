@@ -73,6 +73,12 @@ case "$JITTER_MAX" in ''|*[!0-9]*) JITTER_MAX=90;; esac
 # exactly the scenario this exists for) can end up correlated. Not applied in
 # self mode (MAIN_IP=self) - a single host has no herd to stagger.
 jitter_seconds() {
+    # Test-only override: when set, return this exact value instead of random draw.
+    # Allows tests to synchronize with precision (e.g. start a listener with known delay).
+    if [ -n "${NETBIRD_SWAP_JITTER_SECONDS:-}" ]; then
+        echo "$NETBIRD_SWAP_JITTER_SECONDS"
+        return
+    fi
     if [ "$JITTER_MAX" -le 0 ]; then
         echo 0
         return
