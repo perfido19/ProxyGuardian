@@ -52,9 +52,13 @@ function parseSwapOutput(stdout: string): Omit<NetbirdSwapStatus, "id" | "name" 
   };
 }
 
-// main e dynapannel non hanno l'agent ProxyGuardian (non fanno parte della
-// flotta gestita) - controllati via SSH diretto con le stesse credenziali
-// usate manualmente per l'installazione del failover NetBird.
+// main non ha l'agent ProxyGuardian (non fa parte della flotta gestita) -
+// controllato via SSH diretto con le stesse credenziali usate manualmente
+// per l'installazione del failover NetBird.
+// dynapannel aveva lo stesso trattamento finche' non ha ricevuto l'agent
+// ProxyGuardian (2026-09-23, vedi memoria project_dynapannel_agent_install) -
+// ora e' in data/vps.json e passa per getFleetSwapStatus() come ogni altro
+// VPS. Tenere anche qui il check SSH duplicherebbe la riga nella card.
 interface ExtraHost { id: string; name: string; host: string; username: string; password: string; }
 
 function getExtraHosts(): ExtraHost[] {
@@ -71,15 +75,6 @@ function getExtraHosts(): ExtraHost[] {
       host: process.env.MAIN_HOST,
       username: "root",
       password: process.env.MAIN_SSH_PASS,
-    });
-  }
-  if (process.env.DYNAPANNEL_SSH_HOST && process.env.DYNAPANNEL_SSH_PASSWORD) {
-    hosts.push({
-      id: "dynapannel",
-      name: "dynapannel",
-      host: process.env.DYNAPANNEL_SSH_HOST,
-      username: "root",
-      password: process.env.DYNAPANNEL_SSH_PASSWORD,
     });
   }
   return hosts;
