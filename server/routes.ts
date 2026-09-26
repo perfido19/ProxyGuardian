@@ -3596,6 +3596,12 @@ cat > "/etc/logrotate.d/proxyguardian" << 'LOGEOF'
 ${DEPLOY_LOGROTATE_CONF}
 LOGEOF
 chmod 644 /etc/logrotate.d/proxyguardian
+# proxyguardian gestisce nginx e fail2ban: i file dei pacchetti con gli stessi log
+# causano "duplicate log entry" e logrotate scarta il blocco (fleet 2026-09-26).
+mkdir -p /root/logrotate-disabled
+for f in nginx fail2ban; do [ -f "/etc/logrotate.d/\$f" ] && mv "/etc/logrotate.d/\$f" /root/logrotate-disabled/; done
+# Immagine provider con /var/log/mysql root:root 2700: il flush postrotate di MariaDB fallisce.
+[ -d /var/log/mysql ] && chown mysql:adm /var/log/mysql && chmod 2750 /var/log/mysql
 
 cat > "/etc/systemd/system/\$SERVICE_NAME.service" << SVCEOF
 [Unit]
