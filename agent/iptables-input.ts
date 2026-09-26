@@ -134,3 +134,26 @@ export function planTorRules(rules: InputRule[], setName?: string): TorRulePlan 
 
   return { action: "insert", anchor: anchor, insertAt: insertAt };
 }
+
+// Il bouncer CrowdSec crea CROWDSEC_CHAIN e ci aggancia un jump da INPUT solo all'avvio:
+// se il jump sparisce a runtime (trovato su 42/57 VPS il 2026-09-26) le decisioni restano
+// negli ipset ma nessun pacchetto le attraversa. Il jump va rimesso subito prima della
+// ACCEPT 8880 generica, altrimenti il traffico proxy sarebbe accettato prima del controllo.
+export interface CrowdsecJumpPlan {
+  action: "noop" | "insert" | "refuse";
+  insertAt?: number;
+  reason?: string;
+}
+
+export function planCrowdsecJump(rules: InputRule[]): CrowdsecJumpPlan {
+  for (var i = 0; i < rules.length; i++) {
+    if (rules[i].target === "CROWDSEC_CHAIN") return { action: "noop" };
+  }
+  for (var j = 0; j < rules.length; j++) {
+    var r = rules[j];
+    if (r.target === "ACCEPT" && r.iface === "*" && r.raw.indexOf("dpt:8880") !== -1) {
+      return { action: "insert", insertAt: r.num };
+    }
+  }
+  return { action: "refuse", reason: "nessuna ACCEPT tcp dpt:8880 generica (in=*) in INPUT come ancora" };
+}

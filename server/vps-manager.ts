@@ -389,6 +389,7 @@ export interface ComplianceSyncResult {
   details: Array<{
     vpsId: string; vpsName: string;
     udp51820: boolean; journald: boolean; crowdsecBouncer: boolean;
+    crowdsecChain: boolean; crowdsecChainMissing: boolean;
     error?: string;
   }>;
 }
@@ -397,6 +398,7 @@ export interface ComplianceSyncResult {
 // senza che nessun poller se ne accorgesse (scoperto 2026-08-10: UDP51820 mancante
 // su 50/54, journald cap su 26/54, bouncer CrowdSec spento su 42/54). Non installa
 // CrowdSec dove manca — solo riabilita il bouncer se il pacchetto e' gia' presente.
+// Dal 2026-09-26 ricollega anche il jump INPUT -> CROWDSEC_CHAIN (scollegato su 42/57).
 export async function ensureComplianceFleet(): Promise<ComplianceSyncResult> {
   const enabled = Array.from(vpsStore.values()).filter(v => v.enabled && v.lastStatus !== "offline");
   const details: ComplianceSyncResult["details"] = [];
@@ -409,11 +411,13 @@ export async function ensureComplianceFleet(): Promise<ComplianceSyncResult> {
       const udp = !!(r && r.udp51820 && r.udp51820.changed);
       const jrn = !!(r && r.journald && r.journald.changed);
       const bnc = !!(r && r.crowdsecBouncer && r.crowdsecBouncer.changed);
-      if (udp || jrn || bnc) fixed++;
-      details.push({ vpsId: vps.id, vpsName: vps.name, udp51820: udp, journald: jrn, crowdsecBouncer: bnc });
+      const csc = !!(r && r.crowdsecChain && r.crowdsecChain.changed);
+      const cscMissing = !!(r && r.crowdsecChain && r.crowdsecChain.missing);
+      if (udp || jrn || bnc || csc) fixed++;
+      details.push({ vpsId: vps.id, vpsName: vps.name, udp51820: udp, journald: jrn, crowdsecBouncer: bnc, crowdsecChain: csc, crowdsecChainMissing: cscMissing });
     } catch (e: any) {
       errors++;
-      details.push({ vpsId: vps.id, vpsName: vps.name, udp51820: false, journald: false, crowdsecBouncer: false, error: e.message });
+      details.push({ vpsId: vps.id, vpsName: vps.name, udp51820: false, journald: false, crowdsecBouncer: false, crowdsecChain: false, crowdsecChainMissing: false, error: e.message });
     }
   }));
 
@@ -426,6 +430,10 @@ export function startCompliancePoller(intervalMs = 3600000): void {
       if (r.fixed > 0 || r.errors > 0) {
         console.log(`[Compliance] controllati ${r.checked}, ripristinati ${r.fixed}, errori ${r.errors}`);
       }
+      const chainFixed = r.details.filter(d => d.crowdsecChain).map(d => d.vpsName);
+      if (chainFixed.length > 0) console.log(`[Compliance] jump CROWDSEC_CHAIN ripristinato su: ${chainFixed.join(", ")}`);
+      const chainMissing = r.details.filter(d => d.crowdsecChainMissing).map(d => d.vpsName);
+      if (chainMissing.length > 0) console.log(`[Compliance] CROWDSEC_CHAIN assente (bouncer da verificare) su: ${chainMissing.join(", ")}`);
     })
     .catch(e => console.error("[Compliance] error:", e));
   setTimeout(() => { run(); setInterval(run, intervalMs); }, 60000);

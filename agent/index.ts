@@ -4,7 +4,7 @@ import { promisify } from "util";
 import { readFile, writeFile, appendFile, access, readdir, unlink } from "fs/promises";
 import { constants, existsSync, statSync } from "fs";
 import path from "path";
-import { parseInputChain, findGenericEstablished, findTorRules, planTorRules, planEstablishedRule } from "./iptables-input";
+import { parseInputChain, findGenericEstablished, findTorRules, planTorRules, planEstablishedRule, planCrowdsecJump } from "./iptables-input";
 
 const execAsync = promisify(exec);
 const CMD_MAX_BUFFER = 16 * 1024 * 1024;
@@ -715,11 +715,13 @@ async function ensureCompliance(): Promise<{
   udp51820: { changed: boolean; error?: string };
   journald: { changed: boolean; error?: string };
   crowdsecBouncer: { installed: boolean; changed: boolean; error?: string };
+  crowdsecChain: { changed: boolean; missing: boolean; error?: string };
 }> {
   var out = {
     udp51820: { changed: false } as { changed: boolean; error?: string },
     journald: { changed: false } as { changed: boolean; error?: string },
     crowdsecBouncer: { installed: false, changed: false } as { installed: boolean; changed: boolean; error?: string },
+    crowdsecChain: { changed: false, missing: false } as { changed: boolean; missing: boolean; error?: string },
   };
 
   var udpCheck = await runCmd("sudo iptables -C INPUT -p udp --dport 51820 -j ACCEPT 2>/dev/null");
@@ -762,6 +764,32 @@ async function ensureCompliance(): Promise<{
         out.crowdsecBouncer.error = bncRestart.stderr;
       }
     }
+
+    // Jump CROWDSEC_CHAIN da INPUT: se manca il bouncer gira a vuoto (42/57 VPS il 2026-09-26).
+    // Se manca la chain stessa non si tocca nulla: solo segnalato.
+    var chainExists = await runCmd("sudo iptables -nL CROWDSEC_CHAIN >/dev/null 2>&1 && echo yes || echo no");
+    if (chainExists.stdout.trim() !== "yes") {
+      out.crowdsecChain.missing = true;
+    } else {
+      var listed = await runCmd("sudo iptables -nvL INPUT --line-numbers");
+      if (!listed.ok) {
+        out.crowdsecChain.error = listed.stderr;
+      } else {
+        var plan = planCrowdsecJump(parseInputChain(listed.stdout));
+        if (plan.action === "refuse") {
+          out.crowdsecChain.error = plan.reason;
+        } else if (plan.action === "insert") {
+          var jumpIns = await runCmd("sudo iptables -I INPUT " + plan.insertAt + " -j CROWDSEC_CHAIN");
+          if (jumpIns.ok) {
+            var jumpSave = await runCmd("sudo iptables-save");
+            if (jumpSave.ok) await sudoWriteFile("/etc/iptables/rules.v4", jumpSave.stdout + "\n");
+            out.crowdsecChain.changed = true;
+          } else {
+            out.crowdsecChain.error = jumpIns.stderr;
+          }
+        }
+      }
+    }
   }
 
   return out;
@@ -770,7 +798,7 @@ async function ensureCompliance(): Promise<{
 app.post("/api/compliance/ensure", async (_req, res) => {
   try {
     var result = await ensureCompliance();
-    res.json({ ok: true, udp51820: result.udp51820, journald: result.journald, crowdsecBouncer: result.crowdsecBouncer });
+    res.json({ ok: true, udp51820: result.udp51820, journald: result.journald, crowdsecBouncer: result.crowdsecBouncer, crowdsecChain: result.crowdsecChain });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }

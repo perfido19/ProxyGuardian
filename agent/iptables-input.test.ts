@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseInputChain, findGenericEstablished, findFirstAccept8880, findTorRules, planTorRules, planEstablishedRule } from "./iptables-input";
+import { parseInputChain, findGenericEstablished, findFirstAccept8880, findTorRules, planTorRules, planEstablishedRule, planCrowdsecJump } from "./iptables-input";
 
 // dragon (100.116.113.227): ESTABLISHED generica a 9, wt0 a 15, ACCEPT 8880 a 18, DROP wt0 a 19
 const DRAGON = `Chain INPUT (policy ACCEPT 1275 packets, 83247 bytes)
@@ -128,4 +128,28 @@ num   pkts bytes target     prot opt in     out     source               destina
 1        0     0 DROP       all  --  wt0    *       0.0.0.0/0            0.0.0.0/0           
 2        0     0 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            state RELATED,ESTABLISHED`;
   assert.equal(planEstablishedRule(parseInputChain(chain)).action, "noop");
+});
+
+// Jump CROWDSEC_CHAIN: trovato scollegato su 42/57 VPS il 2026-09-26 (bouncer attivo,
+// ipset popolati, ma nessuna regola in INPUT che ci salti dentro).
+test("planCrowdsecJump inserisce subito prima della ACCEPT 8880 generica", () => {
+  const p = planCrowdsecJump(parseInputChain(DRAGON));
+  assert.equal(p.action, "insert");
+  assert.equal(p.insertAt, 18);
+});
+
+test("planCrowdsecJump e' noop se il jump esiste gia' (anche in cima, dove lo mette il bouncer)", () => {
+  const wired = DRAGON.replace(
+    "1     183K   10M f2b-xtream",
+    "1       44  2684 CROWDSEC_CHAIN  all  --  *      *       0.0.0.0/0            0.0.0.0/0           \n2     183K   10M f2b-xtream"
+  );
+  assert.equal(planCrowdsecJump(parseInputChain(wired)).action, "noop");
+});
+
+test("planCrowdsecJump rifiuta se non c'e' una ACCEPT 8880 generica come ancora", () => {
+  const onlyWt0 = `Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+num   pkts bytes target     prot opt in     out     source               destination         
+1        0     0 ACCEPT     tcp  --  wt0    *       0.0.0.0/0            0.0.0.0/0            tcp dpt:8880
+2        0     0 DROP       all  --  wt0    *       0.0.0.0/0            0.0.0.0/0`;
+  assert.equal(planCrowdsecJump(parseInputChain(onlyWt0)).action, "refuse");
 });
