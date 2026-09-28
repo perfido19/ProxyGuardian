@@ -561,7 +561,7 @@ function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
   };
 
   const handleSave = () => {
-    const content = entries.map(e => e.exact ? `"${e.value}" 1;` : `~*${e.value} 1;`).join("\n") + "\n";
+    const content = entries.map(e => e.exact ? `"${e.value}" 1;` : `"~*${e.value}" 1;`).join("\n") + "\n";
     saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
   };
 
