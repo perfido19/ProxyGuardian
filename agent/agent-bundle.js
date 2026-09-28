@@ -25022,10 +25022,20 @@ app.post("/api/config/:filename", async (req, res) => {
   const { content } = req.body;
   if (typeof content !== "string") return res.status(400).json({ error: "content required" });
   try {
+    const needsNginxTest = req.params.filename.startsWith("nginx") || req.params.filename.endsWith(".conf") || req.params.filename.endsWith(".rules");
+    let prevContent = null;
+    if (needsNginxTest) {
+      try {
+        prevContent = await (0, import_promises.readFile)(filePath, "utf-8");
+      } catch (e) {
+        prevContent = null;
+      }
+    }
     await sudoWriteFile(filePath, content);
-    if (req.params.filename.startsWith("nginx") || req.params.filename.endsWith(".conf") || req.params.filename.endsWith(".rules")) {
+    if (needsNginxTest) {
       const test = await runCmd("sudo nginx -t");
       if (!test.ok) {
+        await sudoWriteFile(filePath, prevContent !== null ? prevContent : "");
         return res.status(422).json({ error: `nginx -t failed: ${test.stderr}` });
       }
     }

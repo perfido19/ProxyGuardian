@@ -410,10 +410,19 @@ app.post("/api/config/:filename", async (req, res) => {
   const { content } = req.body;
   if (typeof content !== "string") return res.status(400).json({ error: "content required" });
   try {
+    const needsNginxTest = req.params.filename.startsWith("nginx") || req.params.filename.endsWith(".conf") || req.params.filename.endsWith(".rules");
+    // Backup del contenuto precedente: se nginx -t fallisce facciamo rollback,
+    // altrimenti resta su disco una config rotta che esplode al prossimo restart nginx.
+    let prevContent: string | null = null;
+    if (needsNginxTest) {
+      try { prevContent = await readFile(filePath, "utf-8"); } catch (e) { prevContent = null; }
+    }
     await sudoWriteFile(filePath, content);
-    if (req.params.filename.startsWith("nginx") || req.params.filename.endsWith(".conf") || req.params.filename.endsWith(".rules")) {
+    if (needsNginxTest) {
       const test = await runCmd("sudo nginx -t");
       if (!test.ok) {
+        // rollback: ripristina il contenuto precedente (o vuoto se il file non esisteva)
+        await sudoWriteFile(filePath, prevContent !== null ? prevContent : "");
         return res.status(422).json({ error: `nginx -t failed: ${test.stderr}` });
       }
     }
