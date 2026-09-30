@@ -524,13 +524,54 @@ function UserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
 
 interface UaEntry { value: string; exact: boolean; }
 
+// Valida un pattern prima di accettarlo, così non si genera una riga map nginx
+// invalida (incidente 2026-09-28: UA con spazio non quotato → `invalid number of
+// map parameters` → nginx failed fleet-wide). Ritorna il messaggio d'errore o null.
+function validateUaPattern(value: string, exact: boolean): string | null {
+  const v = value.trim();
+  if (!v) return "Pattern vuoto";
+  if (/["\n\r]/.test(v)) return `Non ammesse virgolette (") o a capo — romperebbero la map nginx`;
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(v)) return "Contiene caratteri di controllo non validi";
+  if (!exact) {
+    try { new RegExp(v); } catch (e: any) { return `Regex non valida: ${e.message}`; }
+  }
+  return null;
+}
+
 function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
   const [entries, setEntries] = useState<UaEntry[]>([]);
   const [newPattern, setNewPattern] = useState("");
   const [newExact, setNewExact] = useState(false);
   const [search, setSearch] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
+  const [error, setError] = useState("");
+  const { toast } = useToast();
   const saveMutation = useSaveConfig("block_baduseragents.conf", saveTarget);
+  const saveAllMutation = useSaveConfig("block_baduseragents.conf", "all");
+
+  // Reload nginx dopo il salvataggio: l'agent scrive + fa nginx -t ma NON ricarica,
+  // quindi la map resterebbe latente fino al prossimo restart (incidente 2026-09-28).
+  const reloadMutation = useMutation({
+    mutationFn: async (target: string) => {
+      if (target === "all") {
+        const r = await apiRequest("POST", "/api/vps/bulk/post", { vpsIds: "all", path: "/api/nginx/reload", body: {} });
+        return r.json() as Promise<BulkResult[]>;
+      }
+      const r = await apiRequest("POST", `/api/vps/${target}/proxy/api/nginx/reload`, {});
+      const d = await r.json();
+      return [{ vpsId: target, vpsName: target, success: !d.error && d.ok !== false, data: d }] as BulkResult[];
+    },
+    onSuccess: (results) => {
+      const ok = results.filter(r => r.success).length;
+      toast({
+        title: ok === results.length ? "nginx ricaricato" : `nginx ricaricato su ${ok}/${results.length} VPS`,
+        description: "Blocco User-Agent attivo",
+        variant: ok > 0 ? "default" : "destructive",
+      });
+    },
+    onError: (e: any) => toast({ title: "Errore reload nginx", description: e.message, variant: "destructive" }),
+  });
 
   const { data: configData, isLoading } = useQuery<{ content: string }>({
     queryKey: ["proxy-config-block_baduseragents", refVps?.id],
@@ -543,27 +584,61 @@ function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
       const parsed = configData.content.split("\n").map(line => {
         const t = line.trim();
         if (t.startsWith("#") || !t) return null;
-        // ~*pattern 1;  -> regex/contiene (case-insensitive)
-        // "pattern" 1;  o  pattern 1;  -> match esatto (nessun modificatore = confronto letterale in nginx map)
-        const regexMatch = t.match(/^~\*?(.+?)\s+\S+;/);
-        if (regexMatch) return { value: regexMatch[1].trim().replace(/^"|"$/g, ""), exact: false };
-        const exactMatch = t.match(/^=?"?(.+?)"?\s+\S+;/);
-        return exactMatch ? { value: exactMatch[1].trim(), exact: true } : null;
+        // Formato entry:  "PATTERN" 1;  dove PATTERN può iniziare con ~*
+        // (contiene/regex) o essere letterale (esatto). Cattura tutto TRA le
+        // virgolette in modo greedy e ancora il valore map a FINE riga ($):
+        // il vecchio `.+?` non-greedy con coda `\S+;` larga troncava gli UA al
+        // primo ";" interno (es. "…Windows NT 10.0; WOW64…" → "…Windows NT").
+        const q = t.match(/^"(.*)"\s+\S+;\s*$/);
+        if (q) {
+          const inner = q[1];
+          return inner.startsWith("~*")
+            ? { value: inner.slice(2).trim(), exact: false }
+            : { value: inner.trim(), exact: true };
+        }
+        // Fallback righe non quotate:  ~*PATTERN 1;  oppure  PATTERN 1;
+        const uq = t.match(/^(=|~\*)?(.*?)\s+\S+;\s*$/);
+        if (uq) return { value: uq[2].trim(), exact: uq[1] !== "~*" };
+        return null;
       }).filter(Boolean) as UaEntry[];
       setEntries(parsed); setHasChanges(false);
     }
   }, [configData]);
 
   const addPattern = () => {
-    if (newPattern && !entries.some(e => e.value === newPattern)) {
-      setEntries([...entries, { value: newPattern, exact: newExact }]); setNewPattern(""); setHasChanges(true);
-    }
+    const err = validateUaPattern(newPattern, newExact);
+    if (err) { setError(err); return; }
+    const v = newPattern.trim();
+    if (entries.some(e => e.value === v)) { setError("Pattern già presente"); return; }
+    setEntries([...entries, { value: v, exact: newExact }]); setNewPattern(""); setError(""); setHasChanges(true);
   };
 
-  const handleSave = () => {
-    const content = entries.map(e => e.exact ? `"${e.value}" 1;` : `"~*${e.value}" 1;`).join("\n") + "\n";
-    saveMutation.mutate(content, { onSuccess: () => setHasChanges(false) });
+  // Gate finale: rivalida ogni entry (anche quelle arrivate dal file esistente)
+  // e costruisce il contenuto. Ritorna null se una entry è invalida.
+  const buildContent = (): string | null => {
+    for (const e of entries) {
+      const err = validateUaPattern(e.value, e.exact);
+      if (err) { setError(`"${e.value}": ${err}`); return null; }
+    }
+    return entries.map(e => e.exact ? `"${e.value}" 1;` : `"~*${e.value}" 1;`).join("\n") + "\n";
   };
+
+  const runSave = (mutation: typeof saveMutation, target: string) => {
+    const content = buildContent();
+    if (content === null) return;
+    mutation.mutate(content, {
+      onSuccess: (results) => {
+        setHasChanges(false); setError("");
+        // Ricarica nginx solo dove il save è andato a buon fine.
+        if (results.some(r => r.success)) reloadMutation.mutate(target);
+      },
+    });
+  };
+
+  const handleSave = () => runSave(saveMutation, saveTarget);
+  const handleSaveAll = () => runSave(saveAllMutation, "all");
+
+  const busy = saveMutation.isPending || saveAllMutation.isPending || reloadMutation.isPending;
 
   const filtered = search ? entries.filter(e => e.value.toLowerCase().includes(search.toLowerCase())) : entries;
 
@@ -587,6 +662,7 @@ function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
           <Button onClick={addPattern}><Plus className="w-4 h-4 mr-1" />Aggiungi</Button>
         </div>
         <p className="text-xs text-muted-foreground">"Contiene" blocca qualsiasi User-Agent che include il testo (es. "Chrome/120.0.0.0" blocca ogni browser con quella versione, anche clienti veri). "Esatto" blocca solo lo User-Agent identico al carattere — più sicuro per firme lunghe e specifiche.</p>
+        {error && <p className="text-sm text-destructive font-medium" data-testid="ua-validation-error">⚠ {error}</p>}
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input placeholder="Cerca pattern..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
@@ -609,9 +685,12 @@ function BadUserAgentTab({ refVps, saveTarget, totalCount }: TabProps) {
             </TableBody>
           </Table>
         </div>
-        <div className="flex justify-end">
-          <Button onClick={handleSave} disabled={!hasChanges || saveMutation.isPending}>
-            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={handleSaveAll} disabled={!hasChanges || busy} data-testid="save-all-reload">
+            <Save className="w-4 h-4 mr-1" />{saveAllMutation.isPending ? "Salvataggio..." : reloadMutation.isPending ? "Reload nginx..." : `Salva su tutti (${totalCount}) + reload`}
+          </Button>
+          <Button onClick={handleSave} disabled={!hasChanges || busy}>
+            <Save className="w-4 h-4 mr-1" />{saveMutation.isPending ? "Salvataggio..." : reloadMutation.isPending ? "Reload nginx..." : saveTarget === "all" ? "Salva su tutti i VPS" : "Salva su questo VPS"}
           </Button>
         </div>
       </CardContent>
