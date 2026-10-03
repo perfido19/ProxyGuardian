@@ -72,3 +72,15 @@ blocktype = DROP
 findtime = 86400
 maxretry = 2
 bantime  = 7d
+
+[player-api-stuffing]
+enabled  = true
+filter   = player-api-stuffing
+logpath  = /var/log/nginx/access.log
+backend  = auto
+action   = iptables-multiport[name=player-api-stuffing,port="http,https,8000,8880,2096",protocol=tcp]
+      banned_db[name=nginx-abuse, port="8880,8000,2096", protocol=tcp]
+blocktype = DROP
+findtime = 120
+maxretry = 8
+bantime  = 86400
